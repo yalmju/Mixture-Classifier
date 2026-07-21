@@ -11,6 +11,37 @@ idea from *SERS Mixture Recognition from Pure-Substance Spectra* (Molecules,
 2025, doi:10.3390/molecules31091412), implemented from scratch in
 numpy / scipy / scikit-learn so you can read and extend every line.
 
+## UNMIXR — SERS mixture analysis suite (PyQt6)
+
+The suite front-end. A light PyQt6 app, structured as a three-stage pipeline —
+**Train → Calibrate → Analyze** — over a top pill navigation (no sidebar):
+
+```bash
+python unmixr.py
+```
+
+| Stage | Page | What it does |
+|-------|------|--------------|
+| **1. Train** | **Model** | Train the mixture classifier on synthetic pure spectra and read its metrics **live** — KPI tiles (micro F1 / precision / recall / exact-match) over a 2×2 plot grid: **PCA scatter**, **confusion matrix**, per-component **precision / recall / F1**, reference templates. Core `model_metrics.py`. |
+| **2. Calibrate** | **Quantify** | **Ratio → absolute M + Langmuir competition** (real). Fits each compound's Langmuir isotherm from a dilution series (`K_i` and `gA_i` separately), inverts competitive adsorption to absolute **molarity**, and judges competition — surface- vs solution-dominant, selectivity `K_max/K_min`, which compound is buried. Core `calibration.py`. |
+| **3. Analyze** | **Discriminator** | The real DQ / THI / TBZ maps in one screen: **single-component 4-class confusion** (per pixel, ~100%), a **detection-strategy comparison** (RF-on-mean vs **per-pixel NNLS voting** vs matched-filter — per-pixel wins: F1 0.73→0.92, exact 20%→80% by using the spatial info the mean discards), the per-pixel **detection grid**, **composition confusion**, and **response-factor correction**. `Data folder…` re-points to the data; **Mixture tool** / **Map tool** buttons launch the detailed customtkinter apps (`sers_app.py`, `sers_discriminator_ctk.py`) in their own window. Core `real_data.py`. |
+
+All three pages are native PyQt6 (embedded matplotlib); the two detailed tools are
+still customtkinter and launch as separate processes (Qt port is the next step).
+Rename the app by editing `APP_NAME` in `unmixr.py`.
+
+Two UI-agnostic cores (numpy / scipy / sklearn only) hold the science so any
+front-end can reuse them: `model_metrics.py` (training + evaluation) and
+`calibration.py` (Langmuir isotherm fit, coverage→M inversion, competition
+judgment; `build_synthetic_lab()` provides a fully-known ground truth to
+validate the recovery — `python calibration.py`).
+
+### Legacy launcher — `SERS_SUITE.py` (customtkinter)
+
+The earlier all-customtkinter shell (workflow rail + embedded tools + placeholder
+per-pixel report) still runs with `python SERS_SUITE.py`; UNMIXR supersedes it.
+Both `sers_app.py` and `sers_discriminator_ctk.py` also run standalone.
+
 ## Why this design
 
 You cannot measure every A+B / A+B+C combination — the count explodes and

@@ -11,3 +11,7 @@ dist/
 output/
 *_output*/
 preview_*.png
+
+# analysis figure outputs
+real_pest_*.png
+scripts/*.png

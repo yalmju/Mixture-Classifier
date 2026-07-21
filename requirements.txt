@@ -2,6 +2,7 @@ numpy
 scipy
 scikit-learn
 matplotlib
-customtkinter
+customtkinter          # legacy tools (sers_app.py, sers_discriminator_ctk.py)
+PyQt6                  # UNMIXR shell + Model-metrics dashboard (unmixr.py)
 # optional: ResNet1D detector (resnet1d.py / demo_resnet.py)
 torch
