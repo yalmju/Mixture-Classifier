@@ -751,7 +751,7 @@ class RealDataPage(QWidget):
         self.c_det = Canvas(); self.c_cal = Canvas(); self.c_strat = Canvas()
         for (cv, title, r, c) in [
             (self.c_pca, "PCA — real per-pixel spectra", 0, 0),
-            (self.c_pure, "Single-component confusion  (RF, per pixel)", 0, 1),
+            (self.c_pure, "Single-component confusion  (spatial split)", 0, 1),
             (self.c_strat, "Detection strategy — RF vs per-pixel vs matched", 0, 2),
             (self.c_det, "Detection outcome  (per-pixel voting)", 1, 0),
             (self.c_combo, "Composition confusion  (per-pixel detector)", 1, 1),
@@ -904,6 +904,8 @@ class RealDataPage(QWidget):
         ax = self.c_pure.new_ax()
         self._confusion(ax, r.cm4, r.classes4, r.classes4)
         ax.set_xlabel("predicted"); ax.set_ylabel("true")
+        ax.set_title(f"spatial split {r.acc4:.0%}   ·   random {r.acc4_random:.0%} "
+                     "(leaky)", fontsize=9, color=INK)
         self.c_pure.fig.tight_layout(); self.c_pure.draw_idle()
 
     def _plot_combo(self, r):

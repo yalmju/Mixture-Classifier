@@ -40,18 +40,22 @@ MIXES = {
 
 
 def load_map(path):
-    """Return (wavenumbers, cube (n_pixels, n_wn), mean_spectrum)."""
+    """Return (wavenumbers, cube (n_pixels, n_wn), mean_spectrum, coords (n_pixels, 2)).
+
+    Each data row is  X, Y, <intensities…>  — coords are kept so callers can do a
+    spatial (block) train/test split instead of a leaky random pixel split."""
     rows = list(csv.reader(open(path)))
     wn = np.array([float(v) for v in rows[2][2:] if v.strip() != ""])
     n = len(wn)
-    data = []
+    data, coords = [], []
     for r in rows[3:]:
-        vals = [v for v in r[2:] if v.strip() != ""]
-        if len(vals) < n:
+        cells = [v for v in r if str(v).strip() != ""]
+        if len(cells) < n + 2:
             continue
-        data.append([float(v) for v in vals[:n]])
+        coords.append((float(cells[0]), float(cells[1])))
+        data.append([float(v) for v in cells[2:2 + n]])
     cube = np.asarray(data, float)
-    return wn, cube, cube.mean(axis=0)
+    return wn, cube, cube.mean(axis=0), np.asarray(coords, float)
 
 
 def _combo(names):
@@ -102,7 +106,8 @@ def _score(true_lists, pred_sets):
 @dataclass
 class RealResult:
     cm4: np.ndarray
-    acc4: float
+    acc4: float                      # spatial (honest) split accuracy
+    acc4_random: float              # random pixel split (leaky, for comparison)
     classes4: list
     comps: list
     mix_names: list
@@ -138,25 +143,41 @@ def compute_real(pest_dir=PEST_DEFAULT):
         raise FileNotFoundError(
             f"reference CSVs not found in {ref_dir}\nmissing: {missing}")
 
-    # ---- load references (per-pixel cubes + means) ----
-    cubes, means, wn = {}, {}, None
+    # ---- load references (per-pixel cubes + means + coordinates) ----
+    cubes, means, coords, wn = {}, {}, {}, None
     for lab, fn in REF_FILES.items():
-        wn, cube, mean = load_map(os.path.join(ref_dir, fn))
-        cubes[lab] = cube; means[lab] = mean
+        wn, cube, mean, coord = load_map(os.path.join(ref_dir, fn))
+        cubes[lab] = cube; means[lab] = mean; coords[lab] = coord
     pures = preprocess(np.vstack([means["DQ"], means["THI"], means["TBZ"]]))
 
-    # ---- (1) single-component 4-class per-pixel confusion ----
-    X, y = [], []
+    # ---- (1) single-component 4-class confusion, two splits ----
+    # Random pixel split is LEAKY: only one map per compound, so adjacent pixels
+    # are near-duplicates and a random split lets the model memorise the map.
+    # A spatial block split (train = left of each map, test = right) is the honest
+    # value available from a single map (true generalisation needs replicate maps).
+    def _rf_cm(Xtr, ytr, Xte, yte):
+        rf = RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=0)
+        rf.fit(Xtr, ytr); yp = rf.predict(Xte)
+        return (confusion_matrix(yte, yp, labels=range(4)),
+                float(accuracy_score(yte, yp)))
+
+    Xall, yall = [], []
+    Xtr_s, ytr_s, Xte_s, yte_s = [], [], [], []
     for i, lab in enumerate(CLASSES4):
         Xp = preprocess(cubes[lab])
-        X.append(Xp); y += [i] * len(Xp)
-    X = np.vstack(X); y = np.array(y)
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, stratify=y,
-                                          random_state=0)
-    rf = RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=0)
-    rf.fit(Xtr, ytr); yp4 = rf.predict(Xte)
-    cm4 = confusion_matrix(yte, yp4, labels=range(4))
-    acc4 = float(accuracy_score(yte, yp4))
+        Xall.append(Xp); yall += [i] * len(Xp)
+        xc = coords[lab][:, 0]; med = np.median(xc)          # split by X median
+        left = xc < med
+        Xtr_s.append(Xp[left]); ytr_s += [i] * int(left.sum())
+        Xte_s.append(Xp[~left]); yte_s += [i] * int((~left).sum())
+    Xall = np.vstack(Xall); yall = np.array(yall)
+
+    Xtr, Xte, ytr, yte = train_test_split(Xall, yall, test_size=0.3,
+                                          stratify=yall, random_state=0)
+    _, acc4_random = _rf_cm(Xtr, ytr, Xte, yte)
+    cm4, acc4 = _rf_cm(np.vstack(Xtr_s), np.array(ytr_s),
+                       np.vstack(Xte_s), np.array(yte_s))   # spatial = honest
+    X, y = Xall, yall
 
     # PCA of the real per-pixel spectra (subsample per class for a clean plot)
     rng = np.random.default_rng(0)
@@ -175,7 +196,7 @@ def compute_real(pest_dir=PEST_DEFAULT):
         p = os.path.join(ratio_dir, k + "_corrected.csv")
         if not os.path.exists(p):
             continue
-        _, cube, mean = load_map(p)
+        _, cube, mean, _ = load_map(p)
         mix_names.append(k); mix_means.append(mean); mix_cubes.append(cube)
         true_lists.append([COMPS[i] for i, c in enumerate(nominal) if c > 0])
     mix_pp = preprocess(np.array(mix_means))
@@ -230,7 +251,8 @@ def compute_real(pest_dir=PEST_DEFAULT):
             er.append(abs(raw[i] - nom[i])); ec.append(abs(cal[i] - nom[i]))
 
     return RealResult(
-        cm4=cm4, acc4=acc4, classes4=CLASSES4, comps=COMPS,
+        cm4=cm4, acc4=acc4, acc4_random=acc4_random,
+        classes4=CLASSES4, comps=COMPS,
         mix_names=mix_names, yt=yt, yp=yp, micro=micro,
         combo_rows=rows, combo_cols=cols, combo_M=M, combo_exact=exact,
         strategies=strategies, R=R, calib_rows=calib_rows,
@@ -240,7 +262,8 @@ def compute_real(pest_dir=PEST_DEFAULT):
 
 if __name__ == "__main__":
     r = compute_real()
-    print("pure 4-class acc:", round(r.acc4, 3))
+    print("pure 4-class acc - spatial (honest):", round(r.acc4, 3),
+          "| random (leaky):", round(r.acc4_random, 3))
     print("\ndetection strategies (recall / prec / F1 / exact):")
     for lbl, rec, prec, f1, ex in r.strategies:
         print(f"  {lbl:24s} {rec:.2f}  {prec:.2f}  {f1:.2f}  {ex:.2f}")
