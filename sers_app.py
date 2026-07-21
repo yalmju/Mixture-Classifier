@@ -85,75 +85,62 @@ class SERSApp:
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
         root = self.root
-        root.grid_columnconfigure(1, weight=1)
-        root.grid_rowconfigure(0, weight=0)
-        root.grid_rowconfigure(1, weight=1)
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_rowconfigure(0, weight=0)     # header
+        root.grid_rowconfigure(1, weight=0)     # control bar
+        root.grid_rowconfigure(2, weight=1)     # dashboard
 
         header = family.make_header(root, "Mixture", "detect components + ratio")
-        header.grid(row=0, column=0, columnspan=2, sticky="ew")
+        header.grid(row=0, column=0, sticky="ew")
 
-        side = ctk.CTkScrollableFrame(root, width=340, corner_radius=0,
-                                      fg_color=brand.SIDE_FILL)
-        side.grid(row=1, column=0, sticky="nsew")
+        # ---------- top control bar (buttons row + status row) ----------
+        bar = ctk.CTkFrame(root, corner_radius=0, fg_color=family.PANEL, height=94)
+        bar.grid(row=1, column=0, sticky="ew")
+        bar.grid_propagate(False)
+        ctk.CTkFrame(bar, height=1, fg_color=family.LINE, corner_radius=0
+                     ).pack(side="bottom", fill="x")
 
-        ctk.CTkLabel(side, text=brand.APP_NAME,
-                     font=ctk.CTkFont(size=15, weight="bold"), anchor="w"
-                     ).pack(fill="x", padx=14, pady=(14, 0))
-        ctk.CTkLabel(side, text=brand.APP_TAGLINE,
-                     font=ctk.CTkFont(size=12), text_color=brand.SUBTLE, anchor="w"
-                     ).pack(fill="x", padx=14, pady=(0, 10))
-
-        ctk.CTkButton(side, text="Load pure references", height=40, **self._btn(),
-                      command=self.load_references).pack(fill="x", padx=14, pady=6)
-        self.pure_var = tk.StringVar(value="no references loaded")
-        ctk.CTkLabel(side, textvariable=self.pure_var, anchor="w", justify="left",
-                     wraplength=300, font=ctk.CTkFont(size=11), text_color=brand.SUBTLE
-                     ).pack(fill="x", padx=14)
-
-        ctk.CTkButton(side, text="Load unknown CSV", height=40, **self._btn(),
-                      command=self.load_unknown).pack(fill="x", padx=14, pady=(10, 6))
-        self.unk_var = tk.StringVar(value="no unknown loaded")
-        ctk.CTkLabel(side, textvariable=self.unk_var, anchor="w", justify="left",
-                     wraplength=300, font=ctk.CTkFont(size=11), text_color=brand.SUBTLE
-                     ).pack(fill="x", padx=14)
-
-        # options
-        opt = ctk.CTkFrame(side, fg_color="transparent")
-        opt.pack(fill="x", padx=14, pady=10)
-        ctk.CTkLabel(opt, text="detection threshold", anchor="w",
-                     font=ctk.CTkFont(size=12)).grid(row=0, column=0, sticky="w")
+        top = ctk.CTkFrame(bar, fg_color="transparent")
+        top.pack(fill="x", padx=16, pady=(12, 2))
+        ctk.CTkButton(top, text="Load references", height=34, width=140, **self._btn(),
+                      command=self.load_references).pack(side="left")
+        ctk.CTkButton(top, text="Load unknown", height=34, width=130, **self._btn(),
+                      command=self.load_unknown).pack(side="left", padx=8)
+        ctk.CTkLabel(top, text="threshold", text_color=family.MUTE,
+                     font=ctk.CTkFont(size=12)).pack(side="left", padx=(16, 4))
         self.thr_var = tk.StringVar(value="0.30")
-        ctk.CTkEntry(opt, textvariable=self.thr_var, width=80, height=26
-                     ).grid(row=0, column=1, padx=6, pady=3)
-        ctk.CTkLabel(opt, text="max components", anchor="w",
-                     font=ctk.CTkFont(size=12)).grid(row=1, column=0, sticky="w")
+        ctk.CTkEntry(top, textvariable=self.thr_var, width=60, height=30).pack(side="left")
+        ctk.CTkLabel(top, text="max", text_color=family.MUTE,
+                     font=ctk.CTkFont(size=12)).pack(side="left", padx=(12, 4))
         self.maxc_var = tk.StringVar(value="3")
-        ctk.CTkEntry(opt, textvariable=self.maxc_var, width=80, height=26
-                     ).grid(row=1, column=1, padx=6, pady=3)
+        ctk.CTkEntry(top, textvariable=self.maxc_var, width=48, height=30).pack(side="left")
 
-        ctk.CTkButton(side, text="Run analysis", height=48, **self._runbtn(),
+        ctk.CTkOptionMenu(top, values=["System", "Light", "Dark"], width=96, height=30,
+                          command=ctk.set_appearance_mode).pack(side="right")
+        ctk.CTkButton(top, text="Export PNG", height=34, width=104, **self._btn(),
+                      command=self.export_png).pack(side="right", padx=8)
+        ctk.CTkButton(top, text="Export CSV", height=34, width=104, **self._btn(),
+                      command=self.export_csv).pack(side="right")
+        ctk.CTkButton(top, text="Run analysis", height=34, width=120, **self._runbtn(),
                       font=ctk.CTkFont(size=13, weight="bold"),
-                      command=self.run).pack(fill="x", padx=14, pady=(4, 8))
+                      command=self.run).pack(side="right", padx=8)
 
+        bot = ctk.CTkFrame(bar, fg_color="transparent")
+        bot.pack(fill="x", padx=16, pady=(0, 8))
+        self.pure_var = tk.StringVar(value="no references loaded")
+        self.unk_var = tk.StringVar(value="no unknown loaded")
         self.summary_var = tk.StringVar(value="load references + unknown, then Run.")
-        ctk.CTkLabel(side, textvariable=self.summary_var, anchor="w", justify="left",
-                     wraplength=300, font=ctk.CTkFont(size=13)
-                     ).pack(fill="x", padx=14, pady=(2, 8))
-
-        ctk.CTkButton(side, text="Export results CSV", height=32, **self._btn(),
-                      command=self.export_csv).pack(fill="x", padx=14, pady=3)
-        ctk.CTkButton(side, text="Export dashboard PNG", height=32, **self._btn(),
-                      command=self.export_png).pack(fill="x", padx=14, pady=3)
-
-        ctk.CTkLabel(side, text="appearance", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", padx=14, pady=(12, 0))
-        ctk.CTkOptionMenu(side, values=["System", "Light", "Dark"], width=120,
-                          command=ctk.set_appearance_mode).pack(padx=14, pady=(2, 14),
-                                                                anchor="w")
+        ctk.CTkLabel(bot, textvariable=self.pure_var, anchor="w",
+                     font=ctk.CTkFont(size=11), text_color=family.MUTE).pack(side="left")
+        ctk.CTkLabel(bot, text="·", text_color=family.FAINT).pack(side="left", padx=8)
+        ctk.CTkLabel(bot, textvariable=self.unk_var, anchor="w",
+                     font=ctk.CTkFont(size=11), text_color=family.MUTE).pack(side="left")
+        ctk.CTkLabel(bot, textvariable=self.summary_var, anchor="e",
+                     font=ctk.CTkFont(size=12), text_color=family.INK).pack(side="right")
 
         # ---------- main dashboard ----------
         main = ctk.CTkScrollableFrame(root, corner_radius=0, fg_color=brand.MAIN_FILL)
-        main.grid(row=1, column=1, sticky="nsew")
+        main.grid(row=2, column=0, sticky="nsew")
         main.grid_columnconfigure((0, 1), weight=1)
 
         spec_card = ctk.CTkFrame(main, corner_radius=10, fg_color=brand.CARD_FILL)
