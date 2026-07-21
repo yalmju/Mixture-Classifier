@@ -36,11 +36,11 @@ import customtkinter as ctk
 
 # Pull all computation + saving code in unchanged
 import sers_discriminator as sd
+import family
 
 BUILD_TAG = "build 2026-05-21 CTk v1"
 
-ctk.set_appearance_mode("System")     # follow OS dark/light
-ctk.set_default_color_theme("blue")
+family.apply()     # shared UNMIXR light look
 
 # Matplotlib font setup: Arial 14pt for embedded charts (keep readable inside
 # CTk frames; saved-PNG path still uses 18pt via sers_discriminator's rcParams)
@@ -53,7 +53,8 @@ plt.rcParams["font.family"] = ["Arial", "DejaVu Sans"]
 
 def section_frame(parent, title=None):
     """Rounded card with an optional small bold header label."""
-    f = ctk.CTkFrame(parent, corner_radius=10)
+    f = ctk.CTkFrame(parent, corner_radius=12, fg_color=family.CARD,
+                     border_width=1, border_color=family.LINE)
     if title:
         ctk.CTkLabel(
             f, text=title,
@@ -533,12 +534,16 @@ class SERSDiscriminatorApp(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=0, minsize=self.SIDEBAR_W)
         self.grid_columnconfigure(1, weight=0, minsize=6)
         self.grid_columnconfigure(2, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=0)     # header bar
+        self.grid_rowconfigure(1, weight=1)     # content
+
+        header = family.make_header(self, "SERS map", "per-pixel identify + unmix")
+        header.grid(row=0, column=0, columnspan=3, sticky="ew")
 
         # --- Sidebar ---
         self.sidebar = ctk.CTkFrame(self, width=self.SIDEBAR_W,
                                     corner_radius=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
+        self.sidebar.grid(row=1, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
         self._build_sidebar()
         self.update_idletasks()
@@ -551,7 +556,7 @@ class SERSDiscriminatorApp(ctk.CTkFrame):
             self, width=6, corner_radius=0,
             fg_color=("#d4d4d8", "#3f3f46"),
         )
-        self.splitter.grid(row=0, column=1, sticky="ns")
+        self.splitter.grid(row=1, column=1, sticky="ns")
         self.splitter.configure(cursor="sb_h_double_arrow")
         self.splitter.bind("<B1-Motion>", self._on_splitter_drag)
         self.splitter.bind("<Double-Button-1>",
@@ -559,8 +564,8 @@ class SERSDiscriminatorApp(ctk.CTkFrame):
 
         # --- Content area ---
         self.content = ctk.CTkFrame(self, corner_radius=0,
-                                    fg_color=("#f3f4f6", "#0f172a"))
-        self.content.grid(row=0, column=2, sticky="nsew")
+                                    fg_color=family.PAGE)
+        self.content.grid(row=1, column=2, sticky="nsew")
 
         # Panels created on demand
         self.panels: dict[str, ctk.CTkFrame] = {}

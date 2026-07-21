@@ -66,7 +66,7 @@ model capacity.
 - `synthetic.py` — synthetic SERS generator (competitive adsorption) so everything runs with zero real data.
 - `resnet1d.py` — ResNet1D multi-label detector (PyTorch), the Molecules-2025 architecture; a drop-in alternative to the RF heads.
 
-**Detailed tools** (customtkinter, launched from the Discriminator page or run standalone):
+**Detailed tools** (customtkinter, launched from the Discriminator page or run standalone; both share the UNMIXR light look — teal "U" header bar + white cards — via `family.py`):
 - `sers_app.py` — Mixture tool: sidebar + cards dashboard, load pure/unknown CSVs, detect + ratio + export. `brand.py` holds the colors.
 - `sers_discriminator_ctk.py` (+ `sers_discriminator.py` core) — Map tool: reference + hyperspectral-map CSVs → per-pixel identification and unmixing maps.
 

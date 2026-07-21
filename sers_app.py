@@ -33,12 +33,12 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 import brand
+import family
 from sers_mixture import preprocess, SERSMixtureClassifier, AugmentConfig
 from competitive import recover_ratios, calibrate_response
 from competitive_compare import additive_residual
 
-ctk.set_appearance_mode("System")
-ctk.set_default_color_theme("blue")
+family.apply()   # shared UNMIXR light look
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -86,11 +86,15 @@ class SERSApp:
     def _build_ui(self):
         root = self.root
         root.grid_columnconfigure(1, weight=1)
-        root.grid_rowconfigure(0, weight=1)
+        root.grid_rowconfigure(0, weight=0)
+        root.grid_rowconfigure(1, weight=1)
+
+        header = family.make_header(root, "Mixture", "detect components + ratio")
+        header.grid(row=0, column=0, columnspan=2, sticky="ew")
 
         side = ctk.CTkScrollableFrame(root, width=340, corner_radius=0,
                                       fg_color=brand.SIDE_FILL)
-        side.grid(row=0, column=0, sticky="nsew")
+        side.grid(row=1, column=0, sticky="nsew")
 
         ctk.CTkLabel(side, text=brand.APP_NAME,
                      font=ctk.CTkFont(size=15, weight="bold"), anchor="w"
@@ -149,7 +153,7 @@ class SERSApp:
 
         # ---------- main dashboard ----------
         main = ctk.CTkScrollableFrame(root, corner_radius=0, fg_color=brand.MAIN_FILL)
-        main.grid(row=0, column=1, sticky="nsew")
+        main.grid(row=1, column=1, sticky="nsew")
         main.grid_columnconfigure((0, 1), weight=1)
 
         spec_card = ctk.CTkFrame(main, corner_radius=10, fg_color=brand.CARD_FILL)
