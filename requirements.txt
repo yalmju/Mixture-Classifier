@@ -1,0 +1,7 @@
+numpy
+scipy
+scikit-learn
+matplotlib
+customtkinter
+# optional: ResNet1D detector (resnet1d.py / demo_resnet.py)
+torch

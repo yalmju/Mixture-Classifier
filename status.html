@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SERS 프로젝트 현황 — 데이터·도구·다음 단계</title>
+<style>
+  :root{ --bg:#0f1216; --card:#171c22; --card2:#1d232b; --ink:#e6edf3; --sub:#9fb0c0;
+    --line:#2a323c; --accent:#4aa8ff; --good:#5ad19b; --warn:#ff9b6a; --miss:#ff6b7d; }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f8fa; --card:#fff; --card2:#f0f3f7; --ink:#1c2430; --sub:#5a6b7b;
+      --line:#e2e8ef; --accent:#1a73e8; --good:#1a8f5f; --warn:#c2551f; --miss:#c0334a; } }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;}
+  .wrap{max-width:840px;margin:0 auto;padding:22px 16px 60px}
+  h1{font-size:1.5rem;margin:.2em 0 .1em} .lead{color:var(--sub);margin:.2em 0 1.2em}
+  .sec{margin:26px 0 10px;font-size:1.16rem;font-weight:700;border-left:3px solid var(--accent);padding-left:10px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin:12px 0}
+  .card h3{margin:.1em 0 .4em;font-size:1.02rem}
+  .pill{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 9px;border-radius:999px;margin-right:6px}
+  .p-have{background:rgba(90,209,155,.16);color:var(--good)}
+  .p-chk{background:rgba(74,168,255,.16);color:var(--accent)}
+  .p-miss{background:rgba(255,107,125,.16);color:var(--miss)}
+  ul{margin:.3em 0 .3em;padding-left:1.15em} li{margin:.3em 0}
+  code{background:var(--card2);padding:1px 6px;border-radius:6px;font-size:.85em}
+  table{width:100%;border-collapse:collapse;margin:.4em 0;font-size:.9rem}
+  th,td{border:1px solid var(--line);padding:6px 8px;text-align:left}
+  th{background:var(--card2)}
+  .next{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:12px 16px}
+  .foot{color:var(--sub);font-size:.82rem;margin-top:28px;text-align:center}
+  .k{color:var(--warn);font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>SERS 프로젝트 현황</h1>
+<p class="lead">DQ / THI / TBZ 농약 — 순물질로 혼합물 성분·비율·농도 뽑기 · 경쟁흡착 · 기판 재현성</p>
+
+<div class="sec"><span class="pill p-have">있음</span>보유 데이터 (Pest_Discriminator)</div>
+<div class="card">
+  <ul>
+    <li><b>순물질 레퍼런스</b> — DQ, THI, TBZ, 블랭크(blk). 각 400픽셀, baseline 보정본.</li>
+    <li><b>이진 혼합물</b> — 세 조합 전부 1:1 / 1:3 / 3:1: DQ+THI, TBZ+THI, TBZ+DQ.</li>
+    <li><b>삼진</b> — 1:1:1 (THI1) 하나.</li>
+    <li><b>THI 농도 계열</b> — THI01(1:1:0.1), THI001(1:1:0.01). "묻힌 성분" 케이스 → 현재 학습 제외.</li>
+    <li><b>타깃</b> — acf(깨끗한 기판, 실측 몰비 THI:TBZ:DQ = 0.1:1:1, <b>유일한 ground truth</b>),
+        바나나·잎(food matrix).</li>
+    <li><b>포맷</b> — XY맵 CSV, 100–3200 cm⁻¹, 2001 pts, 조건당 400 px(20×20).</li>
+  </ul>
+</div>
+
+<div class="sec"><span class="pill p-chk">확인됨</span>실측으로 검증된 사실</div>
+<div class="card">
+  <table>
+    <tr><th>항목</th><th>결과</th></tr>
+    <tr><td>순물질 분리도</td><td>조건수 ≈ <b>2.5 → 잘 분리</b> (겹침 최대 DQ–TBZ 코사인 0.69)</td></tr>
+    <tr><td>순물질만 NNLS 언믹싱</td><td>이진 조성 대체로 복원됨 (signal-weighted)</td></tr>
+    <tr><td>신호 ≠ 몰비</td><td>THI 순물질 신호가 DQ·TBZ의 <b>5~6배</b> → 1:1:1도 THI 96%로 나옴 → <span class="k">응답계수 보정 필요</span></td></tr>
+    <tr><td>2132 cm⁻¹ 피크</td><td>블랭크엔 거의 없고 THI·TBZ에서만 강함 → <b>기판 고유 아님</b>, 질소 분석물 광생성물 의심 → 내부표준 부적합</td></tr>
+  </table>
+</div>
+
+<div class="sec"><span class="pill p-miss">없음</span>추가로 측정 필요 (future.md)</div>
+<div class="card">
+  <ul>
+    <li><b>농도 검량 계열</b> (10 mM–1 µM, 각 농약) — 절대 µM·LOD·응답계수의 핵심. <b>최우선.</b></li>
+    <li><b>재현 맵</b> (같은 조건 3회+) — 정직한 일반화 평가.</li>
+    <li><b>타깃 조건에서 DQ 재측정</b> (도메인 시프트 보정).</li>
+    <li><b>matrix-matched 블랭크</b> — 농약 없는 바나나·잎.</li>
+  </ul>
+</div>
+
+<div class="sec">만들어 둔 도구 (kit)</div>
+<div class="card">
+  <table>
+    <tr><th>파일</th><th>역할</th></tr>
+    <tr><td><code>sers_mixture.py</code> / <code>resnet1d.py</code></td><td>성분 검출 (RF + ResNet1D, 다중라벨)</td></tr>
+    <tr><td><code>competitive.py</code></td><td>비율 복원 — 응답계수 R로 gain·경쟁항 상쇄</td></tr>
+    <tr><td><code>demo_absolute.py</code></td><td>내부표준으로 절대 µM + LOD</td></tr>
+    <tr><td><code>competitive_compare.py</code></td><td>titration으로 경쟁흡착 정량 (Langmuir vs 선형 + 밀려남)</td></tr>
+    <tr><td><code>references.html / .md</code></td><td>참고자료 정리</td></tr>
+  </table>
+</div>
+
+<div class="sec">핵심 결론 & 물리 한계</div>
+<div class="card">
+  <ul>
+    <li><b>비율 복원</b>: 순물질 NNLS → C_i:C_j = (B_i/R_i):(B_j/R_j). gain·경쟁항이 비율에서 상쇄 → 재현성 우회.</li>
+    <li><b>절대 µM</b>: 내부표준으로 gain·포화까지 상쇄(r ∝ C). 단 IS가 분석물과 선형독립이어야.</li>
+    <li><b>표면 포화</b>: 지배종 농도 소실 → 희석으로 탈출.</li>
+    <li><b>노이즈 바닥</b>: 묻힌 성분 &lt; LOQ → SNR·마커밴드·표준첨가.</li>
+  </ul>
+</div>
+
+<div class="sec">지금 데이터로 바로 할 수 있는 다음 단계</div>
+<div class="next">
+  <ol>
+    <li><b>Ratio/ 혼합물로 응답계수 R 추출</b> → 실제 <b>몰비 복원 검증</b>.</li>
+    <li><b>THI01 / THI001에 LOQ 숫자 매기기</b> (묻힌 성분 정량 한계 정량화).</li>
+    <li>(측정 후) 검량 계열 → 절대 µM 파이프라인 완성.</li>
+  </ol>
+</div>
+
+<div class="foot">SERS 프로젝트 현황 · 대화 정리본</div>
+</div>
+</body>
+</html>
