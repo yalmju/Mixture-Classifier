@@ -24,9 +24,12 @@ python unmixr.py
 | **2. Calibrate** | **Quantify** | **Ratio → absolute M + Langmuir competition**. Fits each compound's Langmuir isotherm from a dilution series (`K_i` and `gA_i` separately), inverts competitive adsorption to absolute **molarity**, and judges competition — surface- vs solution-dominant, selectivity `K_max/K_min`, which compound is buried. Core `calibration.py`. |
 | **3. Analyze** | **Discriminator** | The real DQ / THI / TBZ maps in one screen: **single-component 4-class confusion** (per pixel, ~100%), a **detection-strategy comparison** (RF-on-mean vs **per-pixel NNLS voting** vs matched-filter — per-pixel wins: F1 0.73→0.92, exact 20%→80% by using the spatial info the mean discards), the per-pixel **detection grid**, **composition confusion**, and **response-factor correction**. `Data folder…` re-points to the data; **Mixture tool** / **Map tool** buttons launch the detailed customtkinter apps in their own window. Core `real_data.py`. |
 
-The three pages are native PyQt6 (embedded matplotlib); the two detailed tools
-(`sers_app.py`, `sers_discriminator_ctk.py`) are customtkinter and launch as
-separate processes. Rename the app by editing `APP_NAME` in `unmixr.py`.
+Every page has **Load…** (feed your own data — a reference-spectra CSV for Model,
+a dilution-series CSV for Quantify, a data folder for Discriminator) and
+**Export…** (results CSV + the page's figures as PNG). CSV formats are documented
+in `io_utils.py`. The two detailed tools (`sers_app.py`, `sers_discriminator_ctk.py`)
+are customtkinter and launch as separate processes. Rename the app by editing
+`APP_NAME` in `unmixr.py`.
 
 ## Why this design
 

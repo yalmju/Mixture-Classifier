@@ -41,6 +41,17 @@ from matplotlib.patches import Patch, Rectangle
 from model_metrics import compute_metrics, MetricsResult
 from calibration import build_synthetic_lab, calibrate, quantify
 from real_data import compute_real, PEST_DEFAULT
+from io_utils import load_spectra_csv, load_calibration_csv, write_csv
+
+
+def _save_figs(named_canvases, folder):
+    """Save each (name, Canvas) to folder/<name>.png. Returns count."""
+    n = 0
+    for name, cv in named_canvases:
+        cv.fig.savefig(os.path.join(folder, name + ".png"), dpi=150,
+                       facecolor=CARD, bbox_inches="tight")
+        n += 1
+    return n
 
 APP_NAME = "UNMIXR"
 VERSION = "1.0"
@@ -189,11 +200,16 @@ class ModelPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
 
+        self._res = None
+        self._pures = None     # loaded real references (raw)
+        self._names = None
+        self._axis = None
+
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Model metrics"); h1.setObjectName("h1")
-        sub = QLabel("Train the mixture classifier on synthetic pure spectra, "
-                     "then read PCA · confusion · per-component F1.")
-        sub.setObjectName("sub")
+        sub = QLabel("Train the mixture classifier on synthetic pure spectra "
+                     "(or load your own reference CSV), then read PCA · confusion · F1.")
+        sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
 
@@ -204,10 +220,15 @@ class ModelPage(QWidget):
         self.sp_aug = self._spin(QSpinBox(), 30, 400, 120, "aug / pure", step=10)
         for w in (self.sp_k, self.sp_thr, self.sp_aug):
             ctl.addLayout(w)
-        ctl.addStretch(1)
+        self.src = QLabel("source: synthetic"); self.src.setObjectName("field")
+        ctl.addWidget(self.src); ctl.addStretch(1)
+        load_b = QPushButton("Load refs…"); load_b.setObjectName("ghost")
+        load_b.clicked.connect(self._load_refs)
+        exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
+        exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Train + evaluate"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._train)
-        ctl.addWidget(self.btn)
+        ctl.addWidget(load_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
         # KPI row
@@ -252,12 +273,48 @@ class ModelPage(QWidget):
         col.addWidget(lb); col.addWidget(spin)
         return col
 
+    def _load_refs(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Reference spectra CSV "
+                                           "(wavenumber + one column per component)",
+                                           "", "CSV (*.csv)")
+        if not p:
+            return
+        try:
+            axis, names, spectra = load_spectra_csv(p)
+            self._pures, self._names, self._axis = spectra, names, axis
+            self.src.setText(f"source: {os.path.basename(p)} ({len(names)})")
+        except Exception as exc:
+            self.src.setText("load failed"); print("load refs:", exc, file=sys.stderr)
+
+    def _export(self):
+        if self._res is None:
+            self.src.setText("run first, then export"); return
+        d = QFileDialog.getExistingDirectory(self, "Export folder")
+        if not d:
+            return
+        r = self._res
+        rows = [[nm, f"{v[0]:.4f}", f"{v[1]:.4f}", f"{v[2]:.4f}", v[3]]
+                for nm, v in r.per_component.items()]
+        rows.append(["micro", f"{r.micro['micro_precision']:.4f}",
+                     f"{r.micro['micro_recall']:.4f}", f"{r.micro['micro_f1']:.4f}", ""])
+        write_csv(os.path.join(d, "model_metrics.csv"),
+                  ["component", "precision", "recall", "f1", "support"], rows)
+        write_csv(os.path.join(d, "model_confusion.csv"),
+                  [""] + list(r.names),
+                  [[r.names[i]] + list(map(int, r.confusion[i]))
+                   for i in range(len(r.names))])
+        n = _save_figs([("model_pca", self.c_pca), ("model_confusion", self.c_cm),
+                        ("model_prf", self.c_bar), ("model_templates", self.c_spec)], d)
+        self.src.setText(f"exported CSV + {n} PNG → {os.path.basename(d)}")
+
     # ---- training ----
     def _train(self):
         params = dict(n_components=self.sp_k.itemAt(1).widget().value(),
                       threshold=self.sp_thr.itemAt(1).widget().value(),
                       n_per_pure=self.sp_aug.itemAt(1).widget().value(),
                       seed=0)
+        if self._pures is not None:       # train on the loaded real references
+            params.update(pure_raw=self._pures, names=self._names, axis=self._axis)
         self.btn.setEnabled(False); self.btn.setText("Training…")
         self._thread = QThread()
         self._worker = TrainWorker(params)
@@ -275,6 +332,7 @@ class ModelPage(QWidget):
         print(tb, file=sys.stderr)
 
     def _apply(self, res: MetricsResult):
+        self._res = res
         self.btn.setEnabled(True); self.btn.setText("Train + evaluate")
         m = res.micro
         self.k_f1.set(f"{m['micro_f1']:.3f}", TEAL)
@@ -336,28 +394,45 @@ class ModelPage(QWidget):
         self.c_bar.fig.tight_layout(); self.c_bar.draw_idle()
 
     def _plot_spec(self, res):
-        # re-derive templates for a quick visual (cheap: rebuild dataset once)
         ax = self.c_spec.new_ax()
-        try:
-            from synthetic import build_dataset
-            from sers_mixture import preprocess
-            d = build_dataset(n_components=len(res.names), seed=0)
-            pures = preprocess(d["pure_raw"]); axis = d["axis"]
-            for i, nm in enumerate(res.names):
-                ax.plot(axis, pures[i] + i * 0.6, lw=1.0,
-                        color=SERIES[i % len(SERIES)], label=nm)
-            ax.set_xlabel("wavenumber (cm⁻¹)"); ax.set_yticks([])
-        except Exception:
-            ax.axis("off")
+        axis = res.axis if res.axis is not None else np.arange(res.templates.shape[1])
+        for i, nm in enumerate(res.names):
+            ax.plot(axis, res.templates[i] + i * 0.6, lw=1.0,
+                    color=SERIES[i % len(SERIES)], label=nm)
+        ax.set_xlabel("wavenumber (cm⁻¹)"); ax.set_yticks([])
         self.c_spec.fig.tight_layout(); self.c_spec.draw_idle()
 
 
 # --------------------------------------------------------------------------
 # Quantify page — ratio→M calibration + Langmuir competition (real compute)
 # --------------------------------------------------------------------------
-def _run_quant(n_components=3, seed=0):
+def _real_lab(cal, seed=0, n_validation=6):
+    """Build a lab dict from a loaded calibration CSV (real dilution series).
+    Validation mixtures are synthesized from the real templates + fitted physics
+    to demonstrate recovery (clearly a synthetic check on real calibration)."""
+    from competitive import forward_spectrum
+    axis, names, dilutions = cal
+    Praw = np.array([sp[int(np.argmax(c))] for c, sp in dilutions])
+    P = Praw / (np.linalg.norm(Praw, axis=1, keepdims=True) + 1e-12)
+    tmp = calibrate(dilutions, P, names)
+    rng = np.random.default_rng(seed)
+    K = tmp.K; A = tmp.gA / (tmp.gA.max() or 1.0)
+    n = len(names); val_specs, val_true = [], []
+    for _ in range(n_validation):
+        k = int(rng.integers(2, n + 1)); idx = rng.choice(n, k, replace=False)
+        C = np.zeros(n); C[idx] = 10 ** rng.uniform(-6, -3.3, k)
+        y = forward_spectrum(C, K, A, P)
+        y = np.clip(y + rng.normal(0, 0.01 * (y.max() or 1.0), len(axis)), 0, None)
+        val_specs.append(y); val_true.append(C)
+    return {"axis": axis, "names": names, "P": P, "dilutions": dilutions,
+            "val_specs": np.array(val_specs), "val_true": np.array(val_true),
+            "K_true": None}
+
+
+def _run_quant(n_components=3, seed=0, cal=None):
     from calibration import _langmuir_B
-    lab = build_synthetic_lab(n_components=n_components, seed=seed)
+    lab = (_real_lab(cal, seed) if cal is not None
+           else build_synthetic_lab(n_components=n_components, seed=seed))
     calib = calibrate(lab["dilutions"], lab["P"], lab["names"])
 
     iso = []
@@ -407,13 +482,16 @@ class QuantifyPage(QWidget):
     def __init__(self):
         super().__init__()
         self._thread = None
+        self._cal = None       # loaded calibration (axis, names, dilutions)
+        self._res = None
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Quantify — ratio → M + competition"); h1.setObjectName("h1")
-        sub = QLabel("Calibrate each compound's Langmuir isotherm (dilution series) "
-                     "→ recover absolute M for mixtures and judge competitive adsorption.")
+        sub = QLabel("Calibrate each compound's Langmuir isotherm from a dilution "
+                     "series (synthetic, or load your own CSV) → recover absolute M "
+                     "and judge competitive adsorption.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -423,10 +501,15 @@ class QuantifyPage(QWidget):
         self.sp_seed = self._spin(QSpinBox(), 0, 999, 1, "seed")
         for w in (self.sp_k, self.sp_seed):
             ctl.addLayout(w)
-        ctl.addStretch(1)
+        self.src = QLabel("source: synthetic"); self.src.setObjectName("field")
+        ctl.addWidget(self.src); ctl.addStretch(1)
+        load_b = QPushButton("Load calibration…"); load_b.setObjectName("ghost")
+        load_b.clicked.connect(self._load_cal)
+        exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
+        exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Calibrate + quantify"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
-        ctl.addWidget(self.btn)
+        ctl.addWidget(load_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
@@ -469,9 +552,39 @@ class QuantifyPage(QWidget):
         col.addWidget(lb); col.addWidget(spin)
         return col
 
+    def _load_cal(self):
+        p, _ = QFileDialog.getOpenFileName(
+            self, "Calibration CSV (compound, concentration_M, wavenumbers…)",
+            "", "CSV (*.csv)")
+        if not p:
+            return
+        try:
+            axis, names, dilutions = load_calibration_csv(p)
+            self._cal = (axis, names, dilutions)
+            self.src.setText(f"source: {os.path.basename(p)} ({len(names)})")
+        except Exception as exc:
+            self.src.setText("load failed"); print("load cal:", exc, file=sys.stderr)
+
+    def _export(self):
+        if self._res is None:
+            self.src.setText("run first, then export"); return
+        d = QFileDialog.getExistingDirectory(self, "Export folder")
+        if not d:
+            return
+        r = self._res; q = r["example"]
+        rows = [[nm, f"{q['C'][i]:.3e}", f"{q['conc_ratio'][i]:.3f}",
+                 f"{q['theta'][i]:.3f}", f"{r['K_fit'][i]:.3e}"]
+                for i, nm in enumerate(r["names"])]
+        write_csv(os.path.join(d, "quantify.csv"),
+                  ["compound", "C_M", "ratio", "theta", "K_fit"], rows)
+        n = _save_figs([("quantify_isotherms", self.c_iso),
+                        ("quantify_parity", self.c_par),
+                        ("quantify_competition", self.c_comp)], d)
+        self.src.setText(f"exported CSV + {n} PNG → {os.path.basename(d)}")
+
     def _run(self):
         params = dict(n_components=self.sp_k.itemAt(1).widget().value(),
-                      seed=self.sp_seed.itemAt(1).widget().value())
+                      seed=self.sp_seed.itemAt(1).widget().value(), cal=self._cal)
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self._thread = QThread(); self._worker = QuantWorker(params)
         self._worker.moveToThread(self._thread)
@@ -487,6 +600,7 @@ class QuantifyPage(QWidget):
         print(tb, file=sys.stderr)
 
     def _apply(self, res):
+        self._res = res
         self.btn.setEnabled(True); self.btn.setText("Calibrate + quantify")
         comp = res["example"]["competition"]
         self.k_sel.set(f"{res['selectivity']:.1f}×", CORAL)
@@ -590,15 +704,16 @@ class RealDataPage(QWidget):
     def __init__(self):
         super().__init__()
         self._thread = None
+        self._res = None
         self.pest_dir = PEST_DEFAULT
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(12)
 
         head = QVBoxLayout(); head.setSpacing(2)
-        h1 = QLabel("DQ / THI / TBZ pesticide analysis"); h1.setObjectName("h1")
+        h1 = QLabel("Real-data analysis"); h1.setObjectName("h1")
         sub = QLabel("Single-component classification, mixture detection (per-pixel), "
-                     "composition confusion, and response-factor correction on the real "
-                     "SERS maps.  Detailed tools open in their own window.")
+                     "composition confusion, and response-factor correction on your "
+                     "loaded maps.  Detailed tools open in their own window.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -612,18 +727,21 @@ class RealDataPage(QWidget):
         mix_btn.clicked.connect(lambda: self._launch("sers_app.py"))
         disc_btn = QPushButton("Map tool"); disc_btn.setObjectName("ghost")
         disc_btn.clicked.connect(lambda: self._launch("sers_discriminator_ctk.py"))
+        exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
+        exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Run analysis"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(browse); ctl.addWidget(self.folder_lbl, 1)
         ctl.addWidget(self.status); ctl.addStretch(1)
-        ctl.addWidget(mix_btn); ctl.addWidget(disc_btn); ctl.addWidget(self.btn)
+        ctl.addWidget(mix_btn); ctl.addWidget(disc_btn)
+        ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
         self.k_pure = Kpi("single-component acc")
         self.k_f1 = Kpi("mixture detection F1")
         self.k_combo = Kpi("exact composition")
-        self.k_r = Kpi("THI response  R")
+        self.k_r = Kpi("dominant response  R")
         for k in (self.k_pure, self.k_f1, self.k_combo, self.k_r):
             kpis.addWidget(k)
         root.addLayout(kpis)
@@ -669,6 +787,36 @@ class RealDataPage(QWidget):
         except Exception as exc:
             print("launch failed:", exc, file=sys.stderr)
 
+    def _export(self):
+        if self._res is None:
+            self.status.setText("run first, then export")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        d = QFileDialog.getExistingDirectory(self, "Export folder")
+        if not d:
+            return
+        r = self._res
+        # per-mixture detection (true vs per-pixel predicted)
+        det = []
+        for k, nm in enumerate(r.mix_names):
+            t = "+".join(c for i, c in enumerate(r.comps) if r.yt[k, i])
+            p = "+".join(c for i, c in enumerate(r.comps) if r.yp[k, i])
+            det.append([nm, t, p, "hit" if t == p else "miss"])
+        write_csv(os.path.join(d, "detection.csv"),
+                  ["mixture", "true", "predicted", "exact"], det)
+        write_csv(os.path.join(d, "strategies.csv"),
+                  ["strategy", "recall", "precision", "f1", "exact"],
+                  [[s[0], f"{s[1]:.3f}", f"{s[2]:.3f}", f"{s[3]:.3f}", f"{s[4]:.3f}"]
+                   for s in r.strategies])
+        write_csv(os.path.join(d, "response_factors.csv"),
+                  ["compound", "R"], [[c, f"{r.R[i]:.3f}"]
+                                      for i, c in enumerate(r.comps)])
+        n = _save_figs([("real_pca", self.c_pca), ("real_pure_confusion", self.c_pure),
+                        ("real_strategy", self.c_strat), ("real_detection", self.c_det),
+                        ("real_composition", self.c_combo),
+                        ("real_calibration", self.c_cal)], d)
+        self.status.setText(f"exported 3 CSV + {n} PNG → {os.path.basename(d)}")
+        self.status.setStyleSheet(f"color:{MUTE};")
+
     def _run(self):
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText("")
@@ -689,12 +837,14 @@ class RealDataPage(QWidget):
         print(tb, file=sys.stderr)
 
     def _apply(self, r):
+        self._res = r
         self.btn.setEnabled(True); self.btn.setText("Run analysis")
         self.status.setText("done"); self.status.setStyleSheet(f"color:{MUTE};")
         self.k_pure.set(f"{r.acc4:.0%}", TEAL)
         self.k_f1.set(f"{r.micro['micro_f1']:.2f}", BLUE)
         self.k_combo.set(f"{r.combo_exact:.0%}", AMBER)
-        self.k_r.set(f"{r.R[1]:.1f}×", CORAL)
+        di = int(np.argmax(r.R))
+        self.k_r.set(f"{r.comps[di]} {r.R[di]:.1f}×", CORAL)
         self._plot_pca(r); self._plot_pure(r); self._plot_strat(r)
         self._plot_det(r); self._plot_combo(r); self._plot_cal(r)
 

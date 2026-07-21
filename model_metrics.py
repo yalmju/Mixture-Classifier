@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 from sklearn.decomposition import PCA
 
-from synthetic import build_dataset
+from synthetic import build_dataset, measure_mixture
 from sers_mixture import (
     preprocess, SERSMixtureClassifier, AugmentConfig,
     multilabel_metrics, names_to_indicator,
@@ -38,13 +38,43 @@ class MetricsResult:
     pca_pure: np.ndarray            # (K, 2) projected pure templates
     n_train: int
     n_test: int
+    templates: np.ndarray = None    # (K, n_feat) preprocessed pure templates
+    axis: np.ndarray = None         # (n_feat,) wavenumber axis
+
+
+def _dataset_from_pures(pure_raw, names, axis=None, seed=0, n_test_per_size=40):
+    """Build a build_dataset()-shaped dict from REAL pure spectra: synthesize
+    competitive-adsorption test mixtures (sizes 1-3) from the loaded pures."""
+    pure_raw = np.asarray(pure_raw, float)
+    n, feat = pure_raw.shape
+    if axis is None:
+        axis = np.arange(feat, dtype=float)
+    rng = np.random.default_rng(seed)
+    affinities = rng.uniform(0.5, 2.0, n)
+    specs, true = [], []
+    for size in (1, 2, 3):
+        if size > n:
+            continue
+        for _ in range(n_test_per_size):
+            present = rng.choice(n, size=size, replace=False)
+            spec, _ = measure_mixture(pure_raw, affinities, present, axis, rng)
+            specs.append(spec)
+            true.append(sorted(int(i) for i in present))
+    return {"axis": axis, "names": list(names), "pure_raw": pure_raw,
+            "test_specs": np.array(specs), "test_true": true}
 
 
 def compute_metrics(n_components: int = 6, threshold: float = 0.30,
                     max_components: int = 3, n_per_pure: int = 120,
-                    seed: int = 0) -> MetricsResult:
-    data = build_dataset(n_components=n_components, seed=seed)
+                    seed: int = 0, pure_raw=None, names=None,
+                    axis=None) -> MetricsResult:
+    if pure_raw is not None:                       # real spectra loaded from CSV
+        data = _dataset_from_pures(pure_raw, names, axis, seed)
+        n_components = len(data["names"])
+    else:
+        data = build_dataset(n_components=n_components, seed=seed)
     names = data["names"]
+    axis = data["axis"]
     K = len(names)
 
     pures = preprocess(data["pure_raw"])
@@ -87,7 +117,8 @@ def compute_metrics(n_components: int = 6, threshold: float = 0.30,
     return MetricsResult(
         names=names, micro=micro, per_component=per, confusion=cm,
         pca_points=emb[:len(Xs)], pca_labels=labels, pca_pure=emb[len(Xs):],
-        n_train=n_components * n_per_pure, n_test=len(test))
+        n_train=K * n_per_pure, n_test=len(test),
+        templates=pures, axis=axis)
 
 
 if __name__ == "__main__":
