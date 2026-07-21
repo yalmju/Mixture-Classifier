@@ -72,15 +72,13 @@ def plot_card(parent):
 
 
 # Accent colors per analysis tile, mirroring Plaspector's convention.
+# view-tab accents drawn from the UNMIXR family (teal primary, then blue / coral
+# / purple for the other categories)
 TILE_COLORS = {
-    "maps":        {"fg": ("#2563eb", "#1e40af"),
-                    "hover": ("#1d4ed8", "#1e3a8a")},
-    "reliability": {"fg": ("#16a34a", "#15803d"),
-                    "hover": ("#15803d", "#14532d")},
-    "validation":  {"fg": ("#ea580c", "#9a3412"),
-                    "hover": ("#c2410c", "#7c2d12")},
-    "stats":       {"fg": ("#7c3aed", "#5b21b6"),
-                    "hover": ("#6d28d9", "#4c1d95")},
+    "maps":        {"fg": ("#0f9d6b", "#0f9d6b"), "hover": ("#0c855a", "#0c855a")},
+    "reliability": {"fg": ("#1a73e8", "#1a73e8"), "hover": ("#155ec2", "#155ec2")},
+    "validation":  {"fg": ("#d8542a", "#d8542a"), "hover": ("#b8441f", "#b8441f")},
+    "stats":       {"fg": ("#6b5fd6", "#6b5fd6"), "hover": ("#574bc4", "#574bc4")},
 }
 
 

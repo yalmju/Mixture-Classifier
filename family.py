@@ -31,7 +31,7 @@ def head_family():
 
 def apply():
     ctk.set_appearance_mode("Light")
-    ctk.set_default_color_theme("blue")
+    ctk.set_default_color_theme("green")   # teal accent, matching UNMIXR
 
 
 def make_header(parent, title, subtitle=""):

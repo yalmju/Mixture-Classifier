@@ -17,9 +17,9 @@ CARD_FILL = ("#ffffff", "#171c22")     # card background
 TEXT     = ("#1c2430", "#e6edf3")      # primary text (usually leave to theme)
 SUBTLE   = ("#5b6673", "#9ca3af")      # secondary/hint text
 
-# ---- buttons / accents ---------------------------------------------------
-BTN_FILL   = ("#1a73e8", "#2f6fe0")    # normal button (family blue)
-BTN_HOVER  = ("#155ec2", "#255bbd")    # button hover
+# ---- buttons / accents (family teal; primary Run darker than secondary) --
+BTN_FILL   = ("#1fae7d", "#1fae7d")    # secondary button (light teal)
+BTN_HOVER  = ("#199a6d", "#199a6d")
 RUN_FILL   = ("#0f9d6b", "#12b866")    # the primary "Run" button (family teal)
 RUN_HOVER  = ("#0c855a", "#0e9a55")
 ACCENT     = "#0f9d6b"                  # misc accent (family teal)
