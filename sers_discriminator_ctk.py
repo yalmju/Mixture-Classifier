@@ -533,15 +533,17 @@ class SERSDiscriminatorApp(ctk.CTkFrame):
         self.grid_columnconfigure(1, weight=0, minsize=6)
         self.grid_columnconfigure(2, weight=1)
         self.grid_rowconfigure(0, weight=0)     # header bar
-        self.grid_rowconfigure(1, weight=1)     # content
+        self.grid_rowconfigure(1, weight=0)     # view nav (top pills)
+        self.grid_rowconfigure(2, weight=1)     # body (sidebar | content)
 
         header = family.make_header(self, "SERS map", "per-pixel identify + unmix")
         header.grid(row=0, column=0, columnspan=3, sticky="ew")
+        self._build_view_nav().grid(row=1, column=0, columnspan=3, sticky="ew")
 
         # --- Sidebar ---
         self.sidebar = ctk.CTkFrame(self, width=self.SIDEBAR_W,
                                     corner_radius=0)
-        self.sidebar.grid(row=1, column=0, sticky="nsew")
+        self.sidebar.grid(row=2, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
         self._build_sidebar()
         self.update_idletasks()
@@ -554,7 +556,7 @@ class SERSDiscriminatorApp(ctk.CTkFrame):
             self, width=6, corner_radius=0,
             fg_color=("#d4d4d8", "#3f3f46"),
         )
-        self.splitter.grid(row=1, column=1, sticky="ns")
+        self.splitter.grid(row=2, column=1, sticky="ns")
         self.splitter.configure(cursor="sb_h_double_arrow")
         self.splitter.bind("<B1-Motion>", self._on_splitter_drag)
         self.splitter.bind("<Double-Button-1>",
@@ -563,7 +565,7 @@ class SERSDiscriminatorApp(ctk.CTkFrame):
         # --- Content area ---
         self.content = ctk.CTkFrame(self, corner_radius=0,
                                     fg_color=family.PAGE)
-        self.content.grid(row=1, column=2, sticky="nsew")
+        self.content.grid(row=2, column=2, sticky="nsew")
 
         # Panels created on demand
         self.panels: dict[str, ctk.CTkFrame] = {}
@@ -592,6 +594,32 @@ class SERSDiscriminatorApp(ctk.CTkFrame):
         self._set_sidebar_width(new_w)
 
     # ---- Sidebar -----------------------------------------------------
+
+    def _build_view_nav(self):
+        """Top nav pill bar for the four result views (like the UNMIXR nav)."""
+        bar = ctk.CTkFrame(self, height=52, corner_radius=0, fg_color=family.PANEL)
+        bar.grid_propagate(False)
+        ctk.CTkFrame(bar, height=1, fg_color=family.LINE, corner_radius=0).pack(
+            side="bottom", fill="x")
+        row = ctk.CTkFrame(bar, fg_color="transparent")
+        row.pack(side="left", padx=16, pady=9)
+
+        def pill(text, key, col):
+            b = ctk.CTkButton(row, text=text, command=lambda: self.show_panel(key),
+                              font=ctk.CTkFont(size=12, weight="bold"),
+                              height=34, width=128, corner_radius=8,
+                              fg_color=col["fg"], hover_color=col["hover"],
+                              state="disabled")
+            b.pack(side="left", padx=(0, 8))
+            return b
+
+        self.btn_maps = pill("🗺  Maps", "maps", TILE_COLORS["maps"])
+        self.btn_reliability = pill("📈  Reliability", "reliability",
+                                    TILE_COLORS["reliability"])
+        self.btn_validation = pill("🎯  Validation", "validation",
+                                   TILE_COLORS["validation"])
+        self.btn_stats = pill("📋  Stats", "stats", TILE_COLORS["stats"])
+        return bar
 
     def _build_sidebar(self):
         # IMPORTANT: pack the bottom-anchored Appearance row FIRST so the
@@ -774,49 +802,7 @@ class SERSDiscriminatorApp(ctk.CTkFrame):
                      anchor="w", wraplength=300, justify="left"
                      ).pack(fill="x", padx=14, pady=(0, 12))
 
-        # STEP 4 — View (panel switcher)
-        s4 = section_frame(scroll, "STEP 4 — VIEW")
-        s4.pack(fill="x", padx=14, pady=6)
-        self.btn_maps = ctk.CTkButton(
-            s4, text="🗺  Maps",
-            command=lambda: self.show_panel("maps"),
-            font=ctk.CTkFont(size=12, weight="bold"),
-            height=42, corner_radius=10,
-            fg_color=TILE_COLORS["maps"]["fg"],
-            hover_color=TILE_COLORS["maps"]["hover"],
-            state="disabled",
-        )
-        self.btn_maps.pack(fill="x", padx=14, pady=(6, 4))
-        self.btn_reliability = ctk.CTkButton(
-            s4, text="📈  Reliability",
-            command=lambda: self.show_panel("reliability"),
-            font=ctk.CTkFont(size=12, weight="bold"),
-            height=42, corner_radius=10,
-            fg_color=TILE_COLORS["reliability"]["fg"],
-            hover_color=TILE_COLORS["reliability"]["hover"],
-            state="disabled",
-        )
-        self.btn_reliability.pack(fill="x", padx=14, pady=4)
-        self.btn_validation = ctk.CTkButton(
-            s4, text="🎯  Validation",
-            command=lambda: self.show_panel("validation"),
-            font=ctk.CTkFont(size=12, weight="bold"),
-            height=42, corner_radius=10,
-            fg_color=TILE_COLORS["validation"]["fg"],
-            hover_color=TILE_COLORS["validation"]["hover"],
-            state="disabled",
-        )
-        self.btn_validation.pack(fill="x", padx=14, pady=4)
-        self.btn_stats = ctk.CTkButton(
-            s4, text="📋  Stats",
-            command=lambda: self.show_panel("stats"),
-            font=ctk.CTkFont(size=12, weight="bold"),
-            height=42, corner_radius=10,
-            fg_color=TILE_COLORS["stats"]["fg"],
-            hover_color=TILE_COLORS["stats"]["hover"],
-            state="disabled",
-        )
-        self.btn_stats.pack(fill="x", padx=14, pady=(4, 10))
+        # (STEP 4 — result views moved to the top nav pill bar; see _build_view_nav)
 
         # STEP 4b — Per-ref controls (populated after load)
         self.refctrl_frame = section_frame(scroll, "REF COLORS / CHANNELS")
