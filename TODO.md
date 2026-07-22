@@ -21,8 +21,10 @@ Model·Discriminator 둘 다 이제 pest **폴더(다중 맵)** 형식으로 통
 
 ## 4. 자잘한 폴리시
 - [x] 두 도구 appearance 드롭다운 기본 표기 `System` → `Light` 로.
-- [ ] Map tool 사이드바 맨 위 중복 타이틀(“SERS Discriminator”)이 헤더바와 겹침 → 정리.
-- [ ] Mixture tool 사이드바에 남은 옛 타이틀 흔적 확인(상단바 이전 후).
+- [x] Map tool 사이드바 맨 위 중복 타이틀(“SERS Discriminator”) 제거 → 헤더바(“SERS map”)
+  + view-nav 필만 남김. (창 제목/독스트링은 UI가 아니라 유지)
+- [x] Mixture tool 사이드바 옛 타이틀 흔적 확인 — 없음. 헤더바(“Mixture · detect
+  components + ratio”) + 컨트롤바뿐, 정리 불필요.
 
 ## 5. worktree 마무리 (세션 종료 후 수동)
 ```powershell

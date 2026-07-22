@@ -675,22 +675,13 @@ class SERSDiscriminatorApp(ctk.CTkFrame):
         scroll.bind("<Enter>", _enter)
         scroll.bind("<Leave>", _leave)
 
-        # Brand
-        brand = ctk.CTkFrame(scroll, corner_radius=0,
-                             fg_color="transparent")
-        brand.pack(fill="x", padx=18, pady=(16, 6))
-        ctk.CTkLabel(brand, text="SERS Discriminator",
-                     font=ctk.CTkFont(size=20, weight="bold"),
-                     anchor="w").pack(anchor="w")
-        ctk.CTkLabel(brand,
-                     text="Reference-based SERS map classifier",
-                     font=ctk.CTkFont(size=11),
-                     text_color=("#6b7280", "#9ca3af"),
-                     anchor="w").pack(anchor="w")
+        # The app identity lives in the header bar ("SERS map") and the view-nav
+        # pills above; the sidebar starts straight at the workflow steps so there
+        # is no duplicate title stacked under the header.
 
         # STEP 1 — References
         s1 = section_frame(scroll, "STEP 1 — REFERENCES")
-        s1.pack(fill="x", padx=14, pady=(14, 6))
+        s1.pack(fill="x", padx=14, pady=(16, 6))
         self.ref_count_var = tk.StringVar(value="0 references")
         ctk.CTkLabel(s1, textvariable=self.ref_count_var,
                      font=ctk.CTkFont(size=11),
