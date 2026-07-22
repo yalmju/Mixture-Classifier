@@ -899,16 +899,14 @@ class RealDataPage(QWidget):
         self._plot_pca(r); self._plot_pure(r); self._plot_strat(r)
         self._plot_det(r); self._plot_combo(r); self._plot_cal(r)
 
-    # class colours for the 4 reference classes (DQ / THI / TBZ / BLK)
-    C4 = [BLUE, TEAL, CORAL, "#98a1ac"]
-
     def _plot_pca(self, r):
         ax = self.c_pca.new_ax()
         for i, nm in enumerate(r.classes4):
             m = r.pca_lab == i
             if m.any():
                 ax.scatter(r.pca_emb[m, 0], r.pca_emb[m, 1], s=10,
-                           color=self.C4[i], alpha=0.6, edgecolors="none", label=nm)
+                           color=SERIES[i % len(SERIES)], alpha=0.6,
+                           edgecolors="none", label=nm)
         ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
         ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE)
         self.c_pca.fig.tight_layout(); self.c_pca.draw_idle()

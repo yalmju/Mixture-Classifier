@@ -25,6 +25,7 @@ from sklearn.decomposition import PCA
 from sers_mixture import (preprocess, SERSMixtureClassifier, AugmentConfig,
                           multilabel_metrics, names_to_indicator)
 from competitive import fit_B
+from dataset import discover_dataset, ratio_map_path, load_mixtures, is_blank
 
 PEST_DEFAULT = r"S:\Google Drive\내 드라이브\github\Pest_Discriminator"
 COMPS = ["DQ", "THI", "TBZ"]
@@ -58,33 +59,33 @@ def load_map(path):
     return wn, cube, cube.mean(axis=0), np.asarray(coords, float)
 
 
-def _combo(names):
-    order = [c for c in COMPS if c in names]
+def _combo(names, comps):
+    order = [c for c in comps if c in names]
     return "+".join(order) if order else "(none)"
 
 
-def per_pixel_vote(cube, pures, frac_thr=0.15, pix_thr=0.15):
+def per_pixel_vote(cube, pures, comps, frac_thr=0.15, pix_thr=0.15):
     """Detect a component if it is a meaningful fraction in >= pix_thr of pixels.
 
     The mean spectrum buries a minor compound; individual pixels where local
-    coverage favours it still show it. Vote across the 400 pixels."""
+    coverage favours it still show it. Vote across the pixels."""
     Xp = preprocess(cube)
-    votes = np.zeros(len(COMPS))
+    votes = np.zeros(len(comps))
     for yv in Xp:
         B, _ = nnls(pures.T, yv)
         votes += (B / (B.sum() + 1e-12) >= frac_thr)
     return set(np.where(votes / len(Xp) >= pix_thr)[0])
 
 
-def matched_significance(mean, pures, k=9.0):
+def matched_significance(mean, pures, comps, k=9.0):
     """Keep component a if excluding it raises the NNLS residual by > noise (LOD)."""
     y = preprocess(mean[None, :])[0]
     B_full, _ = nnls(pures.T, y)
     resid = y - B_full @ pures
     noise = 1.4826 * np.median(np.abs(resid - np.median(resid))) + 1e-9
     keep = set()
-    for a in range(len(COMPS)):
-        others = [i for i in range(len(COMPS)) if i != a]
+    for a in range(len(comps)):
+        others = [i for i in range(len(comps)) if i != a]
         Bo, _ = nnls(pures[others].T, y)
         r_wo = np.linalg.norm(y - Bo @ pures[others])
         r_full = np.linalg.norm(resid)
@@ -93,11 +94,12 @@ def matched_significance(mean, pures, k=9.0):
     return keep
 
 
-def _score(true_lists, pred_sets):
+def _score(true_lists, pred_sets, comps):
     """(recall, precision, f1, exact_composition) for index-set predictions."""
-    yt = np.array([[1 if COMPS[i] in t else 0 for i in range(3)]
+    n = len(comps)
+    yt = np.array([[1 if comps[i] in t else 0 for i in range(n)]
                    for t in true_lists])
-    yp = np.array([[1 if i in p else 0 for i in range(3)] for p in pred_sets])
+    yp = np.array([[1 if i in p else 0 for i in range(n)] for p in pred_sets])
     m = multilabel_metrics(yt, yp)
     exact = float(np.mean([set(np.where(a)[0]) == b for a, b in zip(yt, pred_sets)]))
     return m["micro_recall"], m["micro_precision"], m["micro_f1"], exact
@@ -129,45 +131,100 @@ class RealResult:
     wn: np.ndarray = None
 
 
-def _ratio_over(present_idx, vec):
-    v = np.array([vec[i] if i in present_idx else 0.0 for i in range(3)])
+def _ratio_over(present_idx, vec, n):
+    v = np.array([vec[i] if i in present_idx else 0.0 for i in range(n)])
     return v / (v.sum() + 1e-12)
 
 
-def compute_real(pest_dir=PEST_DEFAULT):
-    ref_dir = os.path.join(pest_dir, "Reference")
-    ratio_dir = os.path.join(pest_dir, "Ratio")
-    missing = [f for f in REF_FILES.values()
-               if not os.path.exists(os.path.join(ref_dir, f))]
-    if missing:
+def _response_factors(mix_names, B, mixes, comps):
+    """Per-component response factors from equal-ratio (1:1) binary mixtures.
+
+    For a binary mix of components i, j at equal nominal parts,
+    log(B_i / B_j) = logR_i - logR_j. Solve least squares for logR (one component
+    fixed as reference), then normalise by the median — so the result is
+    independent of which component is the reference. Returns all-ones when there
+    is not enough binary evidence (generalises the old 3-pesticide solver)."""
+    n = len(comps)
+    rows, rhs = [], []
+    for k in mix_names:
+        nominal = np.asarray(mixes[k], float)
+        present = [i for i in range(n) if nominal[i] > 0]
+        if len(present) != 2:
+            continue
+        i, j = present
+        if nominal[i] != nominal[j]:
+            continue
+        bi, bj = B[k][i], B[k][j]
+        if bi <= 0 or bj <= 0:
+            continue
+        row = np.zeros(n); row[i] = 1.0; row[j] = -1.0
+        rows.append(row); rhs.append(np.log(bi / bj))
+    if not rows:
+        return np.ones(n)
+    A = np.array(rows)
+    logR, *_ = np.linalg.lstsq(A[:, 1:], np.array(rhs), rcond=None)  # col 0 = ref
+    full = np.zeros(n); full[1:] = logR
+    R = np.exp(full)
+    return R / np.median(R)
+
+
+def _resolve_dataset(pest_dir):
+    """(classes, comps, blanks, path_of, mixes) for the data folder, grouping
+    batches. Backwards-compatible: the pesticide example (DQ/THI/TBZ + blk, no
+    mixtures.csv) yields comps in the canonical COMPS order with the built-in
+    MIXES; any other set uses the discovered classes + a mixtures.csv manifest."""
+    groups = discover_dataset(pest_dir)
+    if len(groups) < 2:
         raise FileNotFoundError(
-            f"reference CSVs not found in {ref_dir}\nmissing: {missing}")
+            f"need >= 2 reference classes in {pest_dir} (or its Reference/)."
+            f"\nfound: {[c for c, _ in groups]}")
+    path_of = {c: [p for _b, p in maps] for c, maps in groups}
+    classes = [c for c, _ in groups]
+    comps_disc = [c for c in classes if not is_blank(c)]
+    blanks = [c for c in classes if is_blank(c)]
+    manifest = load_mixtures(pest_dir, comps_disc)
+    if manifest is None and set(comps_disc) == set(COMPS):
+        comps = list(COMPS)                      # canonical order + built-in mixes
+        mixes = dict(MIXES)
+        classes = comps + blanks
+    else:
+        comps = comps_disc
+        mixes = manifest or {}
+    return classes, comps, blanks, path_of, mixes
 
-    # ---- load references (per-pixel cubes + means + coordinates) ----
+
+def compute_real(pest_dir=PEST_DEFAULT):
+    classes, comps, blanks, path_of, mixes = _resolve_dataset(pest_dir)
+    K = len(classes)
+
+    # ---- load references (per-pixel cubes + coords), merging batch maps ----
     cubes, means, coords, wn = {}, {}, {}, None
-    for lab, fn in REF_FILES.items():
-        wn, cube, mean, coord = load_map(os.path.join(ref_dir, fn))
-        cubes[lab] = cube; means[lab] = mean; coords[lab] = coord
-    pures = preprocess(np.vstack([means["DQ"], means["THI"], means["TBZ"]]))
+    for c in classes:
+        cbs, cds = [], []
+        for p in path_of[c]:
+            wn, cube, _m, coord = load_map(p)
+            cbs.append(cube); cds.append(coord)
+        cube = np.vstack(cbs); coord = np.vstack(cds)
+        cubes[c] = cube; coords[c] = coord; means[c] = cube.mean(axis=0)
+    pures = preprocess(np.vstack([means[c] for c in comps]))
 
-    # ---- (1) single-component 4-class confusion, two splits ----
-    # Random pixel split is LEAKY: only one map per compound, so adjacent pixels
-    # are near-duplicates and a random split lets the model memorise the map.
-    # A spatial block split (train = left of each map, test = right) is the honest
-    # value available from a single map (true generalisation needs replicate maps).
+    # ---- (1) single-component K-class confusion, two splits ----
+    # Random pixel split is LEAKY (adjacent pixels are near-duplicates). A spatial
+    # block split (train = left of each map, test = right) is the honest value.
     def _rf_cm(Xtr, ytr, Xte, yte):
         rf = RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=0)
         rf.fit(Xtr, ytr); yp = rf.predict(Xte)
-        return (confusion_matrix(yte, yp, labels=range(4)),
+        return (confusion_matrix(yte, yp, labels=range(K)),
                 float(accuracy_score(yte, yp)))
 
     Xall, yall = [], []
     Xtr_s, ytr_s, Xte_s, yte_s = [], [], [], []
-    for i, lab in enumerate(CLASSES4):
-        Xp = preprocess(cubes[lab])
+    for i, c in enumerate(classes):
+        Xp = preprocess(cubes[c])
         Xall.append(Xp); yall += [i] * len(Xp)
-        xc = coords[lab][:, 0]; med = np.median(xc)          # split by X median
-        left = xc < med
+        xc = coords[c][:, 0]; left = xc < np.median(xc)      # split by X median
+        if left.all() or (~left).all():
+            left = np.arange(len(Xp)) % 2 == 0
         Xtr_s.append(Xp[left]); ytr_s += [i] * int(left.sum())
         Xte_s.append(Xp[~left]); yte_s += [i] * int((~left).sum())
     Xall = np.vstack(Xall); yall = np.array(yall)
@@ -183,45 +240,50 @@ def compute_real(pest_dir=PEST_DEFAULT):
     rng = np.random.default_rng(0)
     sel = np.concatenate([rng.choice(np.where(y == i)[0],
                           size=min(120, int((y == i).sum())), replace=False)
-                          for i in range(4)])
+                          for i in range(K)])
     pca_emb = PCA(n_components=2, random_state=0).fit_transform(X[sel])
     pca_lab = y[sel]
 
     # ---- (2) mixture detection: three strategies ----
-    clf = SERSMixtureClassifier(COMPS, prob_threshold=0.30, max_components=3,
+    clf = SERSMixtureClassifier(comps, prob_threshold=0.30,
+                                max_components=len(comps),
                                 augment=AugmentConfig(n_per_pure=200))
     clf.fit(pures)
     mix_names, mix_means, mix_cubes, true_lists = [], [], [], []
-    for k, nominal in MIXES.items():
-        p = os.path.join(ratio_dir, k + "_corrected.csv")
-        if not os.path.exists(p):
+    for k, nominal in mixes.items():
+        p = ratio_map_path(pest_dir, k)
+        if p is None:
             continue
         _, cube, mean, _ = load_map(p)
         mix_names.append(k); mix_means.append(mean); mix_cubes.append(cube)
-        true_lists.append([COMPS[i] for i, c in enumerate(nominal) if c > 0])
+        true_lists.append([comps[i] for i, cc in enumerate(nominal) if cc > 0])
+    if not mix_names:
+        raise FileNotFoundError(
+            "no mixture maps found (Ratio/ + mixtures.csv). The Real-data page "
+            "needs mixtures; use the Model page for reference-only datasets.")
     mix_pp = preprocess(np.array(mix_means))
 
     # A) RandomForest on the mean   B) per-pixel NNLS vote   C) matched-filter
-    pred_rf = [set(np.where(names_to_indicator([p], COMPS)[0])[0])
+    pred_rf = [set(np.where(names_to_indicator([p], comps)[0])[0])
                for p in clf.predict(mix_pp)]
-    pred_pp = [per_pixel_vote(c, pures) for c in mix_cubes]
-    pred_mf = [matched_significance(m, pures) for m in mix_means]
+    pred_pp = [per_pixel_vote(c, pures, comps) for c in mix_cubes]
+    pred_mf = [matched_significance(m, pures, comps) for m in mix_means]
     strategies = [
-        ("RandomForest (mean)", *_score(true_lists, pred_rf)),
-        ("per-pixel NNLS vote", *_score(true_lists, pred_pp)),
-        ("matched-filter (mean)", *_score(true_lists, pred_mf)),
+        ("RandomForest (mean)", *_score(true_lists, pred_rf, comps)),
+        ("per-pixel NNLS vote", *_score(true_lists, pred_pp, comps)),
+        ("matched-filter (mean)", *_score(true_lists, pred_mf, comps)),
     ]
 
     # per-pixel voting is the primary (best) detector for the grid + confusion
     pred_sets = pred_pp
-    pred_lists = [[COMPS[i] for i in sorted(s)] for s in pred_sets]
-    yt = names_to_indicator(true_lists, COMPS)
-    yp = names_to_indicator(pred_lists, COMPS)
+    pred_lists = [[comps[i] for i in sorted(s)] for s in pred_sets]
+    yt = names_to_indicator(true_lists, comps)
+    yp = names_to_indicator(pred_lists, comps)
     micro = multilabel_metrics(yt, yp)
 
     # ---- (3) combination confusion (from the per-pixel detector) ----
-    true_lbl = [_combo(t) for t in true_lists]
-    pred_lbl = [_combo(p) for p in pred_lists]
+    true_lbl = [_combo(t, comps) for t in true_lists]
+    pred_lbl = [_combo(p, comps) for p in pred_lists]
     rows = sorted(set(true_lbl), key=lambda s: (s.count("+"), s))
     cols = rows + sorted(set(pred_lbl) - set(rows), key=lambda s: (s.count("+"), s))
     ri = {c: i for i, c in enumerate(rows)}; ci = {c: i for i, c in enumerate(cols)}
@@ -232,31 +294,28 @@ def compute_real(pest_dir=PEST_DEFAULT):
 
     # ---- (4) response-factor calibration ----
     B = {k: fit_B(m, pures)[0] for k, m in zip(mix_names, mix_pp)}
-    A, yv = [], []
-    A.append([1, 0]); yv.append(np.log(B["DQ1TH1"][0] / B["DQ1TH1"][1]))
-    A.append([0, 1]); yv.append(np.log(B["TB1TH1"][2] / B["TB1TH1"][1]))
-    A.append([-1, 1]); yv.append(np.log(B["TBZ1DQ1"][2] / B["TBZ1DQ1"][0]))
-    x, *_ = np.linalg.lstsq(np.array(A, float), np.array(yv, float), rcond=None)
-    R = np.array([np.exp(x[0]), 1.0, np.exp(x[1])]); R = R / np.median(R)
+    R = _response_factors(mix_names, B, mixes, comps)
 
+    n = len(comps)
     calib_rows, er, ec = [], [], []
     for k in mix_names:
-        nominal = np.array(MIXES[k], float)
-        present = [i for i in range(3) if nominal[i] > 0]
-        nom = _ratio_over(present, nominal)
-        raw = _ratio_over(present, B[k])
-        cal = _ratio_over(present, B[k] / R)
+        nominal = np.array(mixes[k], float)
+        present = [i for i in range(n) if nominal[i] > 0]
+        nom = _ratio_over(present, nominal, n)
+        raw = _ratio_over(present, B[k], n)
+        cal = _ratio_over(present, B[k] / R, n)
         calib_rows.append((k, present, nom, raw, cal))
         for i in present:
             er.append(abs(raw[i] - nom[i])); ec.append(abs(cal[i] - nom[i]))
 
     return RealResult(
         cm4=cm4, acc4=acc4, acc4_random=acc4_random,
-        classes4=CLASSES4, comps=COMPS,
+        classes4=classes, comps=comps,
         mix_names=mix_names, yt=yt, yp=yp, micro=micro,
         combo_rows=rows, combo_cols=cols, combo_M=M, combo_exact=exact,
         strategies=strategies, R=R, calib_rows=calib_rows,
-        err_raw=float(np.mean(er)), err_cal=float(np.mean(ec)),
+        err_raw=float(np.mean(er)) if er else 0.0,
+        err_cal=float(np.mean(ec)) if ec else 0.0,
         pca_emb=pca_emb, pca_lab=pca_lab, pure_spectra=pures, wn=wn)
 
 
