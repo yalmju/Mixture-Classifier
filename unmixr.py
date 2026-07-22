@@ -33,7 +33,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtGui import QFont, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QFrame,
     QHBoxLayout, QVBoxLayout, QGridLayout, QStackedWidget, QSpinBox,
@@ -167,6 +167,7 @@ class Canvas(FigureCanvasQTAgg):
 class TrainWorker(QObject):
     done = pyqtSignal(object)
     fail = pyqtSignal(str)
+    progress = pyqtSignal(str)
 
     def __init__(self, params):
         super().__init__()
@@ -174,7 +175,7 @@ class TrainWorker(QObject):
 
     def run(self):
         try:
-            self.done.emit(train_model(**self.params))
+            self.done.emit(train_model(progress=self.progress.emit, **self.params))
         except Exception:
             self.fail.emit(traceback.format_exc())
 
@@ -376,11 +377,17 @@ class ModelPage(QWidget):
         self._worker = TrainWorker(params)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self._progress)
         self._worker.done.connect(self._apply)
         self._worker.fail.connect(self._error)
         self._worker.done.connect(self._thread.quit)
         self._worker.fail.connect(self._thread.quit)
         self._thread.start()
+
+    def _progress(self, msg):
+        # live status so a long run reads as working, not frozen
+        self.btn.setText("Training…  " + msg.split("  ")[0])
+        self.c_curve.placeholder("● " + msg)
 
     def _error(self, tb):
         self.btn.setEnabled(True); self.btn.setText("Train + evaluate")
@@ -1335,8 +1342,14 @@ class MainWindow(QMainWindow):
         # top command bar
         bar = QFrame(); bar.setObjectName("topbar"); bar.setFixedHeight(58)
         bl = QHBoxLayout(bar); bl.setContentsMargins(18, 0, 18, 0); bl.setSpacing(8)
-        logo = QLabel("U"); logo.setObjectName("logo")
+        logo = QLabel()
         logo.setFixedSize(30, 30); logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if os.path.exists(ICON_PATH):                       # use the app icon
+            logo.setPixmap(QPixmap(ICON_PATH).scaled(
+                28, 28, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+        else:                                               # fallback: teal "U" badge
+            logo.setObjectName("logo"); logo.setText("U")
         word = QLabel(APP_NAME); word.setObjectName("wordmark")
         bl.addWidget(logo); bl.addWidget(word); bl.addSpacing(18)
 

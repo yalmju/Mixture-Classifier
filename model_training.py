@@ -77,7 +77,7 @@ def _featurize(cube, baseline=True, deriv=0, norm="l2"):
 
 
 def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
-                split="spatial", seed=0):
+                split="spatial", seed=0, progress=None):
     """Group the reference maps into classes (merging batches of the same
     substance), featurize each map, and split into train/test.
 
@@ -117,6 +117,8 @@ def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
     rng = np.random.default_rng(seed)
     Xtr, ytr, Xte, yte, wn = [], [], [], [], None
     for i, (_cls, maps) in enumerate(groups):
+        if progress:
+            progress(f"loading & preprocessing '{_cls}'  ({i + 1}/{len(groups)})")
         feats = []
         for batch, path in maps:
             wn, X, coord = _feat_map(path)
@@ -144,7 +146,7 @@ def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
 # --------------------------------------------------------------------------
 # backends
 # --------------------------------------------------------------------------
-def _train_rf(Xtr, ytr, Xte, yte, K, n_estimators=300, seed=0):
+def _train_rf(Xtr, ytr, Xte, yte, K, n_estimators=300, seed=0, progress=None):
     """RandomForest on per-pixel spectra; OOB-error learning curve as trees grow."""
     from sklearn.ensemble import RandomForestClassifier
 
@@ -161,6 +163,9 @@ def _train_rf(Xtr, ytr, Xte, yte, K, n_estimators=300, seed=0):
         rf.fit(Xtr, ytr)
         xs.append(n)
         ys.append(1.0 - float(rf.oob_score_))         # OOB error
+        if progress:
+            progress(f"RandomForest — {n}/{n_estimators} trees  "
+                     f"(OOB err {ys[-1]:.3f})")
     yp = rf.predict(Xte)
     cm = confusion_matrix(yte, yp, labels=range(K))
     acc = float(np.mean(yp == yte))
@@ -168,7 +173,7 @@ def _train_rf(Xtr, ytr, Xte, yte, K, n_estimators=300, seed=0):
 
 
 def _train_resnet(Xtr, ytr, Xte, yte, K, epochs=25, batch_size=128, lr=1e-3,
-                  base=16, seed=0):
+                  base=16, seed=0, progress=None):
     """ResNet1D K-class classifier on per-pixel spectra; per-epoch loss curve."""
     import torch
     import torch.nn as nn
@@ -195,6 +200,8 @@ def _train_resnet(Xtr, ytr, Xte, yte, K, epochs=25, batch_size=128, lr=1e-3,
             tot += float(loss.item()) * len(xb)
         xs.append(ep + 1)
         ys.append(tot / len(ds))
+        if progress:
+            progress(f"ResNet1D — epoch {ep + 1}/{epochs}  (loss {ys[-1]:.3f})")
 
     net.eval()
     with torch.no_grad():
@@ -223,7 +230,7 @@ def _model_factory(algo, seed):
     raise ValueError(f"unknown algorithm: {algo}")
 
 
-def _train_generic(make_model, Xtr, ytr, Xte, yte, K, seed=0):
+def _train_generic(make_model, Xtr, ytr, Xte, yte, K, seed=0, progress=None):
     """Any scikit-learn classifier: learning curve = test error vs training-set
     size (train on growing subsets, evaluate on the held-out spatial block),
     final model fit on the full training block for the confusion matrix."""
@@ -233,6 +240,8 @@ def _train_generic(make_model, Xtr, ytr, Xte, yte, K, seed=0):
     for fr in (0.2, 0.4, 0.6, 0.8, 1.0):
         m = max(K * 2, int(len(Xtr) * fr))
         idx = order[:m]
+        if progress:
+            progress(f"fitting on {int(fr * 100)}% of the training set")
         mdl = make_model(); mdl.fit(Xtr[idx], ytr[idx])
         yp = mdl.predict(Xte)
         xs.append(m); ys.append(1.0 - float(np.mean(yp == yte)))
@@ -263,7 +272,7 @@ def _per_class_prf(cm, classes):
 
 def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
                 n_estimators=300, seed=0, baseline=True, trim=None,
-                deriv=0, norm="l2", split="spatial") -> TrainResult:
+                deriv=0, norm="l2", split="spatial", progress=None) -> TrainResult:
     """Discover the reference maps in ``pest_dir`` and train the chosen algorithm.
     ``backend`` is one of rf / resnet / svm / knn / logreg / gbm. Feature options:
     ``baseline`` (ALS on/off), ``deriv`` (0/1/2 Savitzky-Golay), ``norm``
@@ -280,19 +289,23 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
 
     Xtr, ytr, Xte, yte, wn, classes = _load_split(
         pest_dir, baseline=baseline, trim=trim, deriv=deriv, norm=norm,
-        split=split, seed=seed)
+        split=split, seed=seed, progress=progress)
     K = len(classes)
 
     if backend == "resnet":
         cm, acc, cx, cy, ylab, xlab = _train_resnet(
-            Xtr, ytr, Xte, yte, K, epochs=epochs, seed=seed)
+            Xtr, ytr, Xte, yte, K, epochs=epochs, seed=seed, progress=progress)
     elif backend == "rf":
         cm, acc, cx, cy, ylab, xlab = _train_rf(
-            Xtr, ytr, Xte, yte, K, n_estimators=n_estimators, seed=seed)
+            Xtr, ytr, Xte, yte, K, n_estimators=n_estimators, seed=seed,
+            progress=progress)
     else:
         cm, acc, cx, cy, ylab, xlab = _train_generic(
-            _model_factory(backend, seed), Xtr, ytr, Xte, yte, K, seed=seed)
+            _model_factory(backend, seed), Xtr, ytr, Xte, yte, K, seed=seed,
+            progress=progress)
 
+    if progress:
+        progress("finalising — confusion, F1, PCA…")
     per = _per_class_prf(cm, classes)
     macro_f1 = float(np.mean([per[nm][2] for nm in classes]))
 
