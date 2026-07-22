@@ -98,6 +98,14 @@ class ModelPage(QWidget):
                                         ("batch-CV (mean±SD)", "batch-cv")]))
         self.sp_test = self._spin(QSpinBox(), 5, 90, 50, "test %", step=5)
         ctl2.addLayout(self.sp_test)
+        acol = QVBoxLayout(); acol.setSpacing(2)
+        al = QLabel("low-conc robust"); al.setObjectName("field")
+        self.chk_aug = QCheckBox("augment + dilution")
+        self.chk_aug.setToolTip("augment training spectra for low-concentration "
+                                "transfer and include the dataset's calibration.csv "
+                                "dilution series as extra training examples")
+        acol.addWidget(al); acol.addWidget(self.chk_aug)
+        ctl2.addLayout(acol)
         self.prep_lbl = QLabel(""); self.prep_lbl.setObjectName("field")
         ctl2.addSpacing(8); ctl2.addWidget(self.prep_lbl)
         ctl2.addStretch(1)
@@ -284,6 +292,11 @@ class ModelPage(QWidget):
                       deriv=cfg["deriv"], norm=cfg["norm"],
                       split=self.cmb_split.currentData(),
                       test_frac=self.sp_test.itemAt(1).widget().value() / 100.0)
+        if self.chk_aug.isChecked():                       # low-conc robustness
+            params["augment"] = True
+            cal = os.path.join(self.pest_dir, "calibration.csv")
+            if os.path.exists(cal):
+                params["calib_path"] = cal
         self._train_params = dict(params)                 # remember for model export
         self.btn.setEnabled(False); self.btn.setText("Training…")
         self.c_curve.placeholder("Training…")

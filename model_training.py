@@ -29,6 +29,7 @@ from scipy.signal import savgol_filter
 from real_data import load_map, PEST_DEFAULT
 from dataset import discover_dataset, reference_dir, is_blank
 from sers_mixture import als_baseline
+from io_utils import load_calibration_csv
 
 
 @dataclass
@@ -96,8 +97,71 @@ def _feat_map(path, baseline=True, trim=None, deriv=0, norm="l2"):
     return wn, _featurize(cube, baseline=baseline, deriv=deriv, norm=norm), coord
 
 
+def _renorm(X, norm):
+    if norm == "l2":
+        n = np.linalg.norm(X, axis=1, keepdims=True)
+        return X / np.where(n > 0, n, 1.0)
+    if norm == "snv":
+        mu = X.mean(axis=1, keepdims=True); sd = X.std(axis=1, keepdims=True)
+        return (X - mu) / np.where(sd > 0, sd, 1.0)
+    return X
+
+
+def _augment_lowconc(X, y, norm, seed, sigmas=(0.03, 0.06, 0.10)):
+    """Add noisier copies of each training spectrum to mimic the lower SNR of low
+    concentrations. The features are magnitude-normalised (peaks ~0.3–0.7 for L2),
+    so noise on the order of the peak values is what degrades SNR — hence absolute
+    sigmas (scaled by the feature spread for non-L2 norms), not a tiny fraction of
+    the median. Makes the classifier transfer from high-conc references to trace."""
+    rng = np.random.default_rng(seed)
+    base = 1.0 if norm == "l2" else (float(X.std()) or 1.0)
+    Xs, ys = [X], [y]
+    for s in sigmas:
+        Xn = _renorm(X + rng.normal(0.0, s * base, X.shape), norm)
+        Xs.append(Xn); ys.append(y)
+    return np.vstack(Xs), np.concatenate(ys)
+
+
+def _detectable(spec):
+    """True if a spectrum has a peak clearly above its own noise (so sub-LOD
+    dilution spectra, which are indistinguishable from a blank, are not mislabelled
+    as the compound)."""
+    br = np.asarray(spec, float) - als_baseline(np.asarray(spec, float))
+    return br.max() > 5.0 * (np.std(br) + 1e-9)
+
+
+def _calib_train_samples(calib_path, classes, wn, baseline, trim, deriv, norm):
+    """Featurise a dilution-series CSV into extra training samples (one per standard)
+    for the classes that exist in the dataset — real low→high concentration examples
+    so the model sees the full range, not just the near-saturation references. Only
+    spectra with a detectable peak are kept (sub-LOD standards would just teach the
+    model that noise is the compound)."""
+    axis_c, names_c, dils = load_calibration_csv(calib_path)
+    Xc, yc = [], []
+    for name, (Cg, specs) in zip(names_c, dils):
+        if name not in classes:
+            continue
+        ci = classes.index(name)
+        specs = np.asarray(specs, float)
+        if trim is not None:
+            lo, hi = trim; m = (axis_c >= lo) & (axis_c <= hi)
+            if m.sum() >= 10:
+                specs = specs[:, m]
+        if wn is not None and specs.shape[1] != len(wn):
+            continue                                        # axis mismatch → skip safely
+        keep = np.array([_detectable(s) for s in specs])
+        if not keep.any():
+            continue
+        Xf = _featurize(specs[keep], baseline=baseline, deriv=deriv, norm=norm)
+        Xc.append(Xf); yc += [ci] * len(Xf)
+    if not Xc:
+        return None, None
+    return np.vstack(Xc), np.array(yc)
+
+
 def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
-                split="spatial", seed=0, test_frac=0.5, progress=None):
+                split="spatial", seed=0, test_frac=0.5, augment=False,
+                calib_path=None, progress=None):
     """Group the reference maps into classes (merging batches of the same
     substance), featurize each map, and split into train/test.
 
@@ -166,8 +230,20 @@ def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
                 left = _spatial(X, coord)
                 Xtr.append(X[left]); ytr += [i] * int(left.sum())
                 Xte.append(X[~left]); yte += [i] * int((~left).sum())
-    return (np.vstack(Xtr), np.array(ytr),
-            np.vstack(Xte), np.array(yte), wn, classes)
+    Xtr = np.vstack(Xtr); ytr = np.array(ytr)
+    Xte = np.vstack(Xte); yte = np.array(yte)
+
+    if calib_path:                                          # add dilution-series examples
+        if progress:
+            progress("adding dilution-series spectra to training")
+        Xc, yc = _calib_train_samples(calib_path, classes, wn, baseline, trim, deriv, norm)
+        if Xc is not None:
+            Xtr = np.vstack([Xtr, Xc]); ytr = np.concatenate([ytr, yc])
+    if augment:                                             # low-conc noise augmentation
+        if progress:
+            progress("augmenting training set for low-concentration transfer")
+        Xtr, ytr = _augment_lowconc(Xtr, ytr, norm, seed)
+    return Xtr, ytr, Xte, yte, wn, classes
 
 
 # --------------------------------------------------------------------------
@@ -479,7 +555,7 @@ def _per_class_prf(cm, classes):
 def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
                 n_estimators=300, seed=0, baseline=True, trim=None,
                 deriv=0, norm="l2", split="spatial", test_frac=0.5,
-                progress=None) -> TrainResult:
+                augment=False, calib_path=None, progress=None) -> TrainResult:
     """Discover the reference maps in ``pest_dir`` and train the chosen algorithm.
     ``backend`` is one of rf / resnet / svm / knn / logreg / gbm. Feature options:
     ``baseline`` (ALS on/off), ``deriv`` (0/1/2 Savitzky-Golay), ``norm``
@@ -500,7 +576,8 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
 
     Xtr, ytr, Xte, yte, wn, classes = _load_split(
         pest_dir, baseline=baseline, trim=trim, deriv=deriv, norm=norm,
-        split=split, seed=seed, test_frac=test_frac, progress=progress)
+        split=split, seed=seed, test_frac=test_frac, augment=augment,
+        calib_path=calib_path, progress=progress)
     K = len(classes)
 
     if backend == "resnet":
