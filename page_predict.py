@@ -175,8 +175,15 @@ class PredictPage(QWidget):
         if getattr(res, "calibrated", False) and res.conc_avg is not None:
             um = res.conc_avg * 1e6
             cs = "  ·  ".join(f"{nm} {um[j]:.3g} µM" for j, nm in enumerate(res.comps)
-                              if um[j] > 0)
+                              if np.isfinite(um[j]) and um[j] > 0)
             txt += f"<br><b>map-avg quantified:</b> {cs}   (click a pixel for its µM)"
+            if res.calib_r2 is not None:
+                r2s = "  ·  ".join(f"{nm} R²={res.calib_r2[j]:.2f}"
+                                   for j, nm in enumerate(res.comps))
+                tag = ("  ⚠ low-quality calibration — µM approximate"
+                       if float(np.min(res.calib_r2)) < 0.7 else "")
+                txt += (f"<br><span style='color:{MUTE}'>calibration fit: "
+                        f"{r2s}{tag}</span>")
         self.readout.setText(txt)
         self.readout.setTextFormat(Qt.TextFormat.RichText)
 
@@ -240,7 +247,7 @@ class PredictPage(QWidget):
         if getattr(r, "conc", None) is not None:          # absolute concentration
             um = r.conc[i] * 1e6                           # M -> µM
             conc_s = "  ·  ".join(f"{nm} {um[j]:.3g} µM" for j, nm in enumerate(r.comps)
-                                  if um[j] > 0)
+                                  if np.isfinite(um[j]) and um[j] > 0)
             th = float(r.pp_theta[i]) if r.pp_theta is not None else 0.0
             warn = (f"  ⚠ near-saturation (Σθ={th:.2f}) — dilute for reliable µM"
                     if th > 0.85 else "")

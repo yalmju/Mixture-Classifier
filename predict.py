@@ -20,7 +20,7 @@ from scipy.optimize import nnls
 from real_data import load_map, per_pixel_vote
 from dataset import discover_dataset, is_blank
 from sers_mixture import preprocess, als_baseline
-from calibration import calibrate, quantify
+from calibration import calibrate, quantify, _langmuir_B
 from io_utils import load_calibration_csv
 
 
@@ -41,6 +41,7 @@ class PredictResult:
     conc: np.ndarray = None     # (n_pixels, K) per-pixel absolute concentration (M)
     conc_avg: np.ndarray = None  # (K,) map-mean absolute concentration (M)
     pp_theta: np.ndarray = None  # (n_pixels,) total surface coverage Σθ per pixel
+    calib_r2: np.ndarray = None  # (K,) isotherm fit R² per substance (calibration quality)
 
 
 def _baseline_only(spectra, do_baseline=True):
@@ -132,6 +133,13 @@ def predict_sample(data_dir, sample_path, threshold=0.30, baseline=True,
                 f"({aligned[0][1].shape[1]} vs {pures.shape[1]} points) — the "
                 "calibration must be on the same instrument axis.")
         calib = calibrate(aligned, pures, comps)        # unit-norm templates = pures
+        # calibration quality: R² of each substance's Langmuir isotherm fit
+        calib_r2 = np.zeros(len(comps))
+        for k in range(len(comps)):
+            C, B = np.asarray(calib.C_series[k]), np.asarray(calib.B_series[k])
+            pred = _langmuir_B(C, calib.gA[k], calib.K[k])
+            ss_tot = float(np.sum((B - B.mean()) ** 2))
+            calib_r2[k] = 1.0 - float(np.sum((B - pred) ** 2)) / ss_tot if ss_tot > 0 else 0.0
         Xq = _baseline_only(cube_u, baseline)           # absolute-intensity pixels
         qs = [quantify(Xq[i], pures, calib) for i in range(len(Xq))]
         conc = np.array([q["C"] for q in qs])
@@ -146,7 +154,8 @@ def predict_sample(data_dir, sample_path, threshold=0.30, baseline=True,
         ratio_mean={c: float(ratio_mean_v[i]) for i, c in enumerate(comps)},
         detected=detected, wn=wn, mean_spectrum=mean_f, templates=pures,
         coords=coord, pp=pp, pp_dominant=pp_dominant, n_pixels=len(cube_u),
-        calibrated=calibrated, conc=conc, conc_avg=conc_avg, pp_theta=pp_theta)
+        calibrated=calibrated, conc=conc, conc_avg=conc_avg, pp_theta=pp_theta,
+        calib_r2=calib_r2 if calibrated else None)
 
 
 if __name__ == "__main__":
