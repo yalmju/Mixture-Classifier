@@ -12,7 +12,8 @@ from matplotlib.patches import Patch
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QSpinBox, QComboBox, QCheckBox, QFileDialog, QProgressBar,
+    QSpinBox, QComboBox, QCheckBox, QFileDialog, QProgressBar, QScrollArea,
+    QFrame,
 )
 
 from ui_common import *
@@ -145,10 +146,17 @@ class ModelPage(QWidget):
         xcard, xlay = _card("Top bands — intensity by class (box plot: which "
                             "substance is high at each discriminative peak)")
         xlay.addWidget(self.c_box); grid.addWidget(xcard, 3, 0, 1, 2)
-        for rr in (0, 1, 2, 3):
-            grid.setRowStretch(rr, 1)
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
-        root.addLayout(grid, 1)
+        # give each plot a readable minimum height and let the page scroll, so the
+        # panels are never squashed flat when the window is short
+        for cv in (self.c_curve, self.c_cm, self.c_pca, self.c_bar):
+            cv.setMinimumHeight(260)
+        self.c_bands.setMinimumHeight(200); self.c_box.setMinimumHeight(200)
+        gridw = QWidget(); gridw.setLayout(grid)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(gridw)
+        scroll.setStyleSheet("QScrollArea{background:transparent;}")
+        root.addWidget(scroll, 1)
 
         for cv, msg in [(self.c_curve, "Train to watch the learning curve"),
                         (self.c_cm, "Train to compute confusion matrix"),
