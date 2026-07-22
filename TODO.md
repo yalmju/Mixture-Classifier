@@ -1,47 +1,40 @@
 # UNMIXR — TODO (open items)
 
-_남긴 날: 2026-07-22. 다음 세션에서 이어서._
+_업데이트: 2026-07-22. 5-탭 네이티브 앱(`python unmixr.py`) 기준._
 
-## 1. Model 페이지 중복 정리 ★ — [x] 해결 (재설계로)
-결정: (A/B/C) 대신 **Model 페이지를 실데이터 학습 도구로 탈바꿈**. 이제 합성 데모가
-아니라 **실제 pest Reference 맵(DQ/THI/TBZ/BLK)** 을 folder-picker로 로드해
-**단일성분 분류기를 직접 학습**함 → Discriminator(RF, 혼합/전략)와 역할이 갈림.
-- 새 모듈 `model_training.py` (UI 무관, numpy/sklearn; torch는 지연 import).
-- 백엔드 2종 선택: **RandomForest**(OOB 학습곡선) · **ResNet1D**(에폭별 loss 곡선, torch).
-- honest **spatial split**(맵 왼쪽 학습 / 오른쪽 평가) → confusion·per-class P/R/F1·PCA.
-- 두 경로 실데이터 형식 합성맵으로 end-to-end 검증 완료.
+## 현재 상태 (완료된 것)
+5-탭 PyQt 앱으로 정착: **Samples · Model · Predict · Quantify · Real data**.
+플랫 모듈 구조(`unmixr.py` 셸 + `ui_common.py` + `page_*.py` + 도메인 로직 모듈).
+- **Samples** — 파일별 class/batch/role(train·test) 수동 지정, 픽셀 수 표시, `samples.csv` 매니페스트.
+  배치 인식 그룹핑(`THI`, `THI_(2)`, `THI_2` → 한 클래스의 배치들).
+- **Model** — 실데이터 학습 벤치. 알고리즘 6종(RF·ResNet1D·SVM·k-NN·LogReg·GBM),
+  전처리(ALS baseline·미분·L2/SNV/none·trim), 스플릿 5종
+  (spatial·random(leaky)·batch·**batch-CV(mean±SD)**·manual). 학습곡선·혼동행렬·PCA·
+  per-class F1 + **판별 밴드(ANOVA F per wavenumber)**. 진행률 바.
+- **Predict** — 미지 맵 로드 → 픽셀별 NNLS 조성. **RGB 합성맵**(클릭→픽셀 파이차트),
+  희석 CSV 로드 시 **픽셀별 절대농도(µM)** + 포화(Σθ>0.85) 경고 + 검량 R² 품질 표시.
+- **Quantify / Real data** — 경쟁흡착 정량 · 실데이터 파이프라인(도메인 무관, 농약은 한 예시).
+- 도메인 중립화 완료(임의 물질), 아이콘/로고 정리, CTK 중복 도구 삭제·통합.
 
-## 2. Model "Load refs" 형식 버그 — [x] 무의미해짐
-Model이 더 이상 `wavenumber, C1, C2…`(성분=열) CSV를 받지 않음. Map과 동일한
-**폴더 로더**(`Reference/*_corrected.csv`, 파일당 1맵)를 사용 → 형식 불일치 자체가 사라짐.
-torch 미설치 시 ResNet 선택하면 **명확한 에러 메시지**로 안내.
+## 다음 세션 — 실데이터 검증 대기
+사용자가 **3배치 × 400포인트 순물질 세트** 수집 중. 준비되면:
+1. **Samples**에 파일 로드 → 물질별 class, batch 1/2/3 지정.
+2. **Model** split=`batch-CV (mean±SD)` 로 학습 → 배치 간 일반화 정확도(평균±SD) 확인.
+   - random(leaky)은 같은 스팟 재사용이라 과대평가; batch/batch-CV가 정직한 지표.
+   - 클래스마다 배치 수가 동일하고 ≥2여야 batch-CV 동작(아니면 명확한 ValueError).
+3. **판별 밴드(ANOVA F)** 로 물질별 marker 밴드 순위 확인.
+   - 주의(유사반복): 맵 안 픽셀은 독립표본 아님 → F는 **밴드 순위**엔 유효하나
+     p-value는 배치(replicate map)가 적으면 과대. 배치 수가 곧 독립단위.
 
-## 3. 참조 형식 불일치 — [x] 통일됨
-Model·Discriminator 둘 다 이제 pest **폴더(다중 맵)** 형식으로 통일.
+## 열린 개선 항목 (선택)
+- **검량선 품질** — 현재 저품질 검량으로도 프로그램은 완성. 신뢰할 µM엔
+  **넓은 농도 범위 단일성분 희석 시리즈** + **저농도(비포화) 스팟** 데이터 필요.
+- **혼합 검출** — THI 응답계수가 커서(과거 관찰 ~13×) 소수성분이 묻힘 →
+  픽셀투표로 복구 중. 실측 혼합 세트로 재검증 필요.
+- **chemical space(미학습 분자)** — 물질군 확장 시 향후 과제.
 
-## 4. 자잘한 폴리시
-- [x] 두 도구 appearance 드롭다운 기본 표기 `System` → `Light` 로.
-- [x] Map tool 사이드바 맨 위 중복 타이틀(“SERS Discriminator”) 제거 → 헤더바(“SERS map”)
-  + view-nav 필만 남김. (창 제목/독스트링은 UI가 아니라 유지)
-- [x] Mixture tool 사이드바 옛 타이틀 흔적 확인 — 없음. 헤더바(“Mixture · detect
-  components + ratio”) + 컨트롤바뿐, 정리 불필요.
-
-## 5. worktree 마무리 (세션 종료 후 수동)
+## worktree 마무리 (세션 종료 후 수동, 있으면)
 ```powershell
-Remove-Item -Recurse -Force ".claude\worktrees\mixture-pest-modular-gui-3a9dee"
 git worktree prune
-git branch -d claude/mixture-pest-modular-gui-3a9dee   # (선택) 머지된 브랜치 삭제
+git branch -d <머지된 브랜치>   # (선택)
 ```
-- 참고: `.claude/worktrees/code-file-structure-39f50f` 는 이 작업과 무관한 별도 worktree.
-
----
-
-## 참고 — 실데이터 관찰 (이번 세션 결론)
-- **단독 4클래스**: spatial split **100%** (누수 아님 — 견고, 다른 스팟에서도 분리됨).
-- **혼합 검출**: THI 응답계수 **~13×** 로 소수성분(DQ/TBZ) 묻힘 →
-  **픽셀투표**로 F1 **0.73 → 0.92**, 조합정확 20% → 80%.
-- **Quantify(검량)**: 합성 등온선에서 K 정확 복원. **실검량은** 100 µM 넓은 비율/농도
-  + **단일성분 희석 시리즈** 데이터가 생기면 바로 가능.
-- **논문 방향(XAI × 경쟁흡착)**: 응답계수 13× · 경쟁 flip · 조합 confusion의 THI 뭉침 ·
-  픽셀투표 복구 · marker 밴드(THI 1366 등) — 근거 이미 앱에 있음.
-- **chemical space(미학습 분자)** 는 향후(농약 패밀리 확장 시).
