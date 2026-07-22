@@ -19,7 +19,9 @@ from scipy.optimize import nnls
 
 from real_data import load_map, per_pixel_vote
 from dataset import discover_dataset, is_blank
-from sers_mixture import preprocess
+from sers_mixture import preprocess, als_baseline
+from calibration import calibrate, quantify
+from io_utils import load_calibration_csv
 
 
 @dataclass
@@ -35,13 +37,28 @@ class PredictResult:
     pp: np.ndarray              # (n_pixels, K) per-pixel NNLS proportions
     pp_dominant: np.ndarray     # (n_pixels,) dominant component index per pixel
     n_pixels: int
+    calibrated: bool = False    # True if a dilution-series calibration was applied
+    conc: np.ndarray = None     # (n_pixels, K) per-pixel absolute concentration (M)
+    conc_avg: np.ndarray = None  # (K,) map-mean absolute concentration (M)
+    pp_theta: np.ndarray = None  # (n_pixels,) total surface coverage Σθ per pixel
+
+
+def _baseline_only(spectra, do_baseline=True):
+    """ALS baseline removal + clip, but NO L2 normalisation — keeps the absolute
+    intensity that quantification needs (unlike the ratio path, which L2-norms)."""
+    X = np.asarray(spectra, float)
+    if do_baseline:
+        X = np.stack([y - als_baseline(y) for y in X])
+    return np.clip(X, 0.0, None)
 
 
 def predict_sample(data_dir, sample_path, threshold=0.30, baseline=True,
-                   trim=None) -> PredictResult:
+                   trim=None, calib_path=None) -> PredictResult:
     """Load the reference substances from ``data_dir`` (Samples grouping) and the
     unknown map at ``sample_path``, and return the estimated composition — from
-    per-pixel NNLS averaged over the map."""
+    per-pixel NNLS averaged over the map. If ``calib_path`` (a dilution-series
+    CSV) is given, also recover per-pixel ABSOLUTE concentration (M) via Langmuir
+    calibration."""
     groups = discover_dataset(data_dir)
     comps = [c for c, _ in groups if not is_blank(c)]
     if not comps:
@@ -91,12 +108,45 @@ def predict_sample(data_dir, sample_path, threshold=0.30, baseline=True,
     voted = per_pixel_vote(cube_u, pures, comps, pix_thr=threshold if threshold < 0.5 else 0.15)
     detected = sorted({comps[i] for i in voted}) or [comps[int(ratio_pp.argmax())]]
 
+    # ---- optional: per-pixel ABSOLUTE concentration via Langmuir calibration ----
+    calibrated, conc, conc_avg = False, None, None
+    if calib_path:
+        axis_c, names_c, dils = load_calibration_csv(calib_path)
+        cidx = {n: k for k, n in enumerate(names_c)}
+        missing = [c for c in comps if c not in cidx]
+        if missing:
+            raise ValueError(f"calibration is missing substances {missing} "
+                             f"(it has {names_c}); calibrate the same references.")
+        aligned = []                                    # per-comp (C_grid, spectra)
+        for c in comps:
+            Cg, specs = dils[cidx[c]]
+            specs = np.asarray(specs, float)
+            if trim is not None:
+                lo, hi = trim; mc = (axis_c >= lo) & (axis_c <= hi)
+                if mc.sum() >= 10:
+                    specs = specs[:, mc]
+            aligned.append((Cg, _baseline_only(specs, baseline)))
+        if aligned[0][1].shape[1] != pures.shape[1]:
+            raise ValueError(
+                "calibration axis does not match the reference maps "
+                f"({aligned[0][1].shape[1]} vs {pures.shape[1]} points) — the "
+                "calibration must be on the same instrument axis.")
+        calib = calibrate(aligned, pures, comps)        # unit-norm templates = pures
+        Xq = _baseline_only(cube_u, baseline)           # absolute-intensity pixels
+        qs = [quantify(Xq[i], pures, calib) for i in range(len(Xq))]
+        conc = np.array([q["C"] for q in qs])
+        pp_theta = np.array([q["theta_total"] for q in qs])
+        conc_avg = quantify(_baseline_only(mean_u[None, :], baseline)[0],
+                            pures, calib)["C"]
+        calibrated = True
+
     return PredictResult(
         comps=comps,
         ratio={c: float(ratio_pp[i]) for i, c in enumerate(comps)},
         ratio_mean={c: float(ratio_mean_v[i]) for i, c in enumerate(comps)},
         detected=detected, wn=wn, mean_spectrum=mean_f, templates=pures,
-        coords=coord, pp=pp, pp_dominant=pp_dominant, n_pixels=len(cube_u))
+        coords=coord, pp=pp, pp_dominant=pp_dominant, n_pixels=len(cube_u),
+        calibrated=calibrated, conc=conc, conc_avg=conc_avg, pp_theta=pp_theta)
 
 
 if __name__ == "__main__":

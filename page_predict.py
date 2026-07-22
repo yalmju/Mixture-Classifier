@@ -46,14 +46,16 @@ class PredictPage(QWidget):
         self._sel = None           # index of the clicked pixel, if any
         self.data_dir = PEST_DEFAULT
         self.sample = None
+        self.calib_path = None     # optional dilution-series calibration CSV
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Predict — sample composition"); h1.setObjectName("h1")
-        sub = QLabel("Load one unknown map and read the ratio of your reference "
-                     "substances in it (mean-spectrum NNLS unmix + per-pixel vote). "
-                     "Organise the references in Samples first.")
+        sub = QLabel("Load one unknown map and read the per-pixel ratio of your "
+                     "reference substances (RGB composite — click a pixel for its "
+                     "pie). Add a dilution-series calibration to also read absolute "
+                     "concentration (µM) per pixel. Organise references in Samples first.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -65,6 +67,9 @@ class PredictPage(QWidget):
         samp_b = QPushButton("Load sample…"); samp_b.setObjectName("ghost")
         samp_b.clicked.connect(self._browse_sample)
         self.samp_lbl = QLabel("no sample"); self.samp_lbl.setObjectName("field")
+        cal_b = QPushButton("Load calibration…"); cal_b.setObjectName("ghost")
+        cal_b.clicked.connect(self._browse_calib)
+        self.cal_lbl = QLabel("no calib (ratio only)"); self.cal_lbl.setObjectName("field")
         tcol = QVBoxLayout(); tcol.setSpacing(2)
         tl = QLabel("threshold"); tl.setObjectName("field")
         self.thr = QDoubleSpinBox(); self.thr.setDecimals(2); self.thr.setSingleStep(0.05)
@@ -77,7 +82,8 @@ class PredictPage(QWidget):
         self.btn = QPushButton("Predict"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(ref_b); ctl.addWidget(self.ref_lbl)
-        ctl.addWidget(samp_b); ctl.addWidget(self.samp_lbl, 1)
+        ctl.addWidget(samp_b); ctl.addWidget(self.samp_lbl)
+        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl, 1)
         ctl.addLayout(tcol); ctl.addLayout(bcol); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
@@ -122,11 +128,20 @@ class PredictPage(QWidget):
         if p:
             self.sample = p; self.samp_lbl.setText(os.path.basename(p))
 
+    def _browse_calib(self):
+        p, _ = QFileDialog.getOpenFileName(
+            self, "Calibration CSV (compound, concentration_M, wavenumbers…)", "",
+            "CSV (*.csv)")
+        if p:
+            self.calib_path = p
+            self.cal_lbl.setText("calib: " + os.path.basename(p))
+
     def _run(self):
         if not self.sample:
             self.readout.setText("load a sample first"); return
         params = dict(data_dir=self.data_dir, sample_path=self.sample,
-                      threshold=self.thr.value(), baseline=self.chk_base.isChecked())
+                      threshold=self.thr.value(), baseline=self.chk_base.isChecked(),
+                      calib_path=self.calib_path)
         self.btn.setEnabled(False); self.btn.setText("Predicting…")
         self._thread = QThread(); self._worker = PredictWorker(params)
         self._worker.moveToThread(self._thread)
@@ -155,27 +170,40 @@ class PredictPage(QWidget):
         self.k_px.set(f"{res.n_pixels:,}", PURPLE)
         self._plot_ratio(res); self._plot_map(res); self._plot_spec(res)
         parts = "  ·  ".join(f"{nm} {ratio.get(nm, 0):.0%}" for nm in res.detected)
-        self.readout.setText(f"<b>detected:</b> {' + '.join(res.detected)}   "
-                             f"&nbsp;&nbsp; <b>per-pixel ratio:</b> {parts}")
+        txt = (f"<b>detected:</b> {' + '.join(res.detected)}   "
+               f"&nbsp;&nbsp; <b>per-pixel ratio:</b> {parts}")
+        if getattr(res, "calibrated", False) and res.conc_avg is not None:
+            um = res.conc_avg * 1e6
+            cs = "  ·  ".join(f"{nm} {um[j]:.3g} µM" for j, nm in enumerate(res.comps)
+                              if um[j] > 0)
+            txt += f"<br><b>map-avg quantified:</b> {cs}   (click a pixel for its µM)"
+        self.readout.setText(txt)
         self.readout.setTextFormat(Qt.TextFormat.RichText)
 
     def _plot_ratio(self, res, pp_vec=None, title=None):
         ax = self.c_ratio.new_ax()
         names = res.comps
-        vals = list(pp_vec) if pp_vec is not None else [res.ratio.get(n, 0.0) for n in names]
-        x = np.arange(len(names))
-        ax.bar(x, vals, color=[SERIES[i % len(SERIES)] for i in range(len(names))],
-               label="this pixel" if pp_vec is not None else "map average")
-        if pp_vec is None:                                # overlay mean-spec ratio
+        cols = [SERIES[i % len(SERIES)] for i in range(len(names))]
+        if pp_vec is not None:                            # clicked pixel -> pie
+            vals = np.asarray(pp_vec, float)
+            keep = [i for i in range(len(names)) if vals[i] > 0.005]
+            ax.pie([vals[i] for i in keep], labels=[names[i] for i in keep],
+                   colors=[cols[i] for i in keep], autopct="%1.0f%%",
+                   textprops={"fontsize": 8, "color": INK})
+            ax.set_aspect("equal")
+        else:                                             # map average -> bar
+            vals = [res.ratio.get(n, 0.0) for n in names]
             mvals = [res.ratio_mean.get(n, 0.0) for n in names]
+            x = np.arange(len(names))
+            ax.bar(x, vals, color=cols, label="map average")
             ax.scatter(x, mvals, color=INK, s=28, zorder=3, label="mean-spec")
-        for xi, v in zip(x, vals):
-            ax.text(xi, v + 0.02, f"{v:.0%}", ha="center", fontsize=9, color=INK)
-        ax.set_xticks(x); ax.set_xticklabels(names, fontsize=9)
-        ax.set_ylim(0, 1.1); ax.set_ylabel("proportion")
+            for xi, v in zip(x, vals):
+                ax.text(xi, v + 0.02, f"{v:.0%}", ha="center", fontsize=9, color=INK)
+            ax.set_xticks(x); ax.set_xticklabels(names, fontsize=9)
+            ax.set_ylim(0, 1.1); ax.set_ylabel("proportion")
+            ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE)
         if title:
             ax.set_title(title, fontsize=9, color=INK)
-        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE)
         self.c_ratio.fig.tight_layout(); self.c_ratio.draw_idle()
 
     def _plot_map(self, res):
@@ -206,9 +234,18 @@ class PredictPage(QWidget):
         vec = r.pp[i]; xp, yp = r.coords[i]
         self._plot_ratio(r, pp_vec=vec, title=f"pixel @ ({xp:.0f}, {yp:.0f})")
         self._plot_map(r)                                 # redraw with the highlight ring
-        parts = "  ·  ".join(f"{nm} {vec[j]:.0%}" for j, nm in enumerate(r.comps)
-                             if vec[j] > 0.005)
-        self.readout.setText(f"<b>pixel @ ({xp:.0f}, {yp:.0f}):</b>  {parts}")
+        ratio_s = "  ·  ".join(f"{nm} {vec[j]:.0%}" for j, nm in enumerate(r.comps)
+                               if vec[j] > 0.005)
+        txt = f"<b>pixel @ ({xp:.0f}, {yp:.0f})</b> — ratio: {ratio_s}"
+        if getattr(r, "conc", None) is not None:          # absolute concentration
+            um = r.conc[i] * 1e6                           # M -> µM
+            conc_s = "  ·  ".join(f"{nm} {um[j]:.3g} µM" for j, nm in enumerate(r.comps)
+                                  if um[j] > 0)
+            th = float(r.pp_theta[i]) if r.pp_theta is not None else 0.0
+            warn = (f"  ⚠ near-saturation (Σθ={th:.2f}) — dilute for reliable µM"
+                    if th > 0.85 else "")
+            txt += f"<br><b>quantified:</b> {conc_s or '—'}{warn}"
+        self.readout.setText(txt)
         self.readout.setTextFormat(Qt.TextFormat.RichText)
 
     def _plot_spec(self, res):
