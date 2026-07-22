@@ -237,7 +237,7 @@ class ModelPage(QWidget):
             ctl.addLayout(w)
         self.src = QLabel(self._short(self.pest_dir)); self.src.setObjectName("field")
         ctl.addWidget(self.src, 1)
-        browse = QPushButton("Data folder…"); browse.setObjectName("ghost")
+        browse = QPushButton("Training data…"); browse.setObjectName("ghost")
         browse.clicked.connect(self._browse)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
@@ -290,8 +290,9 @@ class ModelPage(QWidget):
         return col
 
     def _browse(self):
-        d = QFileDialog.getExistingDirectory(self, "Pest_Discriminator folder",
-                                             self.pest_dir)
+        d = QFileDialog.getExistingDirectory(
+            self, "Training data — Pest_Discriminator folder (holds Reference/ maps)",
+            self.pest_dir)
         if d:
             self.pest_dir = d; self.src.setText(self._short(d))
 
