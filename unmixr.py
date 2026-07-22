@@ -3,18 +3,23 @@
 A dark, instrument-style desktop app. Not a sidebar dashboard — a top command
 bar with pill navigation over a stacked content area:
 
-    Model         train a single-component classifier on a set of reference SERS
-                  maps (RandomForest or ResNet1D) and read it live: learning curve
-                  · confusion matrix · per-class P/R/F1 · PCA · KPI tiles
-                  (example data shipped: DQ / THI / TBZ / BLK)
+The top bar has two groups. Native pages (switch the view in place):
+
+    Model         train a classifier on a set of reference SERS maps
+                  (RandomForest or ResNet1D): learning curve · confusion · F1 · PCA
     Quantify      ratio → M calibration + Langmuir competition
-    Discriminator the real-data map analysis (single-component / mixture / calib)
+    Real data     map analysis: single-component / mixture / composition / calib
+
+and, after the divider, external tools (each opens in its OWN window):
+
+    Mixture tool  the mixture detector / ratio tool   (customtkinter)
+    Map tool      the per-pixel hyperspectral classifier (customtkinter)
 
     python unmixr.py
 
-The Model page is native PyQt6 with embedded matplotlib. The other two tools are
-still customtkinter apps (from the earlier suite); UNMIXR launches them for now
-and they'll be ported to Qt next. Rename the app by editing APP_NAME below.
+The native pages are PyQt6 with embedded matplotlib. The two tools are still
+customtkinter apps (from the earlier suite); UNMIXR launches them as separate
+processes for now. Rename the app by editing APP_NAME below.
 """
 from __future__ import annotations
 
@@ -98,6 +103,10 @@ QPushButton#nav {{ background: transparent; color: {MUTE}; border: none;
 QPushButton#nav:hover {{ background: {CARD}; color: {INK}; }}
 QPushButton#nav:checked {{ background: {PAGE}; color: {INK}; font-weight: 600;
     border: 1px solid {LINE}; }}
+#navsection {{ color: {FAINT}; font-size: 11px; }}
+QPushButton#navtool {{ background: transparent; color: {TEAL}; border: none;
+    padding: 8px 12px; border-radius: 8px; font-size: 14px; }}
+QPushButton#navtool:hover {{ background: {PAGE}; color: #0c855a; }}
 QFrame#card {{ background: {CARD}; border: 1px solid {LINE}; border-radius: 12px; }}
 QFrame#kpi {{ background: {PANEL}; border: 1px solid {LINE}; border-radius: 10px; }}
 #kpiLabel {{ color: {MUTE}; font-size: 12px; }}
@@ -725,7 +734,7 @@ class RealDataPage(QWidget):
         h1 = QLabel("Real-data analysis"); h1.setObjectName("h1")
         sub = QLabel("Single-component classification, mixture detection (per-pixel), "
                      "composition confusion, and response-factor correction on your "
-                     "loaded maps.  Detailed tools open in their own window.")
+                     "loaded maps.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -735,17 +744,12 @@ class RealDataPage(QWidget):
         browse = QPushButton("Data folder…"); browse.setObjectName("ghost")
         browse.clicked.connect(self._browse)
         self.status = QLabel(""); self.status.setObjectName("sub")
-        mix_btn = QPushButton("Mixture tool"); mix_btn.setObjectName("ghost")
-        mix_btn.clicked.connect(lambda: self._launch("sers_app.py"))
-        disc_btn = QPushButton("Map tool"); disc_btn.setObjectName("ghost")
-        disc_btn.clicked.connect(lambda: self._launch("sers_discriminator_ctk.py"))
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Run analysis"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(browse); ctl.addWidget(self.folder_lbl, 1)
         ctl.addWidget(self.status); ctl.addStretch(1)
-        ctl.addWidget(mix_btn); ctl.addWidget(disc_btn)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
@@ -791,13 +795,6 @@ class RealDataPage(QWidget):
                                              self.pest_dir)
         if d:
             self.pest_dir = d; self.folder_lbl.setText(self._short(d))
-
-    def _launch(self, script):
-        try:
-            subprocess.Popen([sys.executable, os.path.join(BASE_DIR, script)],
-                             cwd=BASE_DIR)
-        except Exception as exc:
-            print("launch failed:", exc, file=sys.stderr)
 
     def _export(self):
         if self._res is None:
@@ -981,42 +978,22 @@ class RealDataPage(QWidget):
 
 
 # --------------------------------------------------------------------------
-# Bridge page — launch a customtkinter tool (transitional)
-# --------------------------------------------------------------------------
-class BridgePage(QWidget):
-    def __init__(self, title, desc, script):
-        super().__init__()
-        self.script = script
-        lay = QVBoxLayout(self); lay.setContentsMargins(24, 18, 24, 20)
-        h1 = QLabel(title); h1.setObjectName("h1")
-        sub = QLabel(desc); sub.setObjectName("sub"); sub.setWordWrap(True)
-        lay.addWidget(h1); lay.addWidget(sub); lay.addSpacing(18)
-
-        card, clay = _card("customtkinter tool  ·  Qt port pending")
-        row = QHBoxLayout()
-        btn = QPushButton(f"Launch {title}"); btn.setObjectName("primary")
-        btn.clicked.connect(self._launch)
-        row.addWidget(btn); row.addStretch(1)
-        clay.addLayout(row)
-        note = QLabel("Opens in its own window (separate process) until it is "
-                      "rebuilt natively in Qt.")
-        note.setObjectName("sub"); note.setWordWrap(True)
-        clay.addWidget(note)
-        lay.addWidget(card); lay.addStretch(1)
-
-    def _launch(self):
-        try:
-            subprocess.Popen([sys.executable, os.path.join(BASE_DIR, self.script)],
-                             cwd=BASE_DIR)
-        except Exception as exc:
-            print("launch failed:", exc, file=sys.stderr)
-
-
-# --------------------------------------------------------------------------
 # Main window
 # --------------------------------------------------------------------------
 class MainWindow(QMainWindow):
-    NAV = [("Model", "model"), ("Quantify", "quant"), ("Discriminator", "real")]
+    # native analysis pages — clicking switches the view in-place
+    PAGES = [
+        ("Model",     "model", "Train a classifier on your reference maps"),
+        ("Quantify",  "quant", "Ratio → concentration + adsorption competition"),
+        ("Real data", "real",  "Analyze real maps: identify · mixtures · calibration"),
+    ]
+    # external tools — each opens in its own window (separate process)
+    TOOLS = [
+        ("Mixture tool", "sers_app.py",
+         "Mixture detector / ratio  —  opens in its own window"),
+        ("Map tool", "sers_discriminator_ctk.py",
+         "Per-pixel hyperspectral map classifier  —  opens in its own window"),
+    ]
 
     def __init__(self):
         super().__init__()
@@ -1028,17 +1005,32 @@ class MainWindow(QMainWindow):
 
         # top command bar
         bar = QFrame(); bar.setObjectName("topbar"); bar.setFixedHeight(58)
-        bl = QHBoxLayout(bar); bl.setContentsMargins(18, 0, 18, 0); bl.setSpacing(10)
+        bl = QHBoxLayout(bar); bl.setContentsMargins(18, 0, 18, 0); bl.setSpacing(8)
         logo = QLabel("U"); logo.setObjectName("logo")
         logo.setFixedSize(30, 30); logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         word = QLabel(APP_NAME); word.setObjectName("wordmark")
         bl.addWidget(logo); bl.addWidget(word); bl.addSpacing(18)
 
+        # group 1 — native pages (view tabs)
         self._nav_btns = {}
-        for label, key in self.NAV:
+        for label, key, desc in self.PAGES:
             b = QPushButton(label); b.setObjectName("nav"); b.setCheckable(True)
+            b.setToolTip(desc)
             b.clicked.connect(lambda _=False, k=key: self.select(k))
             bl.addWidget(b); self._nav_btns[key] = b
+
+        # divider + group 2 — external tools (launch in own window)
+        sep = QFrame(); sep.setFixedWidth(1); sep.setFixedHeight(26)
+        sep.setStyleSheet(f"background:{LINE};")
+        bl.addSpacing(6); bl.addWidget(sep); bl.addSpacing(6)
+        tag = QLabel("tools"); tag.setObjectName("navsection")
+        bl.addWidget(tag)
+        for label, script, desc in self.TOOLS:
+            b = QPushButton(label + "  ↗"); b.setObjectName("navtool")
+            b.setToolTip(desc)
+            b.clicked.connect(lambda _=False, s=script: self._launch(s))
+            bl.addWidget(b)
+
         bl.addStretch(1)
         self.status = QLabel(f"{APP_NAME} v{VERSION}"); self.status.setObjectName("status")
         bl.addWidget(self.status)
@@ -1056,6 +1048,13 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(self.pages[key])
 
         self.select("model")
+
+    def _launch(self, script):
+        try:
+            subprocess.Popen([sys.executable, os.path.join(BASE_DIR, script)],
+                             cwd=BASE_DIR)
+        except Exception as exc:
+            print("launch failed:", exc, file=sys.stderr)
 
     def select(self, key):
         for k, b in self._nav_btns.items():
