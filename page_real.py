@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 
 from ui_common import *
 from unmix import unmix_map
+from classify import classify_map
 from real_data import PEST_DEFAULT
 from dataset import load_preprocess, load_colors, save_colors
 from io_utils import write_csv
@@ -32,19 +33,22 @@ class RealWorker(QObject):
     fail = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, params):
+    def __init__(self, params, use_model=False):
         super().__init__()
         self.params = params
+        self.use_model = use_model
 
     def run(self):
         try:
-            self.done.emit(unmix_map(progress=self.progress.emit, **self.params))
+            fn = classify_map if self.use_model else unmix_map
+            self.done.emit(fn(progress=self.progress.emit, **self.params))
         except Exception:
             self.fail.emit(traceback.format_exc())
 
 
 class RealDataPage(QWidget):
-    METHODS = [("NNLS (fixed refs)", "nnls"), ("MCR-ALS (refine)", "mcr")]
+    METHODS = [("NNLS (fixed refs)", "nnls"), ("MCR-ALS (refine)", "mcr"),
+               ("Trained model", "model")]
 
     def __init__(self):
         super().__init__()
@@ -55,6 +59,7 @@ class RealDataPage(QWidget):
         self._colors = {}           # per-substance colour override {name: '#hex'}
         self.data_dir = PEST_DEFAULT
         self.test = None
+        self.model_path = None      # trained model (unmixr_model.joblib) for classify
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(12)
 
@@ -77,6 +82,11 @@ class RealDataPage(QWidget):
         self.test_x.setFixedWidth(30); self.test_x.setToolTip("clear")
         self.test_x.clicked.connect(self._clear_test); self.test_x.setVisible(False)
         self.cmb_method = self._combo("method", self.METHODS)
+        model_b = QPushButton("Load model…"); model_b.setObjectName("ghost")
+        model_b.setToolTip("a model exported from the Model tab (unmixr_model.joblib); "
+                           "used by the 'Trained model' method")
+        model_b.clicked.connect(self._browse_model)
+        self.model_lbl = QLabel(""); self.model_lbl.setObjectName("field")
         self.sp_lo = QSpinBox(); self.sp_lo.setRange(0, 4000); self.sp_lo.setSingleStep(50)
         self.sp_hi = QSpinBox(); self.sp_hi.setRange(0, 4000); self.sp_hi.setSingleStep(50)
         self.sp_hi.setValue(4000)
@@ -88,6 +98,7 @@ class RealDataPage(QWidget):
         self.btn.clicked.connect(self._run)
         ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x)
         ctl.addLayout(self.cmb_method)
+        ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
         ctl.addLayout(self._spin_col("band lo cm⁻¹", self.sp_lo))
         ctl.addLayout(self._spin_col("band hi cm⁻¹", self.sp_hi))
         ctl.addStretch(1)
@@ -219,18 +230,34 @@ class RealDataPage(QWidget):
     def _clear_test(self):
         self.test = None; self.test_lbl.setText("no test map"); self.test_x.setVisible(False)
 
+    def _browse_model(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Trained model (unmixr_model.joblib)",
+                                           self.data_dir, "model (*.joblib);;all (*)")
+        if p:
+            self.model_path = p; self.model_lbl.setText(os.path.basename(p))
+            self.cmb_method.itemAt(1).widget().setCurrentIndex(2)   # switch to model
+
     # ---- run ----
     def _run(self):
         if not self.test:
             self.status.setText("load a test map first")
             self.status.setStyleSheet(f"color:{RED};"); return
-        cfg = load_preprocess(self.data_dir)
-        params = dict(data_dir=self.data_dir, test_path=self.test,
-                      method=self._method(), baseline=cfg["baseline"],
-                      trim=cfg["trim"], min_frac=self.thr_value())
-        self.btn.setEnabled(False); self.btn.setText("Unmixing…")
+        use_model = self._method() == "model"
+        if use_model:
+            path = self.model_path or os.path.join(self.data_dir, "unmixr_model.joblib")
+            if not os.path.exists(path):
+                self.status.setText("no trained model — train & Export one in Model, "
+                                    "or Load model…")
+                self.status.setStyleSheet(f"color:{RED};"); return
+            params = dict(model_path=path, test_path=self.test, min_conf=0.0)
+        else:
+            cfg = load_preprocess(self.data_dir)
+            params = dict(data_dir=self.data_dir, test_path=self.test,
+                          method=self._method(), baseline=cfg["baseline"],
+                          trim=cfg["trim"], min_frac=self.thr_value())
+        self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
-        self._thread = QThread(); self._worker = RealWorker(params)
+        self._thread = QThread(); self._worker = RealWorker(params, use_model=use_model)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._progress)
@@ -352,10 +379,12 @@ class RealDataPage(QWidget):
         ax = self.c_spec.new_ax()
         axis = r.wn if r.wn is not None else np.arange(r.spectra.shape[1])
         meas = np.asarray(r.spectra[i], float)
-        recon = r.A[i] @ r.templates
-        mm = meas.max() or 1.0; rm = recon.max() or 1.0
+        mm = meas.max() or 1.0
         ax.plot(axis, meas / mm, lw=1.3, color=INK, label="measured")
-        ax.plot(axis, recon / rm, lw=1.1, color=TEAL, ls="--", label="reconstructed")
+        if r.templates is not None:                       # NNLS/MCR: overlay the fit
+            recon = r.A[i] @ r.templates
+            ax.plot(axis, recon / (recon.max() or 1.0), lw=1.1, color=TEAL,
+                    ls="--", label="reconstructed")
         # shade the intensity band that the map integrates
         ax.axvspan(self.sp_lo.value(), self.sp_hi.value(), color=AMBER, alpha=0.10)
         xp, yp = r.coords[i]
