@@ -80,10 +80,26 @@ def discover_references(data_dir):
     return non_blank + blank
 
 
+def map_pixel_count(path):
+    """Number of pixels (data rows) in a map CSV — cheap line count, no parsing.
+    The format is 2 header rows (X num / Y num) + 1 axis row, then one row/pixel."""
+    try:
+        with open(path, "rb") as f:
+            n = sum(1 for _ in f)
+        return max(0, n - 3)
+    except Exception:
+        return 0
+
+
+def _role(v):
+    v = (v or "").strip().lower()
+    return "test" if v.startswith("te") else "train"
+
+
 def load_manifest(data_dir):
-    """Read samples.csv (columns: file, class[, batch]) -> {abs_path: (class,
-    batch)}, or None if absent. Lets the Sampling tab pin how files map to
-    classes/batches, overriding the filename heuristic."""
+    """Read samples.csv (columns: file, class[, batch[, role]]) -> {abs_path:
+    (class, batch, role)}, or None if absent. Lets the Samples tab pin how files
+    map to classes / batches / train-test role, overriding the heuristic."""
     p = os.path.join(data_dir, "samples.csv")
     if not os.path.exists(p):
         return None
@@ -95,43 +111,46 @@ def load_manifest(data_dir):
         fn = r[0].strip()
         cls = r[1].strip() if len(r) > 1 else ""
         batch = int(r[2]) if len(r) > 2 and r[2].strip().isdigit() else 1
+        role = _role(r[3]) if len(r) > 3 else "train"
         cand = fn if os.path.isabs(fn) else os.path.join(rd, fn)
         if not os.path.exists(cand):
             cand = os.path.join(data_dir, fn)
-        out[os.path.abspath(cand)] = (cls, batch)
+        out[os.path.abspath(cand)] = (cls, batch, role)
     return out
 
 
 def save_manifest(data_dir, rows):
-    """Write <data_dir>/samples.csv from rows of (filename, class, batch)."""
+    """Write <data_dir>/samples.csv from rows of (filename, class, batch, role)."""
     p = os.path.join(data_dir, "samples.csv")
     with open(p, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["file", "class", "batch"])
-        for fn, cls, batch in rows:
-            w.writerow([fn, cls, batch])
+        w.writerow(["file", "class", "batch", "role"])
+        for fn, cls, batch, role in rows:
+            w.writerow([fn, cls, batch, _role(role)])
     return p
 
 
 def discover_dataset(data_dir):
     """Group reference maps into classes, merging batches of the same substance.
 
-    Returns an ordered list ``[(class_name, [(batch, path), …]), …]`` — non-blank
-    classes alphabetical, blank class(es) last, batches sorted. Uses samples.csv
-    when present (Sampling tab), otherwise auto-groups by base name so 'THI' and
-    'THI_2' land in one 'THI' class rather than two."""
+    Returns an ordered list ``[(class_name, [(batch, path, role), …]), …]`` —
+    non-blank classes alphabetical, blank class(es) last, batches sorted. ``role``
+    is "train"/"test" (default "train"). Uses samples.csv when present (Samples
+    tab), otherwise auto-groups by base name so 'THI' and 'THI_2' land in one
+    'THI' class rather than two."""
     refs = discover_references(data_dir)
     manifest = load_manifest(data_dir)
     groups = {}
     for name, path in refs:
         cls = batch = None
+        role = "train"
         if manifest is not None:
             hit = manifest.get(os.path.abspath(path))
             if hit and hit[0]:
-                cls, batch = hit
+                cls, batch, role = hit
         if cls is None:
             cls, batch = base_and_batch(name)
-        groups.setdefault(cls, []).append((batch, path))
+        groups.setdefault(cls, []).append((batch, path, role))
     non_blank = sorted((c for c in groups if not is_blank(c)), key=str.lower)
     blank = [c for c in groups if is_blank(c)]
     return [(c, sorted(groups[c])) for c in (non_blank + blank)]

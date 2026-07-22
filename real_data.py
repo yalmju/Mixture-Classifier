@@ -178,7 +178,7 @@ def _resolve_dataset(pest_dir):
         raise FileNotFoundError(
             f"need >= 2 reference classes in {pest_dir} (or its Reference/)."
             f"\nfound: {[c for c, _ in groups]}")
-    path_of = {c: [p for _b, p in maps] for c, maps in groups}
+    path_of = {c: [p for _b, p, _r in maps] for c, maps in groups}
     classes = [c for c, _ in groups]
     comps_disc = [c for c in classes if not is_blank(c)]
     blanks = [c for c in classes if is_blank(c)]

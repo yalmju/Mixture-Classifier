@@ -47,7 +47,7 @@ def predict_sample(data_dir, sample_path, threshold=0.30, baseline=True,
         raise FileNotFoundError(
             f"no substance references found in {data_dir} (need at least one "
             "non-blank class).")
-    path_of = {c: [p for _b, p in maps] for c, maps in groups}
+    path_of = {c: [p for _b, p, _r in maps] for c, maps in groups}
 
     # reference templates: mean spectrum per substance (across its batch maps)
     means, wn = [], None

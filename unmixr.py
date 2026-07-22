@@ -48,7 +48,7 @@ from predict import predict_sample
 from calibration import build_synthetic_lab, calibrate, quantify
 from real_data import compute_real, PEST_DEFAULT
 from dataset import (discover_references, base_and_batch, load_manifest,
-                     save_manifest)
+                     save_manifest, map_pixel_count)
 from io_utils import load_calibration_csv, write_csv
 
 
@@ -271,7 +271,9 @@ class ModelPage(QWidget):
             ctl2.addLayout(w)
         ctl2.addLayout(self._combo_col("split", "cmb_split",
                                        [("spatial (honest)", "spatial"),
-                                        ("random (leaky)", "random")]))
+                                        ("random (leaky)", "random"),
+                                        ("batch (leave-1-out)", "batch"),
+                                        ("manual (Samples)", "manual")]))
         ctl2.addStretch(1)
         root.addLayout(ctl2)
 
@@ -1223,9 +1225,10 @@ class SamplingPage(QWidget):
         h1 = QLabel("Samples"); h1.setObjectName("h1")
         sub = QLabel("Group your reference maps into substance classes. Repeat "
                      "measurements of the same substance are BATCHES of one class — "
-                     "not separate classes (so THI and THI_2 are one 'THI'). Edit "
-                     "Class / Batch, then Save — Model and Real data read this "
-                     "grouping from samples.csv.")
+                     "not separate classes (THI, THI_2 → one 'THI'). Edit Class / "
+                     "Batch / Role (train or test) per map, then Save. Model, "
+                     "Predict and Real data read this from samples.csv; the Model "
+                     "'manual' split trains on train-role maps and tests on test.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -1244,12 +1247,13 @@ class SamplingPage(QWidget):
         ctl.addWidget(rescan); ctl.addWidget(save)
         root.addLayout(ctl)
 
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["File", "Class (substance)", "Batch"])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(
+            ["File", "# px", "Class (substance)", "Batch", "Role (train/test)"])
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        for c in (1, 2, 3, 4):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._on_edit)
         root.addWidget(self.table, 1)
@@ -1280,19 +1284,24 @@ class SamplingPage(QWidget):
             self.status.setText("scan failed"); self.status.setStyleSheet(f"color:{RED};")
             print("sampling scan:", exc, file=sys.stderr)
         for name, path in refs:
-            cls, batch = None, None
+            cls, batch, role = None, None, "train"
             if manifest is not None:
                 hit = manifest.get(os.path.abspath(path))
                 if hit and hit[0]:
-                    cls, batch = hit
+                    cls, batch, role = hit
             if cls is None:
                 cls, batch = base_and_batch(name)
             r = self.table.rowCount(); self.table.insertRow(r)
             fitem = QTableWidgetItem(os.path.basename(path))
             fitem.setFlags(fitem.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(r, 0, fitem)
-            self.table.setItem(r, 1, QTableWidgetItem(str(cls)))
-            self.table.setItem(r, 2, QTableWidgetItem(str(batch)))
+            px = QTableWidgetItem(f"{map_pixel_count(path):,}")
+            px.setFlags(px.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            px.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.table.setItem(r, 1, px)
+            self.table.setItem(r, 2, QTableWidgetItem(str(cls)))
+            self.table.setItem(r, 3, QTableWidgetItem(str(batch)))
+            self.table.setItem(r, 4, QTableWidgetItem(role))
         self._loading = False
         if refs:
             self.status.setText(f"{len(refs)} maps"); self.status.setStyleSheet(f"color:{MUTE};")
@@ -1302,9 +1311,10 @@ class SamplingPage(QWidget):
         out = []
         for r in range(self.table.rowCount()):
             fn = self.table.item(r, 0).text()
-            cls = (self.table.item(r, 1).text() or "").strip()
-            bt = (self.table.item(r, 2).text() or "").strip()
-            out.append((fn, cls, int(bt) if bt.isdigit() else 1))
+            cls = (self.table.item(r, 2).text() or "").strip()
+            bt = (self.table.item(r, 3).text() or "").strip()
+            role = (self.table.item(r, 4).text() or "").strip()
+            out.append((fn, cls, int(bt) if bt.isdigit() else 1, role))
         return out
 
     def _on_edit(self, _item):
@@ -1312,14 +1322,20 @@ class SamplingPage(QWidget):
             self._update_summary()
 
     def _update_summary(self):
-        groups = {}
-        for _fn, cls, _b in self._rows():
-            groups.setdefault(cls, 0)
-            groups[cls] += 1
+        groups = {}; n_train = n_test = 0
+        for _fn, cls, _b, role in self._rows():
+            groups[cls] = groups.get(cls, 0) + 1
+            if role.strip().lower().startswith("te"):
+                n_test += 1
+            else:
+                n_train += 1
         if not groups:
             self.summary.setText("no maps found in this folder"); return
         parts = [f"{c} ×{n}" if n > 1 else c for c, n in sorted(groups.items())]
-        self.summary.setText(f"{len(groups)} classes:   " + "   ·   ".join(parts))
+        self.summary.setText(
+            f"{len(groups)} classes:   " + "   ·   ".join(parts)
+            + f"      |      maps: {n_train} train / {n_test} test  "
+            "(set Role = test to hold maps out; Model → split = manual)")
 
     def _save(self):
         rows = self._rows()

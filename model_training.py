@@ -120,22 +120,26 @@ def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
         if progress:
             progress(f"loading & preprocessing '{_cls}'  ({i + 1}/{len(groups)})")
         feats = []
-        for batch, path in maps:
+        for batch, path, role in maps:
             wn, X, coord = _feat_map(path)
-            feats.append((batch, X, coord))
+            feats.append((batch, X, coord, role))
 
         if split == "random":                          # pool all pixels, shuffle
-            allX = np.vstack([X for _b, X, _c in feats])
+            allX = np.vstack([X for _b, X, _c, _r in feats])
             idx = rng.permutation(len(allX)); cut = len(allX) // 2
             Xtr.append(allX[idx[:cut]]); ytr += [i] * cut
             Xte.append(allX[idx[cut:]]); yte += [i] * (len(allX) - cut)
+        elif split == "manual" and any(r == "test" for _b, _X, _c, r in feats):
+            for _batch, X, _c, role in feats:          # honour the Samples roles
+                (Xte if role == "test" else Xtr).append(X)
+                (yte if role == "test" else ytr).extend([i] * len(X))
         elif split == "batch" and len(feats) >= 2:     # leave the last batch out
-            held = max(b for b, _X, _c in feats)
-            for batch, X, _c in feats:
+            held = max(b for b, _X, _c, _r in feats)
+            for batch, X, _c, _r in feats:
                 (Xte if batch == held else Xtr).append(X)
                 (yte if batch == held else ytr).extend([i] * len(X))
         else:                                          # spatial (also 1-map fallback)
-            for _b, X, coord in feats:
+            for _b, X, coord, _r in feats:
                 left = _spatial(X, coord)
                 Xtr.append(X[left]); ytr += [i] * int(left.sum())
                 Xte.append(X[~left]); yte += [i] * int((~left).sum())
