@@ -1086,15 +1086,18 @@ class PredictPage(QWidget):
         root.addLayout(kpis)
 
         grid = QGridLayout(); grid.setSpacing(12)
-        self.c_ratio = Canvas(); self.c_spec = Canvas()
-        for cv, title, c in [(self.c_ratio, "Composition ratio", 0),
-                             (self.c_spec, "Sample vs reference templates", 1)]:
+        self.c_ratio = Canvas(); self.c_map = Canvas(); self.c_spec = Canvas()
+        for cv, title, c in [(self.c_ratio, "Composition ratio (per-pixel NNLS)", 0),
+                             (self.c_map, "Per-pixel dominant component", 1)]:
             card, lay = _card(title); lay.addWidget(cv)
             grid.addWidget(card, 0, c)
+        card, lay = _card("Sample vs reference templates")
+        lay.addWidget(self.c_spec); grid.addWidget(card, 1, 0, 1, 2)
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
+        grid.setRowStretch(0, 1); grid.setRowStretch(1, 1)
         root.addLayout(grid, 1)
-        self.c_ratio.placeholder("Load a sample, then Predict")
-        self.c_spec.placeholder("Load a sample, then Predict")
+        for cv in (self.c_ratio, self.c_map, self.c_spec):
+            cv.placeholder("Load a sample, then Predict")
 
         self.readout = QLabel(""); self.readout.setObjectName("sub")
         self.readout.setWordWrap(True)
@@ -1146,24 +1149,39 @@ class PredictPage(QWidget):
             self.k_dom.set("—"); self.k_domp.set("—")
         self.k_n.set(str(len(res.detected)), AMBER)
         self.k_px.set(f"{res.n_pixels:,}", PURPLE)
-        self._plot_ratio(res); self._plot_spec(res)
+        self._plot_ratio(res); self._plot_map(res); self._plot_spec(res)
         parts = "  ·  ".join(f"{nm} {ratio.get(nm, 0):.0%}" for nm in res.detected)
         self.readout.setText(f"<b>detected:</b> {' + '.join(res.detected)}   "
-                             f"&nbsp;&nbsp; <b>ratio:</b> {parts}")
+                             f"&nbsp;&nbsp; <b>per-pixel ratio:</b> {parts}")
         self.readout.setTextFormat(Qt.TextFormat.RichText)
 
     def _plot_ratio(self, res):
         ax = self.c_ratio.new_ax()
-        names = res.detected or res.comps
+        names = res.comps
         vals = [res.ratio.get(n, 0.0) for n in names]
+        mvals = [res.ratio_mean.get(n, 0.0) for n in names]
         x = np.arange(len(names))
-        ax.bar(x, vals, color=[SERIES[res.comps.index(n) % len(SERIES)]
-                               if n in res.comps else FAINT for n in names])
+        ax.bar(x, vals, color=[SERIES[i % len(SERIES)] for i in range(len(names))],
+               label="per-pixel")
+        ax.scatter(x, mvals, color=INK, s=28, zorder=3, label="mean-spec")
         for xi, v in zip(x, vals):
             ax.text(xi, v + 0.02, f"{v:.0%}", ha="center", fontsize=9, color=INK)
         ax.set_xticks(x); ax.set_xticklabels(names, fontsize=9)
         ax.set_ylim(0, 1.1); ax.set_ylabel("proportion")
+        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE)
         self.c_ratio.fig.tight_layout(); self.c_ratio.draw_idle()
+
+    def _plot_map(self, res):
+        ax = self.c_map.new_ax()
+        x, y = res.coords[:, 0], res.coords[:, 1]
+        for i, nm in enumerate(res.comps):
+            m = res.pp_dominant == i
+            if m.any():
+                ax.scatter(x[m], y[m], s=16, color=SERIES[i % len(SERIES)],
+                           edgecolors="none", label=nm)
+        ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
+        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=2)
+        self.c_map.fig.tight_layout(); self.c_map.draw_idle()
 
     def _plot_spec(self, res):
         ax = self.c_spec.new_ax()

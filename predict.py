@@ -2,39 +2,45 @@
 component ratio.
 
 The simplified "Map tool": you already organised references (Samples) and can
-train on them (Model); here you just load ONE unknown sample map and get the
-composition ratio of the known substances in it — mean-spectrum NNLS unmixing for
-the ratio, plus a per-pixel vote for robust presence detection.
+train on them (Model); here you load ONE unknown sample map and get the
+composition of the known substances in it. The ratio is the PER-PIXEL NNLS
+composition averaged over the map — this recovers minor components that a single
+mean spectrum buries — with a per-pixel dominant-component map and a per-pixel
+vote for robust presence detection.
 
-UI-agnostic (numpy / scikit-learn), so the Qt tab just draws the numbers.
+UI-agnostic (numpy / scipy), so the Qt tab just draws the numbers.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.optimize import nnls
 
 from real_data import load_map, per_pixel_vote
 from dataset import discover_dataset, is_blank
-from sers_mixture import preprocess, SERSMixtureClassifier, AugmentConfig
+from sers_mixture import preprocess
 
 
 @dataclass
 class PredictResult:
     comps: list                 # reference substances (non-blank)
-    ratio: dict                 # name -> proportion (detected components, ~sums to 1)
-    detected: list              # component names present (classifier + per-pixel vote)
-    proba: dict                 # name -> stage-1 evidence probability
+    ratio: dict                 # name -> proportion, PER-PIXEL NNLS averaged
+    ratio_mean: dict            # name -> proportion from the mean spectrum (compare)
+    detected: list              # component names present (per-pixel vote)
     wn: np.ndarray              # wavenumber axis
     mean_spectrum: np.ndarray   # preprocessed unknown mean spectrum
     templates: np.ndarray       # (K, n_feat) preprocessed reference templates
+    coords: np.ndarray          # (n_pixels, 2) pixel X/Y
+    pp_dominant: np.ndarray     # (n_pixels,) dominant component index per pixel
     n_pixels: int
 
 
 def predict_sample(data_dir, sample_path, threshold=0.30, baseline=True,
                    trim=None) -> PredictResult:
     """Load the reference substances from ``data_dir`` (Samples grouping) and the
-    unknown map at ``sample_path``, and return the estimated component ratio."""
+    unknown map at ``sample_path``, and return the estimated composition — from
+    per-pixel NNLS averaged over the map."""
     groups = discover_dataset(data_dir)
     comps = [c for c, _ in groups if not is_blank(c)]
     if not comps:
@@ -54,7 +60,7 @@ def predict_sample(data_dir, sample_path, threshold=0.30, baseline=True,
     means = np.array(means)
 
     # unknown sample
-    wn_u, cube_u, mean_u, _coord = load_map(sample_path)
+    wn_u, cube_u, mean_u, coord = load_map(sample_path)
 
     if trim is not None:
         lo, hi = trim
@@ -62,26 +68,39 @@ def predict_sample(data_dir, sample_path, threshold=0.30, baseline=True,
         if m.sum() >= 10:
             means = means[:, m]; mean_u = mean_u[m]; cube_u = cube_u[:, m]; wn = wn[m]
 
-    pures = preprocess(means, do_baseline=baseline)
+    pures = preprocess(means, do_baseline=baseline)              # (K, n_feat)
+    Xp = preprocess(cube_u, do_baseline=baseline)               # (n_pix, n_feat)
     mean_f = preprocess(mean_u[None, :], do_baseline=baseline)[0]
 
-    clf = SERSMixtureClassifier(comps, prob_threshold=threshold,
-                                max_components=len(comps),
-                                augment=AugmentConfig(n_per_pure=200))
-    clf.fit(pures)
-    detail = clf.predict(mean_f[None, :], return_details=True)[0]
+    # ---- per-pixel NNLS composition (the robust ratio) ----
+    K = len(comps)
+    pp = np.zeros((len(Xp), K))
+    for i, yv in enumerate(Xp):
+        B, _ = nnls(pures.T, yv)
+        s = B.sum()
+        pp[i] = B / s if s > 0 else 0.0
+    ratio_pp = pp.mean(axis=0)
+    pp_dominant = pp.argmax(axis=1)
 
-    voted = per_pixel_vote(cube_u, pures, comps)          # robust presence
-    detected = sorted(set(detail["components"]) | {comps[i] for i in voted})
+    # mean-spectrum NNLS (for comparison — buries minor components)
+    Bm, _ = nnls(pures.T, mean_f); sm = Bm.sum()
+    ratio_mean_v = Bm / sm if sm > 0 else Bm
+
+    # presence detection: per-pixel vote (falls back to the strongest)
+    voted = per_pixel_vote(cube_u, pures, comps, pix_thr=threshold if threshold < 0.5 else 0.15)
+    detected = sorted({comps[i] for i in voted}) or [comps[int(ratio_pp.argmax())]]
 
     return PredictResult(
-        comps=comps, ratio=detail["proportions"], detected=detected,
-        proba=detail["proba"], wn=wn, mean_spectrum=mean_f, templates=pures,
-        n_pixels=len(cube_u))
+        comps=comps,
+        ratio={c: float(ratio_pp[i]) for i, c in enumerate(comps)},
+        ratio_mean={c: float(ratio_mean_v[i]) for i, c in enumerate(comps)},
+        detected=detected, wn=wn, mean_spectrum=mean_f, templates=pures,
+        coords=coord, pp_dominant=pp_dominant, n_pixels=len(cube_u))
 
 
 if __name__ == "__main__":
     import sys
     r = predict_sample(sys.argv[1], sys.argv[2])
     print("detected:", r.detected)
-    print("ratio:", {k: round(v, 3) for k, v in r.ratio.items()})
+    print("per-pixel ratio:", {k: round(v, 3) for k, v in r.ratio.items()})
+    print("mean-spec ratio:", {k: round(v, 3) for k, v in r.ratio_mean.items()})
