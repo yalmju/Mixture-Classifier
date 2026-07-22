@@ -12,7 +12,7 @@ from matplotlib.patches import Patch
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QDoubleSpinBox, QCheckBox, QFileDialog,
+    QDoubleSpinBox, QCheckBox, QFileDialog, QScrollArea, QFrame,
 )
 
 from ui_common import *
@@ -103,8 +103,14 @@ class PredictPage(QWidget):
         card, lay = _card("Sample vs reference templates")
         lay.addWidget(self.c_spec); grid.addWidget(card, 1, 0, 1, 2)
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
-        grid.setRowStretch(0, 1); grid.setRowStretch(1, 1)
-        root.addLayout(grid, 1)
+        for cv in (self.c_ratio, self.c_map):
+            cv.setMinimumHeight(300)
+        self.c_spec.setMinimumHeight(260)
+        gridw = QWidget(); gridw.setLayout(grid)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(gridw)
+        scroll.setStyleSheet("QScrollArea{background:transparent;}")
+        root.addWidget(scroll, 1)
         for cv in (self.c_ratio, self.c_map, self.c_spec):
             cv.placeholder("Load a sample, then Predict")
         self.c_map.mpl_connect("button_press_event", self._on_click)

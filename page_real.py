@@ -16,7 +16,8 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QColorDialog,
+    QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QColorDialog, QScrollArea,
+    QFrame,
 )
 
 from ui_common import *
@@ -136,9 +137,16 @@ class RealDataPage(QWidget):
         ]:
             card, lay = _card(title); lay.addWidget(cv)
             grid.addWidget(card, r, c)
-        grid.setRowStretch(0, 3); grid.setRowStretch(1, 2)   # maps get more room than pies
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
-        root.addLayout(grid, 1)
+        for cv in (self.c_int, self.c_pie):
+            cv.setMinimumHeight(300)
+        for cv in (self.c_spec, self.c_comp):
+            cv.setMinimumHeight(260)
+        gridw = QWidget(); gridw.setLayout(grid)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(gridw)
+        scroll.setStyleSheet("QScrollArea{background:transparent;}")
+        root.addWidget(scroll, 1)
         for cv, m in [(self.c_int, "Load a test map, then Unmix"),
                       (self.c_pie, "Composition appears here"),
                       (self.c_spec, "Click a pixel in a map to see its spectrum"),
