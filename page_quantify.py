@@ -260,6 +260,17 @@ class QuantifyPage(QWidget):
                 crows.append([nm, f"{c:.4e}", f"{b:.6f}"])
         write_csv(os.path.join(d, "calibration_curve.csv"),
                   ["compound", "concentration_M", "B"], crows)
+        # per-concentration replicate statistics (mean ± SD, CV%)
+        srows = []
+        for i, nm in enumerate(r["names"]):
+            C, B, _dc, _db = r["iso"][i]
+            C = np.asarray(C, float); B = np.asarray(B, float)
+            for c in np.unique(C):
+                b = B[C == c]; mu = b.mean(); sd = b.std()
+                srows.append([nm, f"{c:.4e}", len(b), f"{mu:.6f}", f"{sd:.6f}",
+                              f"{100 * sd / mu:.1f}" if mu else ""])
+        write_csv(os.path.join(d, "calibration_stats.csv"),
+                  ["compound", "concentration_M", "n", "B_mean", "B_std", "CV_%"], srows)
         # fitted isotherm parameters (Langmuir K and gA) per compound
         gA = r.get("gA_fit")
         write_csv(os.path.join(d, "calibration_fit.csv"),
@@ -315,11 +326,22 @@ class QuantifyPage(QWidget):
         for i, nm in enumerate(res["names"]):
             C, B, dc, db = res["iso"][i]
             col = SERIES[i % len(SERIES)]
-            ax.scatter(C, B, s=26, color=col, zorder=3, edgecolors="white", linewidths=0.5)
+            C = np.asarray(C, float); B = np.asarray(B, float)
+            uc = np.unique(C)
+            means = np.array([B[C == c].mean() for c in uc])
+            stds = np.array([B[C == c].std() for c in uc])
+            reps = int(np.median([np.sum(C == c) for c in uc]))
+            if reps > 1:                                   # replicates → mean ± SD error bars
+                ax.scatter(C, B, s=12, color=col, alpha=0.25, edgecolors="none", zorder=2)
+                ax.errorbar(uc, means, yerr=stds, fmt="o", ms=5, color=col,
+                            capsize=3, elinewidth=1.0, zorder=3)
+            else:
+                ax.scatter(C, B, s=26, color=col, zorder=3,
+                           edgecolors="white", linewidths=0.5)
             lab = nm if r2[i] is None else f"{nm}  (R²={r2[i]:.2f})"
             ax.plot(dc, db, color=col, lw=1.6, label=lab)
         ax.set_xscale("log"); ax.set_xlabel("concentration (M)")
-        ax.set_ylabel("signal  B")
+        ax.set_ylabel("signal  B  (mean ± SD)")
         ax.legend(fontsize=8, framealpha=0.0, labelcolor=MUTE)
         self.c_iso.fig.tight_layout(); self.c_iso.draw_idle()
 
