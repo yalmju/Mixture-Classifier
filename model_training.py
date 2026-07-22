@@ -51,6 +51,7 @@ class TrainResult:
     wn: np.ndarray = None            # wavenumber axis
     split: str = "spatial"           # "spatial" (honest) or "random" (leaky)
     band_f: np.ndarray = None        # per-wavenumber ANOVA F (class discriminability)
+    acc_std: float = 0.0             # cross-fold accuracy SD (batch-CV only)
 
 
 # --------------------------------------------------------------------------
@@ -75,6 +76,18 @@ def _featurize(cube, baseline=True, deriv=0, norm="l2"):
         sd = X.std(axis=1, keepdims=True)
         X = (X - mu) / np.where(sd > 0, sd, 1.0)
     return X
+
+
+def _feat_map(path, baseline=True, trim=None, deriv=0, norm="l2"):
+    """Load one map, optionally trim the wavenumber window, and featurize it.
+    Returns (wn, X (n_pix, n_feat), coords)."""
+    wn, cube, _mean, coord = load_map(path)
+    if trim is not None:
+        lo, hi = trim
+        m = (wn >= lo) & (wn <= hi)
+        if m.sum() >= 10:
+            wn = wn[m]; cube = cube[:, m]
+    return wn, _featurize(cube, baseline=baseline, deriv=deriv, norm=norm), coord
 
 
 def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
@@ -102,16 +115,6 @@ def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
             f"\nfound classes: {[c for c, _ in groups]}")
 
     classes = [c for c, _ in groups]
-
-    def _feat_map(path):
-        wn_, cube, _mean, coord = load_map(path)
-        if trim is not None:
-            lo, hi = trim
-            m = (wn_ >= lo) & (wn_ <= hi)
-            if m.sum() >= 10:                          # ignore degenerate windows
-                wn_ = wn_[m]; cube = cube[:, m]
-        return wn_, _featurize(cube, baseline=baseline, deriv=deriv, norm=norm), coord
-
     frac = min(0.9, max(0.05, float(test_frac)))       # keep both sides non-empty
 
     def _spatial(X, coord):
@@ -131,7 +134,7 @@ def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
             progress(f"loading & preprocessing '{_cls}'  ({i + 1}/{len(groups)})")
         feats = []
         for batch, path, role in maps:
-            wn, X, coord = _feat_map(path)
+            wn, X, coord = _feat_map(path, baseline, trim, deriv, norm)
             feats.append((batch, X, coord, role))
 
         if split == "random":                          # pool all pixels, shuffle
@@ -271,6 +274,108 @@ def _train_generic(make_model, Xtr, ytr, Xte, yte, K, seed=0, progress=None):
 # --------------------------------------------------------------------------
 # entry point
 # --------------------------------------------------------------------------
+def _resnet_predict(Xtr, ytr, Xte, K, epochs=25, seed=0):
+    """Train ResNet1D and return test predictions (no learning curve — for CV)."""
+    import torch
+    import torch.nn as nn
+    from resnet1d import ResNet1D
+    torch.manual_seed(seed)
+    Xt = torch.tensor(np.asarray(Xtr, np.float32))
+    yt = torch.tensor(np.asarray(ytr, np.int64))
+    dl = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(Xt, yt), batch_size=128, shuffle=True)
+    net = ResNet1D(K); opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+    lossf = nn.CrossEntropyLoss(); net.train()
+    for _ in range(epochs):
+        for xb, yb in dl:
+            opt.zero_grad(); lossf(net(xb), yb).backward(); opt.step()
+    net.eval()
+    with torch.no_grad():
+        return net(torch.tensor(np.asarray(Xte, np.float32))).argmax(1).cpu().numpy()
+
+
+def _fit_predict(backend, Xtr, ytr, Xte, K, epochs=25, n_estimators=300, seed=0):
+    """Fit the chosen backend and return test-set predictions (one CV fold)."""
+    if backend == "resnet":
+        return _resnet_predict(Xtr, ytr, Xte, K, epochs=epochs, seed=seed)
+    if backend == "rf":
+        from sklearn.ensemble import RandomForestClassifier
+        rf = RandomForestClassifier(n_estimators=n_estimators, n_jobs=-1,
+                                    random_state=seed)
+        rf.fit(Xtr, ytr); return rf.predict(Xte)
+    mdl = _model_factory(backend, seed)(); mdl.fit(Xtr, ytr)
+    return mdl.predict(Xte)
+
+
+def _train_batch_cv(data_dir, backend, epochs, n_estimators, seed,
+                    baseline, trim, deriv, norm, progress) -> TrainResult:
+    """Leave-one-batch-out cross-validation. Every class must share the same set
+    of >=2 batches; each batch is held out as the test fold in turn. The confusion
+    matrix is pooled (each map tested once) and accuracy is reported as mean ± SD
+    across folds — the honest cross-spot number replicate maps enable."""
+    groups = discover_dataset(data_dir)
+    classes = [c for c, _ in groups]
+    K = len(classes)
+    if K < 2:
+        raise FileNotFoundError("need at least 2 substance classes.")
+    batch_sets = [set(b for b, _p, _r in maps) for _c, maps in groups]
+    folds = sorted(batch_sets[0])
+    if len(folds) < 2 or any(bs != set(folds) for bs in batch_sets):
+        raise ValueError(
+            "batch-CV needs the SAME set of >=2 batches for every class (got "
+            f"{ {c: sorted(bs) for c, bs in zip(classes, batch_sets)} }). Assign "
+            "batches in Samples, or use the 'batch' / 'manual' split.")
+
+    per_maps, wn = [], None                             # (class idx, batch, X)
+    for i, (cls, maps) in enumerate(groups):
+        for batch, path, _role in maps:
+            if progress:
+                progress(f"loading '{cls}' batch {batch}")
+            wn, X, _coord = _feat_map(path, baseline, trim, deriv, norm)
+            per_maps.append((i, batch, X))
+
+    cm = np.zeros((K, K), int); fold_acc = []
+    for fi, f in enumerate(folds):
+        if progress:
+            progress(f"batch-CV — fold {fi + 1}/{len(folds)} (test = batch {f})")
+        Xtr, ytr, Xte, yte = [], [], [], []
+        for ci, b, X in per_maps:
+            if b == f:
+                Xte.append(X); yte.extend([ci] * len(X))
+            else:
+                Xtr.append(X); ytr.extend([ci] * len(X))
+        yp = _fit_predict(backend, np.vstack(Xtr), np.array(ytr),
+                          np.vstack(Xte), K, epochs, n_estimators, seed)
+        yte = np.array(yte)
+        cm += confusion_matrix(yte, yp, labels=range(K))
+        fold_acc.append(float(np.mean(yp == yte)))
+
+    acc = float(np.mean(fold_acc)); acc_std = float(np.std(fold_acc))
+    per_c = _per_class_prf(cm, classes)
+    macro_f1 = float(np.mean([per_c[c][2] for c in classes]))
+
+    Xall = np.vstack([X for _i, _b, X in per_maps])
+    yall = np.concatenate([[i] * len(X) for i, _b, X in per_maps])
+    from sklearn.feature_selection import f_classif
+    F, _p = f_classif(Xall, yall)
+    band_f = np.nan_to_num(np.asarray(F, float), nan=0.0, posinf=0.0, neginf=0.0)
+    rng = np.random.default_rng(seed)
+    sel = np.concatenate([
+        rng.choice(np.where(yall == i)[0],
+                   size=min(120, int((yall == i).sum())), replace=False)
+        for i in range(K)])
+    pca_emb = PCA(n_components=2, random_state=seed).fit_transform(Xall[sel])
+    pca_lab = yall[sel]
+    comps = [c for c in classes if not is_blank(c)]
+    return TrainResult(
+        backend=backend, classes=classes, comps=comps, confusion=cm, acc=acc,
+        macro_f1=macro_f1, per_component=per_c,
+        curve_x=np.array(folds, float), curve_y=np.array(fold_acc),
+        curve_label="fold test accuracy", curve_xlabel="held-out batch",
+        pca_emb=pca_emb, pca_lab=pca_lab, n_train=len(yall), n_test=int(cm.sum()),
+        wn=wn, split="batch-cv", band_f=band_f, acc_std=acc_std)
+
+
 def _per_class_prf(cm, classes):
     """Per-class (precision, recall, f1, support) from a confusion matrix."""
     per = {}
@@ -302,6 +407,10 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
             raise RuntimeError(
                 "ResNet1D backend needs PyTorch — install it (pip install torch) "
                 "or pick a scikit-learn algorithm (RandomForest, SVM, k-NN…).") from exc
+
+    if split == "batch-cv":
+        return _train_batch_cv(pest_dir, backend, epochs, n_estimators, seed,
+                               baseline, trim, deriv, norm, progress)
 
     Xtr, ytr, Xte, yte, wn, classes = _load_split(
         pest_dir, baseline=baseline, trim=trim, deriv=deriv, norm=norm,

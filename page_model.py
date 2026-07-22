@@ -98,6 +98,7 @@ class ModelPage(QWidget):
                                        [("spatial (honest)", "spatial"),
                                         ("random (leaky)", "random"),
                                         ("batch (leave-1-out)", "batch"),
+                                        ("batch-CV (mean±SD)", "batch-cv"),
                                         ("manual (Samples)", "manual")]))
         self.sp_test = self._spin(QSpinBox(), 5, 90, 50, "test %", step=5)
         ctl2.addLayout(self.sp_test)
@@ -249,10 +250,13 @@ class ModelPage(QWidget):
         self._res = res
         self.btn.setEnabled(True); self.btn.setText("Train + evaluate")
         self.pbar.setVisible(False)
-        # random split is leaky — flag the (inflated) accuracy in warning colour
+        # random split is leaky; batch-CV reports cross-fold mean ± SD
         leaky = getattr(res, "split", "spatial") == "random"
-        self.k_acc.set(f"{res.acc:.0%}" + ("  ⚠leaky" if leaky else ""),
-                       CORAL if leaky else TEAL)
+        if getattr(res, "split", "") == "batch-cv" and getattr(res, "acc_std", 0):
+            self.k_acc.set(f"{res.acc:.0%} ±{res.acc_std:.0%}", TEAL)
+        else:
+            self.k_acc.set(f"{res.acc:.0%}" + ("  ⚠leaky" if leaky else ""),
+                           CORAL if leaky else TEAL)
         self.k_f1.set(f"{res.macro_f1:.3f}", BLUE)
         self.k_tr.set(f"{res.n_train:,}", AMBER)
         self.k_te.set(f"{res.n_test:,}", PURPLE)
