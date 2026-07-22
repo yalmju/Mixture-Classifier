@@ -2,23 +2,22 @@
 
 _남긴 날: 2026-07-22. 다음 세션에서 이어서._
 
-## 1. Model 페이지 중복 정리 (결정 필요) ★
-Map tool의 **Validation** 이 이미 다중참조 단일성분 분류 + **5-fold CV confusion (0.985)**
-+ 노이즈 열화곡선을 **실데이터**로 함. UNMIXR **Discriminator** 페이지도 실데이터
-confusion + 혼합검출 전략을 함. → Model 페이지(합성 데모)는 이와 겹침.
+## 1. Model 페이지 중복 정리 ★ — [x] 해결 (재설계로)
+결정: (A/B/C) 대신 **Model 페이지를 실데이터 학습 도구로 탈바꿈**. 이제 합성 데모가
+아니라 **실제 pest Reference 맵(DQ/THI/TBZ/BLK)** 을 folder-picker로 로드해
+**단일성분 분류기를 직접 학습**함 → Discriminator(RF, 혼합/전략)와 역할이 갈림.
+- 새 모듈 `model_training.py` (UI 무관, numpy/sklearn; torch는 지연 import).
+- 백엔드 2종 선택: **RandomForest**(OOB 학습곡선) · **ResNet1D**(에폭별 loss 곡선, torch).
+- honest **spatial split**(맵 왼쪽 학습 / 오른쪽 평가) → confusion·per-class P/R/F1·PCA.
+- 두 경로 실데이터 형식 합성맵으로 end-to-end 검증 완료.
 
-- [ ] **(A) Model 제거** → UNMIXR = Quantify / Discriminator 2탭. 가장 단순, 중복 제거. _(검토 중 추천)_
-- [ ] **(B) Model 입력만 고침** — Map처럼 여러 참조 파일(파일당 1성분)로 로드. 유지하되 실데이터로.
-- [ ] **(C) 합치기** — Model의 혼합(다중라벨) 지표를 Discriminator 페이지로 통합.
+## 2. Model "Load refs" 형식 버그 — [x] 무의미해짐
+Model이 더 이상 `wavenumber, C1, C2…`(성분=열) CSV를 받지 않음. Map과 동일한
+**폴더 로더**(`Reference/*_corrected.csv`, 파일당 1맵)를 사용 → 형식 불일치 자체가 사라짐.
+torch 미설치 시 ResNet 선택하면 **명확한 에러 메시지**로 안내.
 
-## 2. Model "Load refs" 형식 버그
-- 현상: 맵 CSV(`X num,20…`)를 넣으면 `could not convert string to float` 실패.
-- 원인: Model은 `wavenumber, C1, C2, …`(성분 = 열) 형식만 받음. Map은 파일당 1맵.
-- 할일: (A 선택 시 무의미) · (B 선택 시) **다중 파일 로더 + 각 파일 평균스펙트럼 추출 +
-  명확한 에러 메시지**.
-
-## 3. 참조 형식 불일치
-- Model = 1파일·다중 열 / Map = 다중 파일. 통일 여부 결정(2번과 연결).
+## 3. 참조 형식 불일치 — [x] 통일됨
+Model·Discriminator 둘 다 이제 pest **폴더(다중 맵)** 형식으로 통일.
 
 ## 4. 자잘한 폴리시
 - [x] 두 도구 appearance 드롭다운 기본 표기 `System` → `Light` 로.

@@ -3,10 +3,11 @@
 A dark, instrument-style desktop app. Not a sidebar dashboard — a top command
 bar with pill navigation over a stacked content area:
 
-    Model         train the mixture classifier and read its metrics live:
-                  PCA scatter · confusion matrix · per-component P/R/F1 · KPI tiles
-    Mixture       the mixture detector / ratio tool  (customtkinter, launched)
-    Discriminator the hyperspectral map classifier   (customtkinter, launched)
+    Model         train a single-component classifier on the REAL pest reference
+                  maps (RandomForest or ResNet1D) and read it live: learning curve
+                  · confusion matrix · per-class P/R/F1 · PCA · KPI tiles
+    Quantify      ratio → M calibration + Langmuir competition
+    Discriminator the real-data map analysis (single-component / mixture / calib)
 
     python unmixr.py
 
@@ -34,14 +35,14 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QFrame,
     QHBoxLayout, QVBoxLayout, QGridLayout, QStackedWidget, QSpinBox,
-    QDoubleSpinBox, QSizePolicy, QFileDialog,
+    QDoubleSpinBox, QComboBox, QSizePolicy, QFileDialog,
 )
 from matplotlib.patches import Patch, Rectangle
 
-from model_metrics import compute_metrics, MetricsResult
+from model_training import train_model, TrainResult
 from calibration import build_synthetic_lab, calibrate, quantify
 from real_data import compute_real, PEST_DEFAULT
-from io_utils import load_spectra_csv, load_calibration_csv, write_csv
+from io_utils import load_calibration_csv, write_csv
 
 
 def _save_figs(named_canvases, folder):
@@ -110,6 +111,12 @@ QPushButton#ghost {{ background: transparent; color: {INK}; border: 1px solid {L
 QPushButton#ghost:hover {{ border-color: {TEAL}; }}
 QSpinBox, QDoubleSpinBox {{ background: {PANEL}; color: {INK};
     border: 1px solid {LINE}; border-radius: 6px; padding: 4px 6px; min-width: 64px; }}
+QComboBox {{ background: {PANEL}; color: {INK}; border: 1px solid {LINE};
+    border-radius: 6px; padding: 4px 8px; min-width: 128px; }}
+QComboBox::drop-down {{ border: none; width: 18px; }}
+QComboBox QAbstractItemView {{ background: {PANEL}; color: {INK};
+    border: 1px solid {LINE}; selection-background-color: {PAGE};
+    selection-color: {INK}; outline: none; }}
 QLabel#field {{ color: {MUTE}; font-size: 13px; }}
 """
 
@@ -159,7 +166,7 @@ class TrainWorker(QObject):
 
     def run(self):
         try:
-            self.done.emit(compute_metrics(**self.params))
+            self.done.emit(train_model(**self.params))
         except Exception:
             self.fail.emit(traceback.format_exc())
 
@@ -191,63 +198,71 @@ def _card(title):
 
 
 # --------------------------------------------------------------------------
-# Model page — the metrics dashboard
+# Model page — train a single-component classifier on the REAL pest maps
 # --------------------------------------------------------------------------
 class ModelPage(QWidget):
+    BACKENDS = [("RandomForest", "rf"), ("ResNet1D (torch)", "resnet")]
+
     def __init__(self):
         super().__init__()
         self._thread = None
+        self._res = None
+        self.pest_dir = PEST_DEFAULT
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
 
-        self._res = None
-        self._pures = None     # loaded real references (raw)
-        self._names = None
-        self._axis = None
-
         head = QVBoxLayout(); head.setSpacing(2)
-        h1 = QLabel("Model metrics"); h1.setObjectName("h1")
-        sub = QLabel("Train the mixture classifier on synthetic pure spectra "
-                     "(or load your own reference CSV), then read PCA · confusion · F1.")
+        h1 = QLabel("Model training"); h1.setObjectName("h1")
+        sub = QLabel("Train a single-component classifier on the real pesticide "
+                     "reference maps (DQ / THI / TBZ / BLK). Honest spatial split — "
+                     "train on the left half of each map, test on the right — with a "
+                     "live learning curve, confusion matrix and per-class F1.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
 
         # controls
         ctl = QHBoxLayout(); ctl.setSpacing(10)
-        self.sp_k = self._spin(QSpinBox(), 2, 8, 6, "components")
-        self.sp_thr = self._spin(QDoubleSpinBox(), 0.05, 0.9, 0.30, "threshold", step=0.05)
-        self.sp_aug = self._spin(QSpinBox(), 30, 400, 120, "aug / pure", step=10)
-        for w in (self.sp_k, self.sp_thr, self.sp_aug):
+        bcol = QVBoxLayout(); bcol.setSpacing(2)
+        blb = QLabel("backend"); blb.setObjectName("field")
+        self.cmb = QComboBox()
+        for label, key in self.BACKENDS:
+            self.cmb.addItem(label, key)
+        bcol.addWidget(blb); bcol.addWidget(self.cmb)
+        ctl.addLayout(bcol)
+        self.sp_ep = self._spin(QSpinBox(), 2, 100, 25, "epochs (ResNet)")
+        self.sp_tr = self._spin(QSpinBox(), 60, 600, 300, "trees (RF)", step=20)
+        self.sp_seed = self._spin(QSpinBox(), 0, 999, 0, "seed")
+        for w in (self.sp_ep, self.sp_tr, self.sp_seed):
             ctl.addLayout(w)
-        self.src = QLabel("source: synthetic"); self.src.setObjectName("field")
-        ctl.addWidget(self.src); ctl.addStretch(1)
-        load_b = QPushButton("Load refs…"); load_b.setObjectName("ghost")
-        load_b.clicked.connect(self._load_refs)
+        self.src = QLabel(self._short(self.pest_dir)); self.src.setObjectName("field")
+        ctl.addWidget(self.src, 1)
+        browse = QPushButton("Data folder…"); browse.setObjectName("ghost")
+        browse.clicked.connect(self._browse)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Train + evaluate"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._train)
-        ctl.addWidget(load_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
+        ctl.addWidget(browse); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
         # KPI row
         kpis = QHBoxLayout(); kpis.setSpacing(12)
-        self.k_f1 = Kpi("micro F1"); self.k_p = Kpi("precision")
-        self.k_r = Kpi("recall"); self.k_ex = Kpi("exact match")
-        for k in (self.k_f1, self.k_p, self.k_r, self.k_ex):
+        self.k_acc = Kpi("spatial accuracy"); self.k_f1 = Kpi("macro F1")
+        self.k_tr = Kpi("train pixels"); self.k_te = Kpi("test pixels")
+        for k in (self.k_acc, self.k_f1, self.k_tr, self.k_te):
             kpis.addWidget(k)
         root.addLayout(kpis)
 
         # 2x2 plot grid
         grid = QGridLayout(); grid.setSpacing(12)
-        self.c_pca = Canvas(); self.c_cm = Canvas()
-        self.c_bar = Canvas(); self.c_spec = Canvas()
+        self.c_curve = Canvas(); self.c_cm = Canvas()
+        self.c_pca = Canvas(); self.c_bar = Canvas()
         for (cv, title, r, c) in [
-            (self.c_pca, "PCA — spectra by component", 0, 0),
-            (self.c_cm, "Confusion matrix (single-component test)", 0, 1),
-            (self.c_bar, "Per-component precision / recall / F1", 1, 0),
-            (self.c_spec, "Reference templates", 1, 1),
+            (self.c_curve, "Learning curve", 0, 0),
+            (self.c_cm, "Confusion matrix (spatial split)", 0, 1),
+            (self.c_pca, "PCA — real per-pixel spectra by class", 1, 0),
+            (self.c_bar, "Per-class precision / recall / F1", 1, 1),
         ]:
             card, lay = _card(title)
             lay.addWidget(cv)
@@ -256,35 +271,29 @@ class ModelPage(QWidget):
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
         root.addLayout(grid, 1)
 
-        for cv, msg in [(self.c_pca, "Train to compute PCA"),
+        for cv, msg in [(self.c_curve, "Train to watch the learning curve"),
                         (self.c_cm, "Train to compute confusion matrix"),
-                        (self.c_bar, "Train to compute F1"),
-                        (self.c_spec, "Train to view templates")]:
+                        (self.c_pca, "Train to compute PCA"),
+                        (self.c_bar, "Train to compute per-class F1")]:
             cv.placeholder(msg)
+
+    def _short(self, p):
+        tail = "…" + p[-40:] if len(p) > 40 else p
+        return f"data: {tail}"
 
     def _spin(self, spin, lo, hi, val, label, step=1):
         col = QVBoxLayout(); col.setSpacing(2)
         lb = QLabel(label); lb.setObjectName("field")
-        if isinstance(spin, QDoubleSpinBox):
-            spin.setDecimals(2); spin.setSingleStep(step)
-        else:
-            spin.setSingleStep(step)
+        spin.setSingleStep(step)
         spin.setRange(lo, hi); spin.setValue(val)
         col.addWidget(lb); col.addWidget(spin)
         return col
 
-    def _load_refs(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Reference spectra CSV "
-                                           "(wavenumber + one column per component)",
-                                           "", "CSV (*.csv)")
-        if not p:
-            return
-        try:
-            axis, names, spectra = load_spectra_csv(p)
-            self._pures, self._names, self._axis = spectra, names, axis
-            self.src.setText(f"source: {os.path.basename(p)} ({len(names)})")
-        except Exception as exc:
-            self.src.setText("load failed"); print("load refs:", exc, file=sys.stderr)
+    def _browse(self):
+        d = QFileDialog.getExistingDirectory(self, "Pest_Discriminator folder",
+                                             self.pest_dir)
+        if d:
+            self.pest_dir = d; self.src.setText(self._short(d))
 
     def _export(self):
         if self._res is None:
@@ -295,27 +304,30 @@ class ModelPage(QWidget):
         r = self._res
         rows = [[nm, f"{v[0]:.4f}", f"{v[1]:.4f}", f"{v[2]:.4f}", v[3]]
                 for nm, v in r.per_component.items()]
-        rows.append(["micro", f"{r.micro['micro_precision']:.4f}",
-                     f"{r.micro['micro_recall']:.4f}", f"{r.micro['micro_f1']:.4f}", ""])
+        rows.append(["accuracy", f"{r.acc:.4f}", "", f"{r.macro_f1:.4f}", ""])
         write_csv(os.path.join(d, "model_metrics.csv"),
-                  ["component", "precision", "recall", "f1", "support"], rows)
+                  ["class", "precision", "recall", "f1", "support"], rows)
         write_csv(os.path.join(d, "model_confusion.csv"),
-                  [""] + list(r.names),
-                  [[r.names[i]] + list(map(int, r.confusion[i]))
-                   for i in range(len(r.names))])
-        n = _save_figs([("model_pca", self.c_pca), ("model_confusion", self.c_cm),
-                        ("model_prf", self.c_bar), ("model_templates", self.c_spec)], d)
+                  [""] + list(r.classes),
+                  [[r.classes[i]] + list(map(int, r.confusion[i]))
+                   for i in range(len(r.classes))])
+        write_csv(os.path.join(d, "model_learning_curve.csv"),
+                  [r.curve_xlabel, r.curve_label],
+                  [[f"{x:g}", f"{y:.6f}"] for x, y in zip(r.curve_x, r.curve_y)])
+        n = _save_figs([("model_learning_curve", self.c_curve),
+                        ("model_confusion", self.c_cm),
+                        ("model_pca", self.c_pca), ("model_prf", self.c_bar)], d)
         self.src.setText(f"exported CSV + {n} PNG → {os.path.basename(d)}")
 
     # ---- training ----
     def _train(self):
-        params = dict(n_components=self.sp_k.itemAt(1).widget().value(),
-                      threshold=self.sp_thr.itemAt(1).widget().value(),
-                      n_per_pure=self.sp_aug.itemAt(1).widget().value(),
-                      seed=0)
-        if self._pures is not None:       # train on the loaded real references
-            params.update(pure_raw=self._pures, names=self._names, axis=self._axis)
+        backend = self.cmb.currentData()
+        params = dict(pest_dir=self.pest_dir, backend=backend,
+                      epochs=self.sp_ep.itemAt(1).widget().value(),
+                      n_estimators=self.sp_tr.itemAt(1).widget().value(),
+                      seed=self.sp_seed.itemAt(1).widget().value())
         self.btn.setEnabled(False); self.btn.setText("Training…")
+        self.c_curve.placeholder("Training…")
         self._thread = QThread()
         self._worker = TrainWorker(params)
         self._worker.moveToThread(self._thread)
@@ -328,45 +340,38 @@ class ModelPage(QWidget):
 
     def _error(self, tb):
         self.btn.setEnabled(True); self.btn.setText("Train + evaluate")
-        self.c_pca.placeholder("Training failed — see console")
+        first = tb.strip().splitlines()[-1][:90]
+        self.c_curve.placeholder("Training failed — " + first)
         print(tb, file=sys.stderr)
 
-    def _apply(self, res: MetricsResult):
+    def _apply(self, res: TrainResult):
         self._res = res
         self.btn.setEnabled(True); self.btn.setText("Train + evaluate")
-        m = res.micro
-        self.k_f1.set(f"{m['micro_f1']:.3f}", TEAL)
-        self.k_p.set(f"{m['micro_precision']:.3f}", BLUE)
-        self.k_r.set(f"{m['micro_recall']:.3f}", AMBER)
-        self.k_ex.set(f"{m['exact_match_ratio']:.0%}", PURPLE)
-        self._plot_pca(res); self._plot_cm(res)
-        self._plot_bar(res); self._plot_spec(res)
+        self.k_acc.set(f"{res.acc:.0%}", TEAL)
+        self.k_f1.set(f"{res.macro_f1:.3f}", BLUE)
+        self.k_tr.set(f"{res.n_train:,}", AMBER)
+        self.k_te.set(f"{res.n_test:,}", PURPLE)
+        self._plot_curve(res); self._plot_cm(res)
+        self._plot_pca(res); self._plot_bar(res)
 
     # ---- plots ----
-    def _plot_pca(self, res):
-        ax = self.c_pca.new_ax()
-        for i, nm in enumerate(res.names):
-            pts = res.pca_points[res.pca_labels == i]
-            if len(pts):
-                ax.scatter(pts[:, 0], pts[:, 1], s=22, color=SERIES[i % len(SERIES)],
-                           edgecolors="none", alpha=0.85, label=nm)
-            ax.scatter(res.pca_pure[i, 0], res.pca_pure[i, 1], marker="*", s=210,
-                       color=SERIES[i % len(SERIES)], edgecolors=INK, linewidths=0.6)
-        ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
-        leg = ax.legend(fontsize=7, loc="best", framealpha=0.0, ncol=2,
-                        labelcolor=MUTE)
-        self.c_pca.fig.tight_layout(); self.c_pca.draw_idle()
+    def _plot_curve(self, res):
+        ax = self.c_curve.new_ax()
+        col = TEAL if res.backend == "resnet" else BLUE
+        ax.plot(res.curve_x, res.curve_y, marker="o", ms=4, lw=1.4, color=col)
+        ax.set_xlabel(res.curve_xlabel); ax.set_ylabel(res.curve_label)
+        ax.set_ylim(bottom=0)
+        self.c_curve.fig.tight_layout(); self.c_curve.draw_idle()
 
     def _plot_cm(self, res):
         ax = self.c_cm.new_ax()
-        cm = res.confusion
+        cm = res.confusion; names = res.classes
         ax.imshow(cm, cmap=CM_CMAP, aspect="auto", vmin=0)
-        ax.set_xticks(range(len(res.names))); ax.set_yticks(range(len(res.names)))
-        ax.set_xticklabels(res.names, fontsize=7); ax.set_yticklabels(res.names, fontsize=7)
+        ax.set_xticks(range(len(names))); ax.set_yticks(range(len(names)))
+        ax.set_xticklabels(names, fontsize=7); ax.set_yticklabels(names, fontsize=7)
         ax.set_xlabel("predicted"); ax.set_ylabel("true")
-        # thin white gridlines between cells (clean on the light card)
-        ax.set_xticks(np.arange(-0.5, len(res.names)), minor=True)
-        ax.set_yticks(np.arange(-0.5, len(res.names)), minor=True)
+        ax.set_xticks(np.arange(-0.5, len(names)), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(names)), minor=True)
         ax.grid(which="minor", color=PANEL, linewidth=1.5)
         ax.tick_params(which="minor", length=0)
         thr = cm.max() / 2 if cm.max() else 0.5
@@ -374,13 +379,24 @@ class ModelPage(QWidget):
             for j in range(cm.shape[1]):
                 if cm[i, j]:
                     ax.text(j, i, str(cm[i, j]), ha="center", va="center",
-                            color="#ffffff" if cm[i, j] > thr else INK,
-                            fontsize=8)
+                            color="#ffffff" if cm[i, j] > thr else INK, fontsize=8)
         self.c_cm.fig.tight_layout(); self.c_cm.draw_idle()
+
+    def _plot_pca(self, res):
+        ax = self.c_pca.new_ax()
+        for i, nm in enumerate(res.classes):
+            m = res.pca_lab == i
+            if m.any():
+                ax.scatter(res.pca_emb[m, 0], res.pca_emb[m, 1], s=12,
+                           color=SERIES[i % len(SERIES)], alpha=0.6,
+                           edgecolors="none", label=nm)
+        ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
+        ax.legend(fontsize=7, loc="best", framealpha=0.0, labelcolor=MUTE)
+        self.c_pca.fig.tight_layout(); self.c_pca.draw_idle()
 
     def _plot_bar(self, res):
         ax = self.c_bar.new_ax()
-        names = res.names
+        names = res.classes
         x = np.arange(len(names)); w = 0.26
         P = [res.per_component[n][0] for n in names]
         R = [res.per_component[n][1] for n in names]
@@ -392,15 +408,6 @@ class ModelPage(QWidget):
         ax.set_ylim(0, 1.05); ax.set_ylabel("score")
         ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=3)
         self.c_bar.fig.tight_layout(); self.c_bar.draw_idle()
-
-    def _plot_spec(self, res):
-        ax = self.c_spec.new_ax()
-        axis = res.axis if res.axis is not None else np.arange(res.templates.shape[1])
-        for i, nm in enumerate(res.names):
-            ax.plot(axis, res.templates[i] + i * 0.6, lw=1.0,
-                    color=SERIES[i % len(SERIES)], label=nm)
-        ax.set_xlabel("wavenumber (cm⁻¹)"); ax.set_yticks([])
-        self.c_spec.fig.tight_layout(); self.c_spec.draw_idle()
 
 
 # --------------------------------------------------------------------------
