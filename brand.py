@@ -10,7 +10,7 @@ APP_TAGLINE = "pure spectra → detect + ratio"
 
 # ---- surfaces (aligned to the UNMIXR light family; see family.py) --------
 SIDE_FILL = ("#eef1f5", "#12161c")     # sidebar background
-MAIN_FILL = ("#f5f7fa", "#0f1216")     # dashboard background
+MAIN_FILL = ("#fafbfc", "#0f1216")     # dashboard background
 CARD_FILL = ("#ffffff", "#171c22")     # card background
 
 # ---- text ----------------------------------------------------------------

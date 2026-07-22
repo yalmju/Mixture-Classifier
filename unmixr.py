@@ -59,7 +59,7 @@ VERSION = "1.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---- light palette -------------------------------------------------------
-PAGE   = "#f5f7fa"
+PAGE   = "#fafbfc"
 PANEL  = "#ffffff"
 CARD   = "#ffffff"
 LINE   = "#e3e8ee"

@@ -10,7 +10,7 @@ import sys
 import customtkinter as ctk
 
 # UNMIXR light palette
-PAGE = "#f5f7fa"
+PAGE = "#fafbfc"
 PANEL = "#ffffff"
 CARD = "#ffffff"
 LINE = "#e3e8ee"
