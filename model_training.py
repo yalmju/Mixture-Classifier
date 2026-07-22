@@ -55,15 +55,26 @@ class TrainResult:
 # --------------------------------------------------------------------------
 # data — real pest references, honest spatial (block) split
 # --------------------------------------------------------------------------
+def _resolve_ref_dir(pest_dir):
+    """Find the folder that actually holds the reference CSVs. Accept either the
+    Pest_Discriminator root (maps live in .../Reference/) or the Reference folder
+    itself — so 'Training data…' works whichever of the two the user picks."""
+    candidates = [os.path.join(pest_dir, "Reference"), pest_dir]
+    for d in candidates:
+        if all(os.path.exists(os.path.join(d, f)) for f in REF_FILES.values()):
+            return d
+    missing = [f for f in REF_FILES.values()
+               if not os.path.exists(os.path.join(candidates[0], f))]
+    raise FileNotFoundError(
+        "reference CSVs not found. Pick the Pest_Discriminator folder (or its "
+        f"Reference/ subfolder).\nlooked in: {candidates[0]}  and  {candidates[1]}"
+        f"\nmissing: {missing}")
+
+
 def _load_split(pest_dir):
     """Load the 4 reference maps and split each by its X-median into a
     train (left) / test (right) block. Returns preprocessed per-pixel matrices."""
-    ref_dir = os.path.join(pest_dir, "Reference")
-    missing = [f for f in REF_FILES.values()
-               if not os.path.exists(os.path.join(ref_dir, f))]
-    if missing:
-        raise FileNotFoundError(
-            f"reference CSVs not found in {ref_dir}\nmissing: {missing}")
+    ref_dir = _resolve_ref_dir(pest_dir)
 
     Xtr, ytr, Xte, yte, wn = [], [], [], [], None
     for i, lab in enumerate(CLASSES4):
