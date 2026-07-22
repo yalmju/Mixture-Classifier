@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from ui_common import *
 from predict import predict_sample
 from real_data import PEST_DEFAULT
+from io_utils import load_calibration_csv
 
 
 class PredictWorker(QObject):
@@ -68,9 +69,11 @@ class PredictPage(QWidget):
         samp_b = QPushButton("Load sample…"); samp_b.setObjectName("ghost")
         samp_b.clicked.connect(self._browse_sample)
         self.samp_lbl = QLabel("no sample"); self.samp_lbl.setObjectName("field")
+        self.samp_x = self._clear_btn(self._clear_sample)
         cal_b = QPushButton("Load calibration…"); cal_b.setObjectName("ghost")
         cal_b.clicked.connect(self._browse_calib)
         self.cal_lbl = QLabel("no calib (ratio only)"); self.cal_lbl.setObjectName("field")
+        self.cal_x = self._clear_btn(self._clear_calib)
         tcol = QVBoxLayout(); tcol.setSpacing(2)
         tl = QLabel("threshold"); tl.setObjectName("field")
         self.thr = QDoubleSpinBox(); self.thr.setDecimals(2); self.thr.setSingleStep(0.05)
@@ -83,10 +86,11 @@ class PredictPage(QWidget):
         self.btn = QPushButton("Predict"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(ref_b); ctl.addWidget(self.ref_lbl)
-        ctl.addWidget(samp_b); ctl.addWidget(self.samp_lbl)
-        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl, 1)
+        ctl.addWidget(samp_b); ctl.addWidget(self.samp_lbl); ctl.addWidget(self.samp_x)
+        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl, 1); ctl.addWidget(self.cal_x)
         ctl.addLayout(tcol); ctl.addLayout(bcol); ctl.addWidget(self.btn)
         root.addLayout(ctl)
+        self._sync_clear()
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
         self.k_dom = Kpi("dominant"); self.k_domp = Kpi("dominant %")
@@ -117,6 +121,18 @@ class PredictPage(QWidget):
     def _short(self, p):
         return "refs: " + ("…" + p[-38:] if len(p) > 38 else p)
 
+    def _clear_btn(self, on_click):
+        """A small ✕ button that clears a loaded file (undo a wrong pick)."""
+        b = QPushButton("✕"); b.setObjectName("ghost")
+        b.setFixedWidth(30); b.setToolTip("clear")
+        b.clicked.connect(on_click)
+        return b
+
+    def _sync_clear(self):
+        """Show a ✕ only when there is something to clear."""
+        self.samp_x.setVisible(self.sample is not None)
+        self.cal_x.setVisible(self.calib_path is not None)
+
     def _browse_ref(self):
         d = QFileDialog.getExistingDirectory(
             self, "Reference data folder (your Samples)", self.data_dir)
@@ -128,14 +144,59 @@ class PredictPage(QWidget):
                                            "CSV (*.csv)")
         if p:
             self.sample = p; self.samp_lbl.setText(os.path.basename(p))
+            self._sync_clear()
+
+    def _clear_sample(self):
+        self.sample = None; self.samp_lbl.setText("no sample"); self._sync_clear()
 
     def _browse_calib(self):
         p, _ = QFileDialog.getOpenFileName(
             self, "Calibration CSV (compound, concentration_M, wavenumbers…)", "",
             "CSV (*.csv)")
-        if p:
-            self.calib_path = p
-            self.cal_lbl.setText("calib: " + os.path.basename(p))
+        if not p:
+            return
+        problem = self._validate_calib(p)                 # reject a wrong file early
+        if problem:
+            self.calib_path = None
+            self.cal_lbl.setText("not a calibration CSV")
+            self.cal_lbl.setStyleSheet(f"color:{CORAL};")
+            self.readout.setText(
+                f"<b>calibration not loaded</b> — {os.path.basename(p)}: {problem}"
+                "<br>expected format: <code>compound, concentration_M, &lt;wn1&gt;, "
+                "&lt;wn2&gt;, …</code> (one row per measured standard). A map CSV is "
+                "not a calibration file.")
+            self.readout.setTextFormat(Qt.TextFormat.RichText)
+            self._sync_clear()
+            return
+        self.calib_path = p
+        self.cal_lbl.setText("calib: " + os.path.basename(p))
+        self.cal_lbl.setStyleSheet("")
+        self._sync_clear()
+
+    def _clear_calib(self):
+        self.calib_path = None
+        self.cal_lbl.setText("no calib (ratio only)"); self.cal_lbl.setStyleSheet("")
+        self._sync_clear()
+
+    @staticmethod
+    def _validate_calib(path):
+        """Return a reason string if `path` is not a usable calibration CSV, else
+        None. Guards against loading a map file (or any wrong CSV) by mistake."""
+        try:
+            axis, names, dils = load_calibration_csv(path)
+        except Exception as exc:
+            return f"could not read it ({type(exc).__name__})"
+        if len(axis) < 10:
+            return "no wavenumber axis found in the header"
+
+        def _isnum(s):
+            try:
+                float(s); return True
+            except ValueError:
+                return False
+        if not names or all(_isnum(n) for n in names):
+            return "first column has no compound names (looks like a map, not a calibration)"
+        return None
 
     def _run(self):
         if not self.sample:
