@@ -41,7 +41,7 @@ from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QFrame,
     QHBoxLayout, QVBoxLayout, QGridLayout, QStackedWidget, QSpinBox,
-    QDoubleSpinBox, QComboBox, QSizePolicy, QFileDialog,
+    QDoubleSpinBox, QComboBox, QCheckBox, QSizePolicy, QFileDialog,
 )
 from matplotlib.patches import Patch, Rectangle
 
@@ -213,7 +213,9 @@ def _card(title):
 # Model page — train a single-component classifier on a set of reference SERS maps
 # --------------------------------------------------------------------------
 class ModelPage(QWidget):
-    BACKENDS = [("RandomForest", "rf"), ("ResNet1D (torch)", "resnet")]
+    ALGOS = [("RandomForest", "rf"), ("ResNet1D (torch)", "resnet"),
+             ("SVM (RBF)", "svm"), ("k-NN", "knn"),
+             ("Logistic Reg.", "logreg"), ("Gradient Boosting", "gbm")]
 
     def __init__(self):
         super().__init__()
@@ -236,17 +238,25 @@ class ModelPage(QWidget):
         # controls
         ctl = QHBoxLayout(); ctl.setSpacing(10)
         bcol = QVBoxLayout(); bcol.setSpacing(2)
-        blb = QLabel("backend"); blb.setObjectName("field")
+        blb = QLabel("algorithm"); blb.setObjectName("field")
         self.cmb = QComboBox()
-        for label, key in self.BACKENDS:
+        for label, key in self.ALGOS:
             self.cmb.addItem(label, key)
         bcol.addWidget(blb); bcol.addWidget(self.cmb)
         ctl.addLayout(bcol)
         self.sp_ep = self._spin(QSpinBox(), 2, 100, 25, "epochs (ResNet)")
         self.sp_tr = self._spin(QSpinBox(), 60, 600, 300, "trees (RF)", step=20)
         self.sp_seed = self._spin(QSpinBox(), 0, 999, 0, "seed")
-        for w in (self.sp_ep, self.sp_tr, self.sp_seed):
+        self.sp_lo = self._spin(QSpinBox(), 0, 4000, 0, "trim lo cm⁻¹", step=50)
+        self.sp_hi = self._spin(QSpinBox(), 0, 4000, 4000, "trim hi cm⁻¹", step=50)
+        for w in (self.sp_ep, self.sp_tr, self.sp_seed, self.sp_lo, self.sp_hi):
             ctl.addLayout(w)
+        bcol2 = QVBoxLayout(); bcol2.setSpacing(2)
+        spacer = QLabel("preprocess"); spacer.setObjectName("field")
+        bcol2.addWidget(spacer)
+        self.chk_base = QCheckBox("baseline"); self.chk_base.setChecked(True)
+        bcol2.addWidget(self.chk_base)
+        ctl.addLayout(bcol2)
         self.src = QLabel(self._short(self.pest_dir)); self.src.setObjectName("field")
         ctl.addWidget(self.src, 1)
         browse = QPushButton("Training data…"); browse.setObjectName("ghost")
@@ -336,10 +346,14 @@ class ModelPage(QWidget):
     # ---- training ----
     def _train(self):
         backend = self.cmb.currentData()
+        lo = self.sp_lo.itemAt(1).widget().value()
+        hi = self.sp_hi.itemAt(1).widget().value()
+        trim = (lo, hi) if (hi > lo and (lo > 0 or hi < 4000)) else None
         params = dict(pest_dir=self.pest_dir, backend=backend,
                       epochs=self.sp_ep.itemAt(1).widget().value(),
                       n_estimators=self.sp_tr.itemAt(1).widget().value(),
-                      seed=self.sp_seed.itemAt(1).widget().value())
+                      seed=self.sp_seed.itemAt(1).widget().value(),
+                      baseline=self.chk_base.isChecked(), trim=trim)
         self.btn.setEnabled(False); self.btn.setText("Training…")
         self.c_curve.placeholder("Training…")
         self._thread = QThread()

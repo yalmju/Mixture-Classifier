@@ -52,10 +52,14 @@ class TrainResult:
 # --------------------------------------------------------------------------
 # data — discovered reference maps, honest spatial (block) split
 # --------------------------------------------------------------------------
-def _load_split(data_dir):
+def _load_split(data_dir, baseline=True, trim=None):
     """Discover the reference maps and split each by its X-median into a
     train (left) / test (right) block. Returns preprocessed per-pixel matrices
-    plus the ordered class names."""
+    plus the ordered class names.
+
+    ``baseline`` toggles ALS baseline removal in preprocessing; ``trim`` is an
+    optional (low, high) wavenumber window applied before preprocessing (e.g. to
+    drop edge artefacts)."""
     refs = discover_references(data_dir)
     if len(refs) < 2:
         found = [n for n, _ in refs]
@@ -68,7 +72,12 @@ def _load_split(data_dir):
     Xtr, ytr, Xte, yte, wn = [], [], [], [], None
     for i, (_name, path) in enumerate(refs):
         wn, cube, _mean, coord = load_map(path)
-        Xp = preprocess(cube)
+        if trim is not None:
+            lo, hi = trim
+            m = (wn >= lo) & (wn <= hi)
+            if m.sum() >= 10:                          # ignore degenerate windows
+                wn = wn[m]; cube = cube[:, m]
+        Xp = preprocess(cube, do_baseline=baseline)
         xc = coord[:, 0]
         left = xc < np.median(xc)                     # spatial block split
         if left.all() or (~left).all():               # degenerate map -> alternate
@@ -144,6 +153,44 @@ def _train_resnet(Xtr, ytr, Xte, yte, K, epochs=25, batch_size=128, lr=1e-3,
             "training loss (cross-entropy)", "epoch")
 
 
+def _model_factory(algo, seed):
+    """Return a no-arg callable that builds a fresh scikit-learn classifier."""
+    if algo == "svm":
+        from sklearn.svm import SVC
+        return lambda: SVC(kernel="rbf", C=10.0, gamma="scale", random_state=seed)
+    if algo == "knn":
+        from sklearn.neighbors import KNeighborsClassifier
+        return lambda: KNeighborsClassifier(n_neighbors=5)
+    if algo == "logreg":
+        from sklearn.linear_model import LogisticRegression
+        return lambda: LogisticRegression(max_iter=1000)
+    if algo == "gbm":
+        from sklearn.ensemble import HistGradientBoostingClassifier
+        return lambda: HistGradientBoostingClassifier(random_state=seed)
+    raise ValueError(f"unknown algorithm: {algo}")
+
+
+def _train_generic(make_model, Xtr, ytr, Xte, yte, K, seed=0):
+    """Any scikit-learn classifier: learning curve = test error vs training-set
+    size (train on growing subsets, evaluate on the held-out spatial block),
+    final model fit on the full training block for the confusion matrix."""
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(len(Xtr))
+    xs, ys = [], []
+    for fr in (0.2, 0.4, 0.6, 0.8, 1.0):
+        m = max(K * 2, int(len(Xtr) * fr))
+        idx = order[:m]
+        mdl = make_model(); mdl.fit(Xtr[idx], ytr[idx])
+        yp = mdl.predict(Xte)
+        xs.append(m); ys.append(1.0 - float(np.mean(yp == yte)))
+    mdl = make_model(); mdl.fit(Xtr, ytr)
+    yp = mdl.predict(Xte)
+    cm = confusion_matrix(yte, yp, labels=range(K))
+    acc = float(np.mean(yp == yte))
+    return (cm, acc, np.array(xs, float), np.array(ys, float),
+            "test error", "training-set size")
+
+
 # --------------------------------------------------------------------------
 # entry point
 # --------------------------------------------------------------------------
@@ -162,27 +209,32 @@ def _per_class_prf(cm, classes):
 
 
 def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
-                n_estimators=300, seed=0) -> TrainResult:
-    """Discover the reference maps in ``pest_dir`` and train the chosen backend on
-    the honest spatial split. ``backend`` is "rf" (RandomForest) or "resnet"
-    (ResNet1D). ``pest_dir`` is the data folder (or its Reference/ subfolder)."""
+                n_estimators=300, seed=0, baseline=True, trim=None) -> TrainResult:
+    """Discover the reference maps in ``pest_dir`` and train the chosen algorithm
+    on the honest spatial split. ``backend`` is one of rf / resnet / svm / knn /
+    logreg / gbm. ``baseline`` toggles ALS baseline removal and ``trim`` is an
+    optional (low, high) wavenumber window. ``pest_dir`` is the data folder (or
+    its Reference/ subfolder)."""
     if backend == "resnet":
         try:
             import torch  # noqa: F401  (fail early with a clear message)
         except Exception as exc:
             raise RuntimeError(
                 "ResNet1D backend needs PyTorch — install it (pip install torch) "
-                "or pick the RandomForest backend.") from exc
+                "or pick a scikit-learn algorithm (RandomForest, SVM, k-NN…).") from exc
 
-    Xtr, ytr, Xte, yte, wn, classes = _load_split(pest_dir)
+    Xtr, ytr, Xte, yte, wn, classes = _load_split(pest_dir, baseline=baseline, trim=trim)
     K = len(classes)
 
     if backend == "resnet":
         cm, acc, cx, cy, ylab, xlab = _train_resnet(
             Xtr, ytr, Xte, yte, K, epochs=epochs, seed=seed)
-    else:
+    elif backend == "rf":
         cm, acc, cx, cy, ylab, xlab = _train_rf(
             Xtr, ytr, Xte, yte, K, n_estimators=n_estimators, seed=seed)
+    else:
+        cm, acc, cx, cy, ylab, xlab = _train_generic(
+            _model_factory(backend, seed), Xtr, ytr, Xte, yte, K, seed=seed)
 
     per = _per_class_prf(cm, classes)
     macro_f1 = float(np.mean([per[nm][2] for nm in classes]))
