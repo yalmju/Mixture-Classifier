@@ -349,7 +349,12 @@ class ModelPage(QWidget):
                 ax.scatter(res.pca_emb[m, 0], res.pca_emb[m, 1], s=12,
                            color=SERIES[i % len(SERIES)], alpha=0.6,
                            edgecolors="none", label=nm)
-        ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
+        var = getattr(res, "pca_var", None)
+        if var is not None and len(var) >= 2:
+            ax.set_xlabel(f"PC1 ({var[0] * 100:.1f}%)")
+            ax.set_ylabel(f"PC2 ({var[1] * 100:.1f}%)")
+        else:
+            ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
         ax.legend(fontsize=7, loc="best", framealpha=0.0, labelcolor=MUTE)
         self.c_pca.fig.tight_layout(); self.c_pca.draw_idle()
 
