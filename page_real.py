@@ -1,6 +1,6 @@
-"""page_real.py — Real data tab: unmix one test map (NNLS / MCR-ALS) and show it
-as per-substance intensity maps, a per-pixel reliability map, a measured-vs-
-reconstructed validation plot, and the overall composition pie."""
+"""page_real.py — Real data tab: unmix one test map (background included) and show
+it as an RGB intensity composite, an MCR-ALS composite, a per-pixel ratio pie-glyph
+map (background greyed), and the overall composition + ratio report."""
 from __future__ import annotations
 
 import os
@@ -8,11 +8,13 @@ import sys
 import traceback
 
 import numpy as np
+from matplotlib.colors import to_rgb
+from matplotlib.patches import Wedge, Patch, Rectangle
 
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QComboBox, QCheckBox, QDoubleSpinBox, QFileDialog,
+    QDoubleSpinBox, QFileDialog,
 )
 
 from ui_common import *
@@ -20,6 +22,8 @@ from unmix import unmix_map
 from real_data import PEST_DEFAULT
 from dataset import load_preprocess
 from io_utils import write_csv
+
+BG_GREY = "#c7ccd3"
 
 
 class RealWorker(QObject):
@@ -38,12 +42,7 @@ class RealWorker(QObject):
             self.fail.emit(traceback.format_exc())
 
 
-# --------------------------------------------------------------------------
-# Real-data page
-# --------------------------------------------------------------------------
 class RealDataPage(QWidget):
-    METHODS = [("NNLS (fixed refs)", "nnls"), ("MCR-ALS (refine)", "mcr")]
-
     def __init__(self):
         super().__init__()
         self._thread = None
@@ -56,11 +55,11 @@ class RealDataPage(QWidget):
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Real-data analysis — unmix a test map"); h1.setObjectName("h1")
         sub = QLabel("Load one test map and unmix it against your reference "
-                     "substances (NNLS or MCR-ALS). See where each substance is "
-                     "(intensity maps), how well the fit explains each pixel "
-                     "(reliability), the measured vs reconstructed spectrum "
-                     "(validation), and the overall composition (pie). Organise "
-                     "references in Samples first.")
+                     "substances (background included). Each substance gets its own "
+                     "colour: an RGB intensity composite and an MCR-ALS composite "
+                     "merge them, a per-pixel pie map shows every pixel's ratio "
+                     "(background greyed), and the report gives the overall "
+                     "composition. Preprocessing + references come from Samples.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -75,11 +74,8 @@ class RealDataPage(QWidget):
         self.test_x = QPushButton("✕"); self.test_x.setObjectName("ghost")
         self.test_x.setFixedWidth(30); self.test_x.setToolTip("clear")
         self.test_x.clicked.connect(self._clear_test); self.test_x.setVisible(False)
-        self.cmb_method = QComboBox()
-        for text, data in self.METHODS:
-            self.cmb_method.addItem(text, data)
         tcol = QVBoxLayout(); tcol.setSpacing(2)
-        tl = QLabel("min fraction"); tl.setObjectName("field")
+        tl = QLabel("min substance fraction"); tl.setObjectName("field")
         self.thr = QDoubleSpinBox(); self.thr.setDecimals(2); self.thr.setSingleStep(0.05)
         self.thr.setRange(0.01, 0.9); self.thr.setValue(0.05)
         tcol.addWidget(tl); tcol.addWidget(self.thr)
@@ -88,9 +84,8 @@ class RealDataPage(QWidget):
         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(ref_b); ctl.addWidget(self.ref_lbl)
-        ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x, 0)
-        ctl.addWidget(self.cmb_method); ctl.addLayout(tcol)
-        ctl.addStretch(1)
+        ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x)
+        ctl.addLayout(tcol); ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
@@ -98,31 +93,35 @@ class RealDataPage(QWidget):
         root.addWidget(self.status)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
-        self.k_dom = Kpi("dominant"); self.k_n = Kpi("components")
-        self.k_r2 = Kpi("mean fit R²"); self.k_px = Kpi("pixels")
-        for k in (self.k_dom, self.k_n, self.k_r2, self.k_px):
+        self.k_dom = Kpi("dominant"); self.k_n = Kpi("substances")
+        self.k_hit = Kpi("hit % (not background)"); self.k_px = Kpi("pixels")
+        for k in (self.k_dom, self.k_n, self.k_hit, self.k_px):
             kpis.addWidget(k)
         root.addLayout(kpis)
 
         grid = QGridLayout(); grid.setSpacing(12)
-        self.c_maps = Canvas(); self.c_rel = Canvas()
-        self.c_val = Canvas(); self.c_pie = Canvas()
+        self.c_rgb = Canvas(); self.c_mcr = Canvas()
+        self.c_pie = Canvas(); self.c_comp = Canvas()
         for (cv, title, r, c) in [
-            (self.c_maps, "Intensity maps — where each substance is", 0, 0),
-            (self.c_rel, "Reliability — per-pixel fit R²", 0, 1),
-            (self.c_val, "Validation — measured vs reconstructed", 1, 0),
-            (self.c_pie, "Composition (overall)", 1, 1),
+            (self.c_rgb, "Intensity map (RGB) — substances merged, NNLS", 0, 0),
+            (self.c_mcr, "MCR-ALS — refined-spectra composite", 0, 1),
+            (self.c_pie, "Per-pixel ratio — pie per pixel, background grey", 1, 0),
+            (self.c_comp, "Composition (overall)", 1, 1),
         ]:
             card, lay = _card(title); lay.addWidget(cv)
             grid.addWidget(card, r, c)
         grid.setRowStretch(0, 1); grid.setRowStretch(1, 1)
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
         root.addLayout(grid, 1)
-        for cv, m in [(self.c_maps, "Load a test map, then Unmix"),
-                      (self.c_rel, "Reliability appears here"),
-                      (self.c_val, "Validation appears here"),
-                      (self.c_pie, "Composition appears here")]:
+        for cv, m in [(self.c_rgb, "Load a test map, then Unmix"),
+                      (self.c_mcr, "MCR-ALS composite appears here"),
+                      (self.c_pie, "Per-pixel pie map appears here"),
+                      (self.c_comp, "Composition appears here")]:
             cv.placeholder(m)
+
+        self.readout = QLabel(""); self.readout.setObjectName("sub")
+        self.readout.setWordWrap(True); self.readout.setTextFormat(Qt.TextFormat.RichText)
+        root.addWidget(self.readout)
 
     def _short(self, p):
         return "refs: " + ("…" + p[-38:] if len(p) > 38 else p)
@@ -147,10 +146,10 @@ class RealDataPage(QWidget):
         if not self.test:
             self.status.setText("load a test map first")
             self.status.setStyleSheet(f"color:{RED};"); return
-        cfg = load_preprocess(self.data_dir)              # preprocessing set in Samples
-        params = dict(data_dir=self.data_dir, test_path=self.test,
-                      method=self.cmb_method.currentData(),
-                      baseline=cfg["baseline"], trim=cfg["trim"])
+        cfg = load_preprocess(self.data_dir)
+        params = dict(data_dir=self.data_dir, test_path=self.test, method="nnls+mcr",
+                      baseline=cfg["baseline"], trim=cfg["trim"],
+                      min_frac=self.thr.value())
         self.btn.setEnabled(False); self.btn.setText("Unmixing…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
         self._thread = QThread(); self._worker = RealWorker(params)
@@ -172,69 +171,100 @@ class RealDataPage(QWidget):
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
 
+    # ---- helpers ----
+    def _nb_colors(self, r):
+        """One distinct colour per non-background substance."""
+        return [SERIES[i % len(SERIES)] for i in range(len(r.nonbg))]
+
     def _apply(self, r):
         self._res = r
         self.btn.setEnabled(True); self.btn.setText("Unmix")
-        self.status.setText(f"done — {r.method.upper()}")
-        self.status.setStyleSheet(f"color:{MUTE};")
-        thr = self.thr.value()
-        n_det = int(np.sum(r.comp_frac >= thr))
+        self.status.setText("done"); self.status.setStyleSheet(f"color:{MUTE};")
+        nb = [r.comps[i] for i in r.nonbg]
+        n_det = int(np.sum(r.mean_ratio >= self.thr.value()))
         self.k_dom.set(r.dominant, TEAL)
         self.k_n.set(str(n_det), AMBER)
-        self.k_r2.set(f"{r.mean_r2:.2f}", BLUE)
+        self.k_hit.set(f"{r.hit_frac:.0%}", BLUE)
         self.k_px.set(f"{r.n_pixels:,}", PURPLE)
-        self._plot_maps(r); self._plot_rel(r); self._plot_val(r); self._plot_pie(r)
+        self._plot_rgb(self.c_rgb, r, r.A, "NNLS")
+        if r.A_mcr is not None:
+            self._plot_rgb(self.c_mcr, r, r.A_mcr, "MCR-ALS")
+        else:
+            self.c_mcr.placeholder("MCR-ALS not computed")
+        self._plot_pies(r); self._plot_comp(r)
+        ratio = "  :  ".join(f"{nm} {r.mean_ratio[i] * 100:.0f}"
+                             for i, nm in enumerate(nb))
+        self.readout.setText(
+            f"<b>hit:</b> {r.hit_frac:.0%} of pixels are a substance (rest background)"
+            f" &nbsp;·&nbsp; <b>mean ratio</b> (over hit pixels): {ratio}"
+            f" &nbsp;·&nbsp; <b>dominant:</b> {r.dominant}"
+            f"<br><span style='color:{FAINT}'>load a dilution-series calibration "
+            "(Quantify) to also read approximate concentration — coming from the "
+            "same references.</span>")
 
     # ---- plots ----
-    def _plot_maps(self, r):
-        self.c_maps.fig.clear()
-        K = len(r.comps)
+    def _plot_rgb(self, canvas, r, A_source, tag):
+        ax = canvas.new_ax()
+        cols = np.array([to_rgb(c) for c in self._nb_colors(r)])
+        Anb = A_source[:, r.nonbg]
+        scale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
+        rgb = np.clip((Anb / scale) @ cols, 0.0, 1.0)     # merge substances by colour
         x, y = r.coords[:, 0], r.coords[:, 1]
-        for k in range(K):
-            ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, K, k + 1))
-            a = r.A[:, k]
-            vmax = float(np.quantile(a, 0.99)) if a.size else 1.0
-            ax.scatter(x, y, c=a, cmap=CM_CMAP, marker="s", s=14,
-                       vmin=0, vmax=vmax if vmax > 0 else 1.0, edgecolors="none")
-            ax.set_title(r.comps[k], fontsize=8, color=SERIES[k % len(SERIES)])
-            ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
-        self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
-
-    def _plot_rel(self, r):
-        ax = self.c_rel.new_ax()
-        x, y = r.coords[:, 0], r.coords[:, 1]
-        sc = ax.scatter(x, y, c=r.reliab, cmap=CM_CMAP, marker="s", s=16,
-                        vmin=0, vmax=1, edgecolors="none")
-        self.c_rel.fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
+        ax.scatter(x, y, c=rgb, marker="s", s=16, edgecolors="none")
+        ax.set_facecolor("#0f141b")                        # dark = background/no signal
+        ax.legend(handles=[Patch(facecolor=self._nb_colors(r)[i], label=r.comps[j])
+                           for i, j in enumerate(r.nonbg)],
+                  fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=2, loc="upper right")
         ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
-        ax.set_title(f"mean R² {r.mean_r2:.2f}  ·  mean SAM {np.mean(r.sam):.1f}°",
-                     fontsize=8, color=INK)
-        self.c_rel.fig.tight_layout(); self.c_rel.draw_idle()
+        ax.set_title(tag, fontsize=8, color=INK)
+        canvas.fig.tight_layout(); canvas.draw_idle()
 
-    def _plot_val(self, r):
-        ax = self.c_val.new_ax()
-        axis = r.wn if r.wn is not None else np.arange(r.meas_mean.shape[0])
-        ax.plot(axis, r.meas_mean, lw=1.4, color=INK, label="measured")
-        ax.plot(axis, r.recon_mean, lw=1.2, color=TEAL, ls="--", label="reconstructed")
-        ax.fill_between(axis, r.meas_mean - r.recon_mean, color=CORAL, alpha=0.25,
-                        label="residual")
-        ax.set_xlabel("wavenumber (cm⁻¹)"); ax.set_yticks([])
-        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=3)
-        self.c_val.fig.tight_layout(); self.c_val.draw_idle()
-
-    def _plot_pie(self, r):
+    def _plot_pies(self, r):
         ax = self.c_pie.new_ax()
-        thr = self.thr.value()
-        keep = [i for i in range(len(r.comps)) if r.comp_frac[i] >= thr]
+        cols = self._nb_colors(r)
+        x, y = r.coords[:, 0], r.coords[:, 1]
+        # grid spacing → glyph radius
+        ux = np.unique(x); rad = (np.median(np.diff(ux)) * 0.46) if len(ux) > 1 else 0.46
+        if r.n_pixels > 2000:                              # too many pies → dominant square
+            dom = r.ratio_nb.argmax(axis=1)
+            fc = [cols[dom[i]] if r.hit[i] else BG_GREY for i in range(r.n_pixels)]
+            ax.scatter(x, y, c=fc, marker="s", s=14, edgecolors="none")
+        else:
+            for i in range(r.n_pixels):
+                if not r.hit[i]:
+                    ax.add_patch(Wedge((x[i], y[i]), rad, 0, 360, facecolor=BG_GREY,
+                                       edgecolor="none"))
+                    continue
+                a0 = 90.0
+                for k, frac in enumerate(r.ratio_nb[i]):
+                    if frac <= 0.002:
+                        continue
+                    a1 = a0 - frac * 360.0
+                    ax.add_patch(Wedge((x[i], y[i]), rad, a1, a0,
+                                       facecolor=cols[k], edgecolor="none"))
+                    a0 = a1
+        ax.set_xlim(x.min() - 1, x.max() + 1); ax.set_ylim(y.max() + 1, y.min() - 1)
+        ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
+        handles = [Patch(facecolor=cols[i], label=r.comps[j])
+                   for i, j in enumerate(r.nonbg)] + \
+                  [Patch(facecolor=BG_GREY, label="background")]
+        ax.legend(handles=handles, fontsize=7, framealpha=0.0, labelcolor=MUTE,
+                  ncol=2, loc="upper right")
+        self.c_pie.fig.tight_layout(); self.c_pie.draw_idle()
+
+    def _plot_comp(self, r):
+        ax = self.c_comp.new_ax()
+        cols = self._nb_colors(r)
+        nb = [r.comps[i] for i in r.nonbg]
+        keep = [i for i in range(len(nb)) if r.mean_ratio[i] >= 0.01]
         if not keep:
-            keep = [int(r.comp_frac.argmax())]
-        vals = [r.comp_frac[i] for i in keep]
-        labels = [r.comps[i] for i in keep]
-        cols = [SERIES[i % len(SERIES)] for i in keep]
-        ax.pie(vals, labels=labels, colors=cols, autopct="%1.0f%%",
+            keep = [int(r.mean_ratio.argmax())]
+        ax.pie([r.mean_ratio[i] for i in keep], labels=[nb[i] for i in keep],
+               colors=[cols[i] for i in keep], autopct="%1.0f%%",
                textprops={"fontsize": 8, "color": INK})
         ax.set_aspect("equal")
-        self.c_pie.fig.tight_layout(); self.c_pie.draw_idle()
+        ax.set_title(f"hit {r.hit_frac:.0%}", fontsize=8, color=INK)
+        self.c_comp.fig.tight_layout(); self.c_comp.draw_idle()
 
     # ---- export ----
     def _export(self):
@@ -244,19 +274,21 @@ class RealDataPage(QWidget):
         d = QFileDialog.getExistingDirectory(self, "Export folder")
         if not d:
             return
-        r = self._res
+        r = self._res; nb = [r.comps[i] for i in r.nonbg]
         write_csv(os.path.join(d, "composition.csv"),
-                  ["substance", "fraction"],
-                  [[c, f"{r.comp_frac[i]:.4f}"] for i, c in enumerate(r.comps)])
-        head = ["x", "y"] + [f"A_{c}" for c in r.comps] + ["reliability_r2", "sam_deg"]
-        rows = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}"]
+                  ["substance", "mean_ratio"],
+                  [[nm, f"{r.mean_ratio[i]:.4f}"] for i, nm in enumerate(nb)])
+        head = (["x", "y", "hit"] + [f"ratio_{nm}" for nm in nb]
+                + [f"A_{c}" for c in r.comps] + ["reliability_r2", "sam_deg"])
+        rows = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}", int(r.hit[i])]
+                + [f"{r.ratio_nb[i, k]:.4f}" for k in range(len(nb))]
                 + [f"{r.A[i, k]:.5f}" for k in range(len(r.comps))]
                 + [f"{r.reliab[i]:.4f}", f"{r.sam[i]:.3f}"]
                 for i in range(r.n_pixels)]
         write_csv(os.path.join(d, "per_pixel.csv"), head, rows)
-        n = _save_figs([("real_intensity_maps", self.c_maps),
-                        ("real_reliability", self.c_rel),
-                        ("real_validation", self.c_val),
-                        ("real_composition_pie", self.c_pie)], d)
+        n = _save_figs([("real_intensity_rgb", self.c_rgb),
+                        ("real_mcr_als", self.c_mcr),
+                        ("real_pixel_pies", self.c_pie),
+                        ("real_composition", self.c_comp)], d)
         self.status.setText(f"exported 2 CSV + {n} PNG → {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
