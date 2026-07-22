@@ -52,6 +52,8 @@ class TrainResult:
     split: str = "spatial"           # "spatial" (honest) or "random" (leaky)
     band_f: np.ndarray = None        # per-wavenumber ANOVA F (class discriminability)
     acc_std: float = 0.0             # cross-fold accuracy SD (batch-CV only)
+    vip: np.ndarray = None           # per-wavenumber PLS-DA VIP (only for the PLS backend)
+    model: object = None             # the fitted estimator (for saving / reuse)
 
 
 # --------------------------------------------------------------------------
@@ -187,7 +189,7 @@ def _train_rf(Xtr, ytr, Xte, yte, K, n_estimators=300, seed=0, progress=None):
     yp = rf.predict(Xte)
     cm = confusion_matrix(yte, yp, labels=range(K))
     acc = float(np.mean(yp == yte))
-    return cm, acc, np.array(xs, float), np.array(ys, float), "OOB error", "trees"
+    return cm, acc, np.array(xs, float), np.array(ys, float), "OOB error", "trees", rf
 
 
 def _train_resnet(Xtr, ytr, Xte, yte, K, epochs=25, batch_size=128, lr=1e-3,
@@ -228,7 +230,48 @@ def _train_resnet(Xtr, ytr, Xte, yte, K, epochs=25, batch_size=128, lr=1e-3,
     cm = confusion_matrix(yte, yp, labels=range(K))
     acc = float(np.mean(yp == yte))
     return (cm, acc, np.array(xs, float), np.array(ys, float),
-            "training loss (cross-entropy)", "epoch")
+            "training loss (cross-entropy)", "epoch", net)
+
+
+class _PLSDA:
+    """PLS-DA classifier — PLS regression onto one-hot class targets, predict =
+    arg-max column. Keeps the fitted PLS so VIP scores can be read off it. This is
+    the standard chemometrics discriminant model; VIP > 1 marks important bands."""
+
+    def __init__(self, n_components=10, seed=0):
+        self.n_components = n_components
+
+    def fit(self, X, y):
+        from sklearn.cross_decomposition import PLSRegression
+        X = np.asarray(X, float)
+        self.classes_ = np.unique(y)
+        Y = np.zeros((len(y), len(self.classes_)))
+        for k, c in enumerate(self.classes_):
+            Y[np.asarray(y) == c, k] = 1.0
+        nc = min(self.n_components, X.shape[1], max(1, X.shape[0] - 1))
+        self.pls = PLSRegression(n_components=max(1, nc)).fit(X, Y)
+        return self
+
+    def predict(self, X):
+        pred = self.pls.predict(np.asarray(X, float))
+        return self.classes_[pred.argmax(1)]
+
+
+def _vip(pls):
+    """Variable Importance in Projection for a fitted sklearn PLSRegression.
+    VIP_j = sqrt( p · Σ_a s_a (w_ja/‖w_a‖)² / Σ_a s_a ),  s_a = Y-variance of comp a."""
+    t = np.asarray(pls.x_scores_)                          # (n, A)
+    w = np.asarray(pls.x_weights_)                         # (p, A)
+    q = np.asarray(pls.y_loadings_)                        # (m, A)
+    p = w.shape[0]
+    ssy = (q ** 2).sum(axis=0) * (t ** 2).sum(axis=0)      # (A,) variance explained in Y
+    total = float(ssy.sum())
+    if total <= 0:
+        return np.zeros(p)
+    wnorm = w / np.where(np.linalg.norm(w, axis=0, keepdims=True) > 0,
+                         np.linalg.norm(w, axis=0, keepdims=True), 1.0)
+    vip = np.sqrt(p * (wnorm ** 2 @ ssy) / total)
+    return np.nan_to_num(vip, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def _model_factory(algo, seed):
@@ -245,6 +288,8 @@ def _model_factory(algo, seed):
     if algo == "gbm":
         from sklearn.ensemble import HistGradientBoostingClassifier
         return lambda: HistGradientBoostingClassifier(random_state=seed)
+    if algo == "pls":
+        return lambda: _PLSDA(seed=seed)
     raise ValueError(f"unknown algorithm: {algo}")
 
 
@@ -268,7 +313,7 @@ def _train_generic(make_model, Xtr, ytr, Xte, yte, K, seed=0, progress=None):
     cm = confusion_matrix(yte, yp, labels=range(K))
     acc = float(np.mean(yp == yte))
     return (cm, acc, np.array(xs, float), np.array(ys, float),
-            "test error", "training-set size")
+            "test error", "training-set size", mdl)
 
 
 # --------------------------------------------------------------------------
@@ -359,6 +404,7 @@ def _train_batch_cv(data_dir, backend, epochs, n_estimators, seed,
     from sklearn.feature_selection import f_classif
     F, _p = f_classif(Xall, yall)
     band_f = np.nan_to_num(np.asarray(F, float), nan=0.0, posinf=0.0, neginf=0.0)
+    vip = _vip(_PLSDA(seed=seed).fit(Xall, yall).pls) if backend == "pls" else None
     rng = np.random.default_rng(seed)
     sel = np.concatenate([
         rng.choice(np.where(yall == i)[0],
@@ -373,7 +419,7 @@ def _train_batch_cv(data_dir, backend, epochs, n_estimators, seed,
         curve_x=np.array(folds, float), curve_y=np.array(fold_acc),
         curve_label="fold test accuracy", curve_xlabel="held-out batch",
         pca_emb=pca_emb, pca_lab=pca_lab, n_train=len(yall), n_test=int(cm.sum()),
-        wn=wn, split="batch-cv", band_f=band_f, acc_std=acc_std)
+        wn=wn, split="batch-cv", band_f=band_f, acc_std=acc_std, vip=vip)
 
 
 def _per_class_prf(cm, classes):
@@ -418,14 +464,14 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
     K = len(classes)
 
     if backend == "resnet":
-        cm, acc, cx, cy, ylab, xlab = _train_resnet(
+        cm, acc, cx, cy, ylab, xlab, model = _train_resnet(
             Xtr, ytr, Xte, yte, K, epochs=epochs, seed=seed, progress=progress)
     elif backend == "rf":
-        cm, acc, cx, cy, ylab, xlab = _train_rf(
+        cm, acc, cx, cy, ylab, xlab, model = _train_rf(
             Xtr, ytr, Xte, yte, K, n_estimators=n_estimators, seed=seed,
             progress=progress)
     else:
-        cm, acc, cx, cy, ylab, xlab = _train_generic(
+        cm, acc, cx, cy, ylab, xlab, model = _train_generic(
             _model_factory(backend, seed), Xtr, ytr, Xte, yte, K, seed=seed,
             progress=progress)
 
@@ -439,6 +485,9 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
     Xall = np.vstack([Xtr, Xte]); yall = np.concatenate([ytr, yte])
     F, _pval = f_classif(Xall, yall)
     band_f = np.nan_to_num(np.asarray(F, float), nan=0.0, posinf=0.0, neginf=0.0)
+
+    # PLS-DA also yields VIP scores (the chemometrics band-importance measure)
+    vip = _vip(model.pls) if (backend == "pls" and hasattr(model, "pls")) else None
 
     # PCA of the real per-pixel spectra (subsample per class for a clean plot)
     rng = np.random.default_rng(seed)
@@ -455,7 +504,8 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
         confusion=cm, acc=acc, macro_f1=macro_f1, per_component=per,
         curve_x=cx, curve_y=cy, curve_label=ylab, curve_xlabel=xlab,
         pca_emb=pca_emb, pca_lab=pca_lab,
-        n_train=len(ytr), n_test=len(yte), wn=wn, split=split, band_f=band_f)
+        n_train=len(ytr), n_test=len(yte), wn=wn, split=split, band_f=band_f,
+        vip=vip, model=model)
 
 
 if __name__ == "__main__":

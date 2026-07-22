@@ -1,6 +1,7 @@
 """page_model.py — Model tab: train a classifier on the reference maps."""
 from __future__ import annotations
 
+import os
 import re
 import sys
 import traceback
@@ -41,12 +42,14 @@ class TrainWorker(QObject):
 class ModelPage(QWidget):
     ALGOS = [("RandomForest", "rf"), ("ResNet1D (torch)", "resnet"),
              ("SVM (RBF)", "svm"), ("k-NN", "knn"),
-             ("Logistic Reg.", "logreg"), ("Gradient Boosting", "gbm")]
+             ("Logistic Reg.", "logreg"), ("Gradient Boosting", "gbm"),
+             ("PLS-DA (VIP)", "pls")]
 
     def __init__(self):
         super().__init__()
         self._thread = None
         self._res = None
+        self._train_params = None
         self.pest_dir = PEST_DEFAULT
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
@@ -133,7 +136,7 @@ class ModelPage(QWidget):
             lay.addWidget(cv)
             grid.addWidget(card, r, c)
         bcard, blay = _card("Discriminative bands — ANOVA F per wavenumber "
-                            "(which bands separate the substances)")
+                            "(or PLS-DA VIP when that backend is used)")
         blay.addWidget(self.c_bands); grid.addWidget(bcard, 2, 0, 1, 2)
         grid.setRowStretch(0, 1); grid.setRowStretch(1, 1); grid.setRowStretch(2, 1)
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
@@ -184,6 +187,7 @@ class ModelPage(QWidget):
         if not d:
             return
         r = self._res
+        # --- per-graph CSVs (each plot gets its underlying numbers) ---
         rows = [[nm, f"{v[0]:.4f}", f"{v[1]:.4f}", f"{v[2]:.4f}", v[3]]
                 for nm, v in r.per_component.items()]
         rows.append(["accuracy", f"{r.acc:.4f}", "", f"{r.macro_f1:.4f}", ""])
@@ -196,11 +200,50 @@ class ModelPage(QWidget):
         write_csv(os.path.join(d, "model_learning_curve.csv"),
                   [r.curve_xlabel, r.curve_label],
                   [[f"{x:g}", f"{y:.6f}"] for x, y in zip(r.curve_x, r.curve_y)])
+        write_csv(os.path.join(d, "model_pca.csv"),
+                  ["class", "PC1", "PC2"],
+                  [[r.classes[int(lab)], f"{e[0]:.6f}", f"{e[1]:.6f}"]
+                   for e, lab in zip(r.pca_emb, r.pca_lab)])
+        if r.wn is not None and r.band_f is not None:
+            has_vip = r.vip is not None and len(r.vip) == len(r.wn)
+            head = ["wavenumber", "anova_f"] + (["vip"] if has_vip else [])
+            brows = [[f"{r.wn[i]:.2f}", f"{r.band_f[i]:.6f}"]
+                     + ([f"{r.vip[i]:.6f}"] if has_vip else [])
+                     for i in range(len(r.wn))]
+            write_csv(os.path.join(d, "model_bands.csv"), head, brows)
+        # --- PNGs (one per plot) ---
         n = _save_figs([("model_learning_curve", self.c_curve),
                         ("model_confusion", self.c_cm),
                         ("model_pca", self.c_pca), ("model_prf", self.c_bar),
                         ("model_bands", self.c_bands)], d)
-        self.src.setText(f"exported CSV + {n} PNG → {os.path.basename(d)}")
+        # --- the fitted model itself, so it can be reused later ---
+        saved = self._save_model(d, r)
+        tail = f" + {saved}" if saved else ""
+        self.src.setText(f"exported CSV + {n} PNG{tail} → {os.path.basename(d)}")
+
+    def _save_model(self, d, r):
+        """Persist the fitted estimator (+ classes and preprocessing) so it can be
+        loaded and applied to new maps later. Returns the saved filename or ""."""
+        model = getattr(r, "model", None)
+        if model is None:                                 # e.g. batch-CV has no single model
+            return ""
+        bundle = dict(model=model, backend=r.backend, classes=list(r.classes),
+                      comps=list(r.comps), wn=r.wn,
+                      preprocessing=self._train_params)
+        try:
+            import joblib
+            joblib.dump(bundle, os.path.join(d, "unmixr_model.joblib"))
+            return "model(.joblib)"
+        except Exception:
+            try:                                          # torch fallback for ResNet
+                import torch
+                torch.save({"state_dict": model.state_dict(),
+                            "classes": list(r.classes)},
+                           os.path.join(d, "unmixr_model.pt"))
+                return "model(.pt)"
+            except Exception as exc:
+                print("model save failed:", exc, file=sys.stderr)
+                return ""
 
     # ---- training ----
     def _train(self):
@@ -216,6 +259,7 @@ class ModelPage(QWidget):
                       norm=self.cmb_norm.currentData(),
                       split=self.cmb_split.currentData(),
                       test_frac=self.sp_test.itemAt(1).widget().value() / 100.0)
+        self._train_params = dict(params)                 # remember for model export
         self.btn.setEnabled(False); self.btn.setText("Training…")
         self.c_curve.placeholder("Training…")
         self.pbar.setVisible(True); self.pbar.setRange(0, 0)   # busy until first step
@@ -276,7 +320,12 @@ class ModelPage(QWidget):
     def _plot_cm(self, res):
         ax = self.c_cm.new_ax()
         cm = res.confusion; names = res.classes
-        ax.imshow(cm, cmap=CM_CMAP, aspect="auto", vmin=0)
+        # row-normalise: colour + label by % of each true class, so unequal class
+        # sizes (e.g. a 1-batch class with far fewer test pixels) don't make the raw
+        # counts look arbitrary. The count is kept in parentheses below the %.
+        row = cm.sum(axis=1, keepdims=True)
+        frac = np.divide(cm, row, out=np.zeros(cm.shape, float), where=row > 0)
+        ax.imshow(frac, cmap=CM_CMAP, aspect="auto", vmin=0, vmax=1)
         ax.set_xticks(range(len(names))); ax.set_yticks(range(len(names)))
         ax.set_xticklabels(names, fontsize=7); ax.set_yticklabels(names, fontsize=7)
         ax.set_xlabel("predicted"); ax.set_ylabel("true")
@@ -284,12 +333,12 @@ class ModelPage(QWidget):
         ax.set_yticks(np.arange(-0.5, len(names)), minor=True)
         ax.grid(which="minor", color=PANEL, linewidth=1.5)
         ax.tick_params(which="minor", length=0)
-        thr = cm.max() / 2 if cm.max() else 0.5
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):
                 if cm[i, j]:
-                    ax.text(j, i, str(cm[i, j]), ha="center", va="center",
-                            color="#ffffff" if cm[i, j] > thr else INK, fontsize=8)
+                    ax.text(j, i, f"{frac[i, j] * 100:.0f}%\n({cm[i, j]})",
+                            ha="center", va="center", fontsize=7,
+                            color="#ffffff" if frac[i, j] > 0.5 else INK)
         self.c_cm.fig.tight_layout(); self.c_cm.draw_idle()
 
     def _plot_pca(self, res):
@@ -321,12 +370,18 @@ class ModelPage(QWidget):
 
     def _plot_bands(self, res):
         ax = self.c_bands.new_ax()
-        f = getattr(res, "band_f", None)
         wn = res.wn
+        # prefer PLS-DA VIP when present, else the always-computed ANOVA F
+        vip = getattr(res, "vip", None)
+        use_vip = vip is not None and wn is not None and len(vip) == len(wn)
+        f = vip if use_vip else getattr(res, "band_f", None)
         if f is None or wn is None or len(f) != len(wn):
             self.c_bands.placeholder("no band statistics"); return
         ax.plot(wn, f, lw=1.0, color=PURPLE)
         ax.fill_between(wn, f, color=PURPLE, alpha=0.15)
+        if use_vip:                                       # VIP > 1 = important band
+            ax.axhline(1.0, color=MUTE, lw=0.8, ls="--")
+            ax.text(wn[-1], 1.0, " VIP=1", fontsize=6, color=MUTE, va="bottom", ha="right")
         # label the strongest discriminative bands with their cm⁻¹
         k = min(6, len(f))
         top = np.argsort(f)[-k:]
@@ -335,6 +390,7 @@ class ModelPage(QWidget):
                         ha="center", va="bottom",
                         xytext=(0, 2), textcoords="offset points")
             ax.plot([wn[idx]], [f[idx]], "o", ms=3, color=CORAL)
-        ax.set_xlabel("wavenumber (cm⁻¹)"); ax.set_ylabel("ANOVA F")
+        ax.set_xlabel("wavenumber (cm⁻¹)")
+        ax.set_ylabel("PLS-DA VIP" if use_vip else "ANOVA F")
         ax.margins(y=0.15)
         self.c_bands.fig.tight_layout(); self.c_bands.draw_idle()
