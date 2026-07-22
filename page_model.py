@@ -57,10 +57,11 @@ class ModelPage(QWidget):
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Model training"); h1.setObjectName("h1")
-        sub = QLabel("Train on a set of reference SERS maps — one pure substance "
-                     "per map. Spatial split: the left half of each map trains, the "
-                     "right half tests. Learning curve · confusion matrix · "
-                     "per-class F1 · PCA.  (example data: DQ / THI / TBZ / BLK)")
+        sub = QLabel("Step 2 — train. Uses the train/test division and "
+                     "preprocessing you already set in Samples (split = manual). "
+                     "Pick an algorithm; read the learning curve, confusion matrix, "
+                     "per-class F1, PCA and discriminative bands. The other splits "
+                     "(spatial / random / batch-CV) are there for comparison only.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -87,11 +88,11 @@ class ModelPage(QWidget):
         # ---- controls: row 2 = split only (preprocessing comes from Samples) ----
         ctl2 = QHBoxLayout(); ctl2.setSpacing(10)
         ctl2.addLayout(self._combo_col("split", "cmb_split",
-                                       [("spatial (honest)", "spatial"),
+                                       [("manual (Samples train/test)", "manual"),
+                                        ("spatial (honest)", "spatial"),
                                         ("random (leaky)", "random"),
                                         ("batch (leave-1-out)", "batch"),
-                                        ("batch-CV (mean±SD)", "batch-cv"),
-                                        ("manual (Samples)", "manual")]))
+                                        ("batch-CV (mean±SD)", "batch-cv")]))
         self.sp_test = self._spin(QSpinBox(), 5, 90, 50, "test %", step=5)
         ctl2.addLayout(self.sp_test)
         self.prep_lbl = QLabel(""); self.prep_lbl.setObjectName("field")
@@ -324,7 +325,7 @@ class ModelPage(QWidget):
         # counts look arbitrary. The count is kept in parentheses below the %.
         row = cm.sum(axis=1, keepdims=True)
         frac = np.divide(cm, row, out=np.zeros(cm.shape, float), where=row > 0)
-        ax.imshow(frac, cmap=CM_CMAP, aspect="auto", vmin=0, vmax=1)
+        ax.imshow(frac, cmap=CM_CMAP, aspect="equal", vmin=0, vmax=1)
         ax.set_xticks(range(len(names))); ax.set_yticks(range(len(names)))
         ax.set_xticklabels(names, fontsize=7); ax.set_yticklabels(names, fontsize=7)
         ax.set_xlabel("predicted"); ax.set_ylabel("true")
