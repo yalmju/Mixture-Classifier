@@ -64,8 +64,6 @@ class PredictPage(QWidget):
         root.addLayout(head)
 
         ctl = QHBoxLayout(); ctl.setSpacing(10)
-        ref_b = QPushButton("Reference data…"); ref_b.setObjectName("ghost")
-        ref_b.clicked.connect(self._browse_ref)
         self.ref_lbl = QLabel(self._short(self.data_dir)); self.ref_lbl.setObjectName("field")
         samp_b = QPushButton("Load sample…"); samp_b.setObjectName("ghost")
         samp_b.clicked.connect(self._browse_sample)
@@ -82,7 +80,7 @@ class PredictPage(QWidget):
         tcol.addWidget(tl); tcol.addWidget(self.thr)
         self.btn = QPushButton("Predict"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
-        ctl.addWidget(ref_b); ctl.addWidget(self.ref_lbl)
+        ctl.addWidget(self.ref_lbl)
         ctl.addWidget(samp_b); ctl.addWidget(self.samp_lbl); ctl.addWidget(self.samp_x)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl, 1); ctl.addWidget(self.cal_x)
         ctl.addLayout(tcol); ctl.addWidget(self.btn)
@@ -116,7 +114,11 @@ class PredictPage(QWidget):
         root.addWidget(self.readout)
 
     def _short(self, p):
-        return "refs: " + ("…" + p[-38:] if len(p) > 38 else p)
+        return "refs (from Samples): " + ("…" + p[-34:] if len(p) > 34 else p)
+
+    def set_data_dir(self, path):
+        """Adopt the dataset folder chosen in Samples (single source of truth)."""
+        self.data_dir = path; self.ref_lbl.setText(self._short(path))
 
     def _clear_btn(self, on_click):
         """A small ✕ button that clears a loaded file (undo a wrong pick)."""
@@ -129,12 +131,6 @@ class PredictPage(QWidget):
         """Show a ✕ only when there is something to clear."""
         self.samp_x.setVisible(self.sample is not None)
         self.cal_x.setVisible(self.calib_path is not None)
-
-    def _browse_ref(self):
-        d = QFileDialog.getExistingDirectory(
-            self, "Reference data folder (your Samples)", self.data_dir)
-        if d:
-            self.data_dir = d; self.ref_lbl.setText(self._short(d))
 
     def _browse_sample(self):
         p, _ = QFileDialog.getOpenFileName(self, "Unknown sample map CSV", "",

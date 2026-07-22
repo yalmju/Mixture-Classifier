@@ -97,7 +97,12 @@ class MainWindow(QMainWindow):
     def select(self, key):
         for k, b in self._nav_btns.items():
             b.setChecked(k == key)
-        self.stack.setCurrentWidget(self.pages[key])
+        # the dataset folder is chosen once in Samples; downstream tabs adopt it
+        folder = getattr(self.pages["samples"], "data_dir", None)
+        page = self.pages[key]
+        if folder and hasattr(page, "set_data_dir"):
+            page.set_data_dir(folder)
+        self.stack.setCurrentWidget(page)
 
 
 def main():

@@ -65,8 +65,6 @@ class RealDataPage(QWidget):
         root.addLayout(head)
 
         ctl = QHBoxLayout(); ctl.setSpacing(8)
-        ref_b = QPushButton("Reference data…"); ref_b.setObjectName("ghost")
-        ref_b.clicked.connect(self._browse_ref)
         self.ref_lbl = QLabel(self._short(self.data_dir)); self.ref_lbl.setObjectName("field")
         test_b = QPushButton("Load test map…"); test_b.setObjectName("ghost")
         test_b.clicked.connect(self._browse_test)
@@ -83,7 +81,7 @@ class RealDataPage(QWidget):
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
-        ctl.addWidget(ref_b); ctl.addWidget(self.ref_lbl)
+        ctl.addWidget(self.ref_lbl)
         ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x)
         ctl.addLayout(tcol); ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
@@ -124,13 +122,11 @@ class RealDataPage(QWidget):
         root.addWidget(self.readout)
 
     def _short(self, p):
-        return "refs: " + ("…" + p[-38:] if len(p) > 38 else p)
+        return "refs (from Samples): " + ("…" + p[-34:] if len(p) > 34 else p)
 
-    def _browse_ref(self):
-        d = QFileDialog.getExistingDirectory(self, "Reference data folder (Samples)",
-                                             self.data_dir)
-        if d:
-            self.data_dir = d; self.ref_lbl.setText(self._short(d))
+    def set_data_dir(self, path):
+        """Adopt the dataset folder chosen in Samples (single source of truth)."""
+        self.data_dir = path; self.ref_lbl.setText(self._short(path))
 
     def _browse_test(self):
         p, _ = QFileDialog.getOpenFileName(self, "Test map CSV", "", "CSV (*.csv)")

@@ -55,6 +55,9 @@ class TrainResult:
     vip: np.ndarray = None           # per-wavenumber PLS-DA VIP (only for the PLS backend)
     model: object = None             # the fitted estimator (for saving / reuse)
     pca_var: np.ndarray = None       # (2,) PC1/PC2 explained-variance ratio
+    box_wn: np.ndarray = None        # (k,) wavenumbers of the top discriminative bands
+    box_vals: np.ndarray = None      # (n_sub, k) intensity at those bands (subsampled)
+    box_lab: np.ndarray = None       # (n_sub,) class index for each box row
 
 
 # --------------------------------------------------------------------------
@@ -131,12 +134,15 @@ def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
         return train
 
     rng = np.random.default_rng(seed)
+    n_maps = sum(len(m) for _c, m in groups); done = 0
     Xtr, ytr, Xte, yte, wn = [], [], [], [], None
     for i, (_cls, maps) in enumerate(groups):
-        if progress:
-            progress(f"loading & preprocessing '{_cls}'  ({i + 1}/{len(groups)})")
         feats = []
         for batch, path, role in maps:
+            done += 1
+            if progress:
+                progress(f"loading & preprocessing '{_cls}'  "
+                         f"(map {done}/{n_maps})")
             wn, X, coord = _feat_map(path, baseline, trim, deriv, norm)
             feats.append((batch, X, coord, role))
 
@@ -413,6 +419,8 @@ def _train_batch_cv(data_dir, backend, epochs, n_estimators, seed,
         for i in range(K)])
     _pca = PCA(n_components=2, random_state=seed).fit(Xall[sel])
     pca_emb = _pca.transform(Xall[sel]); pca_lab = yall[sel]
+    box_wn, box_vals, box_lab = _top_band_box(
+        Xall, yall, vip if vip is not None else band_f, wn, K, seed)
     comps = [c for c in classes if not is_blank(c)]
     return TrainResult(
         backend=backend, classes=classes, comps=comps, confusion=cm, acc=acc,
@@ -421,7 +429,25 @@ def _train_batch_cv(data_dir, backend, epochs, n_estimators, seed,
         curve_label="fold test accuracy", curve_xlabel="held-out batch",
         pca_emb=pca_emb, pca_lab=pca_lab, n_train=len(yall), n_test=int(cm.sum()),
         wn=wn, split="batch-cv", band_f=band_f, acc_std=acc_std, vip=vip,
-        pca_var=_pca.explained_variance_ratio_)
+        pca_var=_pca.explained_variance_ratio_,
+        box_wn=box_wn, box_vals=box_vals, box_lab=box_lab)
+
+
+def _top_band_box(Xall, yall, importance, wn, K, seed, k=6, per_class=150):
+    """For the k most discriminative bands (by ``importance``: VIP or ANOVA F),
+    collect a per-class subsample of the intensity at each band, so the UI can show
+    a box plot of how each substance's signal distributes at the best peaks.
+    Returns (box_wn (k,), box_vals (n_sub, k), box_lab (n_sub,))."""
+    if importance is None or wn is None or len(importance) != Xall.shape[1]:
+        return None, None, None
+    k = min(k, len(importance))
+    top = np.argsort(importance)[-k:][::-1]            # strongest first
+    rng = np.random.default_rng(seed)
+    sel = np.concatenate([
+        rng.choice(np.where(yall == i)[0],
+                   size=min(per_class, int((yall == i).sum())), replace=False)
+        for i in range(K) if (yall == i).any()])
+    return wn[top], Xall[sel][:, top], yall[sel]
 
 
 def _per_class_prf(cm, classes):
@@ -499,6 +525,8 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
         for i in range(K)])
     _pca = PCA(n_components=2, random_state=seed).fit(Xall[sel])
     pca_emb = _pca.transform(Xall[sel]); pca_lab = yall[sel]
+    box_wn, box_vals, box_lab = _top_band_box(
+        Xall, yall, vip if vip is not None else band_f, wn, K, seed)
 
     comps = [c for c in classes if not is_blank(c)]
     return TrainResult(
@@ -506,6 +534,7 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
         confusion=cm, acc=acc, macro_f1=macro_f1, per_component=per,
         curve_x=cx, curve_y=cy, curve_label=ylab, curve_xlabel=xlab,
         pca_emb=pca_emb, pca_lab=pca_lab, pca_var=_pca.explained_variance_ratio_,
+        box_wn=box_wn, box_vals=box_vals, box_lab=box_lab,
         n_train=len(ytr), n_test=len(yte), wn=wn, split=split, band_f=band_f,
         vip=vip, model=model)
 

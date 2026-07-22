@@ -7,6 +7,7 @@ import sys
 import traceback
 
 import numpy as np
+from matplotlib.patches import Patch
 
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -76,13 +77,11 @@ class ModelPage(QWidget):
             ctl.addLayout(w)
         self.src = QLabel(self._short(self.pest_dir)); self.src.setObjectName("field")
         ctl.addWidget(self.src, 1)
-        browse = QPushButton("Training data…"); browse.setObjectName("ghost")
-        browse.clicked.connect(self._browse)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Train + evaluate"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._train)
-        ctl.addWidget(browse); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
+        ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
         # ---- controls: row 2 = split only (preprocessing comes from Samples) ----
@@ -118,6 +117,7 @@ class ModelPage(QWidget):
         grid = QGridLayout(); grid.setSpacing(12)
         self.c_curve = Canvas(); self.c_cm = Canvas()
         self.c_pca = Canvas(); self.c_bar = Canvas(); self.c_bands = Canvas()
+        self.c_box = Canvas()
         for (cv, title, r, c) in [
             (self.c_curve, "Learning curve", 0, 0),
             (self.c_cm, "Confusion matrix (held-out test)", 0, 1),
@@ -130,7 +130,11 @@ class ModelPage(QWidget):
         bcard, blay = _card("Discriminative bands — ANOVA F per wavenumber "
                             "(or PLS-DA VIP when that backend is used)")
         blay.addWidget(self.c_bands); grid.addWidget(bcard, 2, 0, 1, 2)
-        grid.setRowStretch(0, 1); grid.setRowStretch(1, 1); grid.setRowStretch(2, 1)
+        xcard, xlay = _card("Top bands — intensity by class (box plot: which "
+                            "substance is high at each discriminative peak)")
+        xlay.addWidget(self.c_box); grid.addWidget(xcard, 3, 0, 1, 2)
+        for rr in (0, 1, 2, 3):
+            grid.setRowStretch(rr, 1)
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
         root.addLayout(grid, 1)
 
@@ -138,12 +142,17 @@ class ModelPage(QWidget):
                         (self.c_cm, "Train to compute confusion matrix"),
                         (self.c_pca, "Train to compute PCA"),
                         (self.c_bar, "Train to compute per-class F1"),
-                        (self.c_bands, "Train to rank discriminative bands (ANOVA F)")]:
+                        (self.c_bands, "Train to rank discriminative bands (ANOVA F)"),
+                        (self.c_box, "Train to see intensity-by-class at the top bands")]:
             cv.placeholder(msg)
 
     def _short(self, p):
         tail = "…" + p[-40:] if len(p) > 40 else p
-        return f"data: {tail}"
+        return f"dataset (from Samples): {tail}"
+
+    def set_data_dir(self, path):
+        """Adopt the dataset folder chosen in Samples (single source of truth)."""
+        self.pest_dir = path; self.src.setText(self._short(path)); self._refresh_prep()
 
     def _spin(self, spin, lo, hi, val, label, step=1):
         col = QVBoxLayout(); col.setSpacing(2)
@@ -163,14 +172,6 @@ class ModelPage(QWidget):
         setattr(self, attr, cb)
         col.addWidget(lb); col.addWidget(cb)
         return col
-
-    def _browse(self):
-        d = QFileDialog.getExistingDirectory(
-            self, "Training data — folder with your reference maps "
-            "(the data root or its Reference/ subfolder)",
-            self.pest_dir)
-        if d:
-            self.pest_dir = d; self.src.setText(self._short(d)); self._refresh_prep()
 
     def _refresh_prep(self):
         """Show the preprocessing that Samples saved for this folder (read-only)."""
@@ -213,11 +214,22 @@ class ModelPage(QWidget):
                      + ([f"{r.vip[i]:.6f}"] if has_vip else [])
                      for i in range(len(r.wn))]
             write_csv(os.path.join(d, "model_bands.csv"), head, brows)
+        # top-band intensity-by-class (box-plot data): per band, per class stats
+        if r.box_wn is not None and r.box_vals is not None:
+            brows = []
+            for j, w in enumerate(r.box_wn):
+                for c, nm in enumerate(r.classes):
+                    v = r.box_vals[r.box_lab == c, j]
+                    if len(v):
+                        brows.append([f"{w:.2f}", nm, f"{v.mean():.6f}",
+                                      f"{np.median(v):.6f}", f"{v.std():.6f}"])
+            write_csv(os.path.join(d, "model_top_bands_by_class.csv"),
+                      ["wavenumber", "class", "mean", "median", "std"], brows)
         # --- PNGs (one per plot) ---
         n = _save_figs([("model_learning_curve", self.c_curve),
                         ("model_confusion", self.c_cm),
                         ("model_pca", self.c_pca), ("model_prf", self.c_bar),
-                        ("model_bands", self.c_bands)], d)
+                        ("model_bands", self.c_bands), ("model_top_bands_box", self.c_box)], d)
         # --- the fitted model itself, so it can be reused later ---
         saved = self._save_model(d, r)
         tail = f" + {saved}" if saved else ""
@@ -307,6 +319,7 @@ class ModelPage(QWidget):
         self.k_te.set(f"{res.n_test:,}", PURPLE)
         self._plot_curve(res); self._plot_cm(res)
         self._plot_pca(res); self._plot_bar(res); self._plot_bands(res)
+        self._plot_box(res)
 
     # ---- plots ----
     def _plot_curve(self, res):
@@ -399,3 +412,37 @@ class ModelPage(QWidget):
         ax.set_ylabel("PLS-DA VIP" if use_vip else "ANOVA F")
         ax.margins(y=0.15)
         self.c_bands.fig.tight_layout(); self.c_bands.draw_idle()
+
+    def _plot_box(self, res):
+        """Grouped box plot: for each top discriminative band, the intensity
+        distribution of every class — so you can read off which substance is high
+        at each good peak (and thus why the band discriminates)."""
+        ax = self.c_box.new_ax()
+        wn = getattr(res, "box_wn", None)
+        vals = getattr(res, "box_vals", None)
+        lab = getattr(res, "box_lab", None)
+        if wn is None or vals is None or lab is None or len(wn) == 0:
+            self.c_box.placeholder("no band statistics"); return
+        classes = res.classes; nC = len(classes)
+        k = len(wn); width = 0.8 / nC
+        for c in range(nC):
+            data = [vals[lab == c, j] for j in range(k)]
+            data = [d if len(d) else [0.0] for d in data]
+            pos = np.arange(k) + (c - (nC - 1) / 2) * width
+            col = SERIES[c % len(SERIES)]
+            bp = ax.boxplot(data, positions=pos, widths=width * 0.9,
+                            patch_artist=True, showfliers=False,
+                            medianprops=dict(color=INK, linewidth=0.8))
+            for box in bp["boxes"]:
+                box.set(facecolor=col, edgecolor=col, alpha=0.65)
+            for w in ("whiskers", "caps"):
+                for ln in bp[w]:
+                    ln.set(color=col, linewidth=0.8)
+        ax.set_xticks(np.arange(k))
+        ax.set_xticklabels([f"{w:.0f}" for w in wn], fontsize=8)
+        ax.set_xlabel("top discriminative band (cm⁻¹)")
+        ax.set_ylabel("intensity")
+        ax.legend(handles=[Patch(facecolor=SERIES[c % len(SERIES)], label=classes[c])
+                           for c in range(nC)],
+                  fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=min(nC, 4))
+        self.c_box.fig.tight_layout(); self.c_box.draw_idle()

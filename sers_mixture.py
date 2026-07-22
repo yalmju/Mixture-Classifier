@@ -42,6 +42,22 @@ from sklearn.multiclass import OneVsRestClassifier
 # --------------------------------------------------------------------------
 # 0. Preprocessing
 # --------------------------------------------------------------------------
+_ALS_D_CACHE = {}
+
+
+def _als_penalty(L, lam):
+    """The smoothness penalty λ·Dᵀ·D for length L — the same for every spectrum of
+    that length, so it is built once and cached (its construction, not the solve,
+    is the real per-pixel cost on large maps)."""
+    key = (L, lam)
+    D = _ALS_D_CACHE.get(key)
+    if D is None:
+        d = diags([1.0, -2.0, 1.0], [0, -1, -2], shape=(L, L - 2), dtype=float)
+        D = csc_matrix(lam * (d @ d.T))
+        _ALS_D_CACHE[key] = D
+    return D
+
+
 def als_baseline(y: np.ndarray, lam: float = 1e5, p: float = 0.01,
                  n_iter: int = 10) -> np.ndarray:
     """Asymmetric Least Squares baseline (Eilers & Boelens).
@@ -50,13 +66,11 @@ def als_baseline(y: np.ndarray, lam: float = 1e5, p: float = 0.01,
     ``lam`` controls smoothness, ``p`` the asymmetry (0<p<1).
     """
     L = len(y)
-    D = diags([1.0, -2.0, 1.0], [0, -1, -2], shape=(L, L - 2), dtype=float)
-    D = lam * (D @ D.T)
+    D = _als_penalty(L, lam)
     w = np.ones(L)
     z = y
     for _ in range(n_iter):
-        W = diags(w, 0, dtype=float)
-        z = spsolve(csc_matrix(W + D), w * y)
+        z = spsolve(csc_matrix(diags(w, 0, dtype=float) + D), w * y)
         w = p * (y > z) + (1 - p) * (y < z)
     return z
 
