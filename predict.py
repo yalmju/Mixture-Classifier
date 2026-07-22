@@ -32,6 +32,7 @@ class PredictResult:
     mean_spectrum: np.ndarray   # preprocessed unknown mean spectrum
     templates: np.ndarray       # (K, n_feat) preprocessed reference templates
     coords: np.ndarray          # (n_pixels, 2) pixel X/Y
+    pp: np.ndarray              # (n_pixels, K) per-pixel NNLS proportions
     pp_dominant: np.ndarray     # (n_pixels,) dominant component index per pixel
     n_pixels: int
 
@@ -95,7 +96,7 @@ def predict_sample(data_dir, sample_path, threshold=0.30, baseline=True,
         ratio={c: float(ratio_pp[i]) for i, c in enumerate(comps)},
         ratio_mean={c: float(ratio_mean_v[i]) for i, c in enumerate(comps)},
         detected=detected, wn=wn, mean_spectrum=mean_f, templates=pures,
-        coords=coord, pp_dominant=pp_dominant, n_pixels=len(cube_u))
+        coords=coord, pp=pp, pp_dominant=pp_dominant, n_pixels=len(cube_u))
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ import os
 import traceback
 
 import numpy as np
+from matplotlib.colors import to_rgb
+from matplotlib.patches import Patch
 
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -40,6 +42,8 @@ class PredictPage(QWidget):
         super().__init__()
         self._thread = None
         self._res = None
+        self._map_ax = None        # the RGB-map axes (for click hit-testing)
+        self._sel = None           # index of the clicked pixel, if any
         self.data_dir = PEST_DEFAULT
         self.sample = None
         root = QVBoxLayout(self)
@@ -87,7 +91,7 @@ class PredictPage(QWidget):
         grid = QGridLayout(); grid.setSpacing(12)
         self.c_ratio = Canvas(); self.c_map = Canvas(); self.c_spec = Canvas()
         for cv, title, c in [(self.c_ratio, "Composition ratio (per-pixel NNLS)", 0),
-                             (self.c_map, "Per-pixel dominant component", 1)]:
+                             (self.c_map, "RGB composite — click a pixel for its ratio", 1)]:
             card, lay = _card(title); lay.addWidget(cv)
             grid.addWidget(card, 0, c)
         card, lay = _card("Sample vs reference templates")
@@ -97,6 +101,7 @@ class PredictPage(QWidget):
         root.addLayout(grid, 1)
         for cv in (self.c_ratio, self.c_map, self.c_spec):
             cv.placeholder("Load a sample, then Predict")
+        self.c_map.mpl_connect("button_press_event", self._on_click)
 
         self.readout = QLabel(""); self.readout.setObjectName("sub")
         self.readout.setWordWrap(True)
@@ -138,7 +143,7 @@ class PredictPage(QWidget):
         print(tb, file=sys.stderr)
 
     def _apply(self, res):
-        self._res = res
+        self._res = res; self._sel = None
         self.btn.setEnabled(True); self.btn.setText("Predict")
         ratio = res.ratio
         if ratio:
@@ -154,33 +159,57 @@ class PredictPage(QWidget):
                              f"&nbsp;&nbsp; <b>per-pixel ratio:</b> {parts}")
         self.readout.setTextFormat(Qt.TextFormat.RichText)
 
-    def _plot_ratio(self, res):
+    def _plot_ratio(self, res, pp_vec=None, title=None):
         ax = self.c_ratio.new_ax()
         names = res.comps
-        vals = [res.ratio.get(n, 0.0) for n in names]
-        mvals = [res.ratio_mean.get(n, 0.0) for n in names]
+        vals = list(pp_vec) if pp_vec is not None else [res.ratio.get(n, 0.0) for n in names]
         x = np.arange(len(names))
         ax.bar(x, vals, color=[SERIES[i % len(SERIES)] for i in range(len(names))],
-               label="per-pixel")
-        ax.scatter(x, mvals, color=INK, s=28, zorder=3, label="mean-spec")
+               label="this pixel" if pp_vec is not None else "map average")
+        if pp_vec is None:                                # overlay mean-spec ratio
+            mvals = [res.ratio_mean.get(n, 0.0) for n in names]
+            ax.scatter(x, mvals, color=INK, s=28, zorder=3, label="mean-spec")
         for xi, v in zip(x, vals):
             ax.text(xi, v + 0.02, f"{v:.0%}", ha="center", fontsize=9, color=INK)
         ax.set_xticks(x); ax.set_xticklabels(names, fontsize=9)
         ax.set_ylim(0, 1.1); ax.set_ylabel("proportion")
+        if title:
+            ax.set_title(title, fontsize=9, color=INK)
         ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE)
         self.c_ratio.fig.tight_layout(); self.c_ratio.draw_idle()
 
     def _plot_map(self, res):
-        ax = self.c_map.new_ax()
+        ax = self.c_map.new_ax(); self._map_ax = ax
+        cols = np.array([to_rgb(SERIES[i % len(SERIES)]) for i in range(len(res.comps))])
+        rgb = np.clip(res.pp @ cols, 0.0, 1.0)            # per-pixel convex colour blend
         x, y = res.coords[:, 0], res.coords[:, 1]
-        for i, nm in enumerate(res.comps):
-            m = res.pp_dominant == i
-            if m.any():
-                ax.scatter(x[m], y[m], s=16, color=SERIES[i % len(SERIES)],
-                           edgecolors="none", label=nm)
+        ax.scatter(x, y, c=rgb, marker="s", s=26, edgecolors="none")
+        if self._sel is not None:                         # ring the clicked pixel
+            ax.scatter([x[self._sel]], [y[self._sel]], s=110, facecolors="none",
+                       edgecolors=INK, linewidths=1.6, zorder=5)
+        ax.legend(handles=[Patch(facecolor=SERIES[i % len(SERIES)], label=nm)
+                           for i, nm in enumerate(res.comps)],
+                  fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=2, loc="upper right")
         ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
-        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=2)
         self.c_map.fig.tight_layout(); self.c_map.draw_idle()
+
+    # ---- interactive per-pixel readout ----
+    def _on_click(self, event):
+        r = self._res
+        if r is None or event.xdata is None or event.inaxes is not self._map_ax:
+            return
+        d = (r.coords[:, 0] - event.xdata) ** 2 + (r.coords[:, 1] - event.ydata) ** 2
+        self._show_pixel(int(d.argmin()))
+
+    def _show_pixel(self, i):
+        r = self._res; self._sel = i
+        vec = r.pp[i]; xp, yp = r.coords[i]
+        self._plot_ratio(r, pp_vec=vec, title=f"pixel @ ({xp:.0f}, {yp:.0f})")
+        self._plot_map(r)                                 # redraw with the highlight ring
+        parts = "  ·  ".join(f"{nm} {vec[j]:.0%}" for j, nm in enumerate(r.comps)
+                             if vec[j] > 0.005)
+        self.readout.setText(f"<b>pixel @ ({xp:.0f}, {yp:.0f}):</b>  {parts}")
+        self.readout.setTextFormat(Qt.TextFormat.RichText)
 
     def _plot_spec(self, res):
         ax = self.c_spec.new_ax()
