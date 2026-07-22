@@ -52,17 +52,21 @@ def _run_quant(n_components=3, seed=0, cal=None):
            else build_synthetic_lab(n_components=n_components, seed=seed))
     calib = calibrate(lab["dilutions"], lab["P"], lab["names"])
 
-    iso = []
+    iso, r2 = [], []
     for i in range(calib.n):
         C = calib.C_series[i]
         dense = np.geomspace(C.min(), C.max(), 60)
         fit = _langmuir_B(dense, calib.gA[i], calib.K[i])
         iso.append((C, calib.B_series[i], dense, fit))
+        B = np.asarray(calib.B_series[i], float)
+        pred = _langmuir_B(C, calib.gA[i], calib.K[i])
+        sst = float(np.sum((B - B.mean()) ** 2))
+        r2.append(1.0 - float(np.sum((B - pred) ** 2)) / sst if sst > 0 else 0.0)
 
     # single-compound calibration → fit the curve only (no competition / recovery)
     if len(lab["val_specs"]) == 0 or calib.n < 2:
         return {"names": calib.names, "K_true": lab["K_true"], "K_fit": calib.K,
-                "gA_fit": calib.gA, "iso": iso,
+                "gA_fit": calib.gA, "iso": iso, "r2": r2,
                 "parity": (np.array([]), np.array([]), np.array([], int)),
                 "log_err": float("nan"), "example": None,
                 "example_true": None, "selectivity": float("nan")}
@@ -80,7 +84,7 @@ def _run_quant(n_components=3, seed=0, cal=None):
                if q["competition"]["flipped"]), 0)
     return {
         "names": calib.names, "K_true": lab["K_true"], "K_fit": calib.K,
-        "gA_fit": calib.gA, "iso": iso,
+        "gA_fit": calib.gA, "iso": iso, "r2": r2,
         "parity": (np.array(true_flat), np.array(est_flat), np.array(col_flat, int)),
         "log_err": log_err, "example": quants[ex],
         "example_true": lab["val_true"][ex],
@@ -118,10 +122,11 @@ class QuantifyPage(QWidget):
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
 
         head = QVBoxLayout(); head.setSpacing(2)
-        h1 = QLabel("Quantify — ratio → M + competition"); h1.setObjectName("h1")
-        sub = QLabel("Calibrate each compound's Langmuir isotherm from a dilution "
-                     "series (synthetic, or load your own CSV) → recover absolute M "
-                     "and judge competitive adsorption.")
+        h1 = QLabel("Quantify — calibration curve"); h1.setObjectName("h1")
+        sub = QLabel("Load a dilution series (a folder of per-concentration map CSVs, "
+                     "or one calibration CSV) and draw the calibration curve — signal "
+                     "vs concentration with a Langmuir fit and R² per compound. With "
+                     "≥2 compounds it also reports competitive adsorption.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -150,37 +155,26 @@ class QuantifyPage(QWidget):
         root.addLayout(ctl)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
-        self.k_sel = Kpi("selectivity  K_max/K_min")
-        self.k_cov = Kpi("surface coverage Σθ")
-        self.k_flip = Kpi("competition")
-        self.k_err = Kpi("abs log₁₀ error")
-        for k in (self.k_sel, self.k_cov, self.k_flip, self.k_err):
+        self.k_ncmp = Kpi("compounds"); self.k_npts = Kpi("points / compound")
+        self.k_r2 = Kpi("mean fit R²"); self.k_range = Kpi("concentration range")
+        for k in (self.k_ncmp, self.k_npts, self.k_r2, self.k_range):
             kpis.addWidget(k)
         root.addLayout(kpis)
 
         grid = QGridLayout(); grid.setSpacing(12)
-        self.c_iso = Canvas(); self.c_par = Canvas(); self.c_comp = Canvas()
-        for (cv, title, r, c) in [
-            (self.c_iso, "Langmuir isotherm fits  (B vs concentration)", 0, 0),
-            (self.c_par, "Recovered vs true concentration  (M)", 0, 1),
-            (self.c_comp, "Surface coverage vs solution concentration", 1, 0),
-        ]:
-            card, lay = _card(title); lay.addWidget(cv)
-            grid.addWidget(card, r, c)
-        # text readout card (4th cell)
-        rcard, rlay = _card("Read-out  ·  example mixture")
-        self.readout = QLabel("Run to compute."); self.readout.setObjectName("sub")
+        self.c_iso = Canvas()
+        icard, ilay = _card("Calibration curve — signal (B) vs concentration + fit")
+        ilay.addWidget(self.c_iso); grid.addWidget(icard, 0, 0)
+        rcard, rlay = _card("Fit parameters + read-out")
+        self.readout = QLabel("Load a dilution series, then Calibrate.")
+        self.readout.setObjectName("sub")
         self.readout.setWordWrap(True); self.readout.setTextFormat(Qt.TextFormat.RichText)
         self.readout.setAlignment(Qt.AlignmentFlag.AlignTop)
         rlay.addWidget(self.readout); rlay.addStretch(1)
-        grid.addWidget(rcard, 1, 1)
-        grid.setRowStretch(0, 1); grid.setRowStretch(1, 1)
-        grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
+        grid.addWidget(rcard, 0, 1)
+        grid.setColumnStretch(0, 3); grid.setColumnStretch(1, 2); grid.setRowStretch(0, 1)
         root.addLayout(grid, 1)
-        for cv, m in [(self.c_iso, "Calibrate to fit isotherms"),
-                      (self.c_par, "Calibrate to check recovery"),
-                      (self.c_comp, "Calibrate to compare coverage vs concentration")]:
-            cv.placeholder(m)
+        self.c_iso.placeholder("Load a dilution series, then Calibrate")
 
     def _spin(self, spin, lo, hi, val, label):
         col = QVBoxLayout(); col.setSpacing(2)
@@ -268,9 +262,7 @@ class QuantifyPage(QWidget):
                     for i, nm in enumerate(r["names"])]
             write_csv(os.path.join(d, "quantify.csv"),
                       ["compound", "C_M", "ratio", "theta", "K_fit"], rows)
-        n = _save_figs([("quantify_isotherms", self.c_iso),
-                        ("quantify_parity", self.c_par),
-                        ("quantify_competition", self.c_comp)], d)
+        n = _save_figs([("calibration_curve", self.c_iso)], d)
         self.src.setText(f"exported CSV + {n} PNG → {os.path.basename(d)}")
         self.src.setStyleSheet("")
 
@@ -294,96 +286,57 @@ class QuantifyPage(QWidget):
     def _apply(self, res):
         self._res = res
         self.btn.setEnabled(True); self.btn.setText("Calibrate + quantify")
-        if res["example"] is None:                        # single compound: curve only
-            for k in (self.k_sel, self.k_cov, self.k_err):
-                k.set("—")
-            self.k_flip.set("1 compound", MUTE)
-            self._plot_iso(res)
-            self.c_par.placeholder("load a 2nd compound folder for recovery")
-            self.c_comp.placeholder("load a 2nd compound folder for competition")
-            fits = "  ·  ".join(
-                f"<b style='color:{SERIES[i % len(SERIES)]}'>{nm}</b> "
-                f"K={res['K_fit'][i]:.2e}" for i, nm in enumerate(res["names"]))
-            self.readout.setText(
-                f"<div style='color:{INK};font-size:13px'>Calibration curve fitted "
-                f"for {fits}.<br><span style='color:{FAINT}'>Load another compound's "
-                "concentration folder to add competition / recovery.</span></div>")
-            return
-        comp = res["example"]["competition"]
-        self.k_sel.set(f"{res['selectivity']:.1f}×", CORAL)
-        self.k_cov.set(f"{res['example']['theta_total']:.2f}", BLUE)
-        self.k_flip.set("flipped" if comp["flipped"] else "consistent",
-                        CORAL if comp["flipped"] else TEAL)
-        self.k_err.set(f"{res['log_err']:.2f}", PURPLE)
-        self._plot_iso(res); self._plot_parity(res)
-        self._plot_comp(res); self._readout(res)
+        names = res["names"]; r2 = res.get("r2", [])
+        npts = res["iso"][0][0].shape[0] if res["iso"] else 0
+        allC = (np.concatenate([iso[0] for iso in res["iso"]])
+                if res["iso"] else np.array([1.0]))
+        self.k_ncmp.set(str(len(names)), TEAL)
+        self.k_npts.set(str(npts), AMBER)
+        self.k_r2.set(f"{np.mean(r2):.3f}" if r2 else "—", BLUE)
+        self.k_range.set(f"{allC.min():.0e}–{allC.max():.0e} M", PURPLE)
+        self._plot_iso(res); self._readout(res)
 
     def _plot_iso(self, res):
         ax = self.c_iso.new_ax()
+        r2 = res.get("r2", [None] * len(res["names"]))
         for i, nm in enumerate(res["names"]):
             C, B, dc, db = res["iso"][i]
             col = SERIES[i % len(SERIES)]
-            ax.scatter(C, B, s=20, color=col, zorder=3)
-            ax.plot(dc, db, color=col, lw=1.4, label=nm)
-        ax.set_xscale("log"); ax.set_xlabel("concentration (M)"); ax.set_ylabel("B")
-        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE)
+            ax.scatter(C, B, s=26, color=col, zorder=3, edgecolors="white", linewidths=0.5)
+            lab = nm if r2[i] is None else f"{nm}  (R²={r2[i]:.2f})"
+            ax.plot(dc, db, color=col, lw=1.6, label=lab)
+        ax.set_xscale("log"); ax.set_xlabel("concentration (M)")
+        ax.set_ylabel("signal  B")
+        ax.legend(fontsize=8, framealpha=0.0, labelcolor=MUTE)
         self.c_iso.fig.tight_layout(); self.c_iso.draw_idle()
 
-    def _plot_parity(self, res):
-        ax = self.c_par.new_ax()
-        t, e, col = res["parity"]
-        if len(t):
-            for i in range(len(res["names"])):
-                m = col == i
-                if m.any():
-                    ax.scatter(t[m], e[m], s=26, color=SERIES[i % len(SERIES)],
-                               label=res["names"][i], edgecolors="none")
-            lo = min(t.min(), e.min()); hi = max(t.max(), e.max())
-            ax.plot([lo, hi], [lo, hi], color=FAINT, lw=1, ls="--")
-            ax.set_xscale("log"); ax.set_yscale("log")
-        ax.set_xlabel("true (M)"); ax.set_ylabel("recovered (M)")
-        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE)
-        self.c_par.fig.tight_layout(); self.c_par.draw_idle()
-
-    def _plot_comp(self, res):
-        ax = self.c_comp.new_ax()
-        q = res["example"]; names = res["names"]
-        act = [i for i in range(len(names)) if q["C"][i] > 0]
-        x = np.arange(len(act)); w = 0.38
-        cov = [q["cov_ratio"][i] for i in act]
-        con = [q["conc_ratio"][i] for i in act]
-        ax.bar(x - w / 2, cov, w, color=AMBER, label="surface θ (apparent)")
-        ax.bar(x + w / 2, con, w, color=TEAL, label="solution C (true)")
-        ax.set_xticks(x); ax.set_xticklabels([names[i] for i in act], fontsize=8)
-        ax.set_ylabel("fraction"); ax.set_ylim(0, 1.05)
-        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE)
-        self.c_comp.fig.tight_layout(); self.c_comp.draw_idle()
-
     def _readout(self, res):
-        q = res["example"]; Ct = res["example_true"]; names = res["names"]
-        comp = q["competition"]
+        names = res["names"]; K = res["K_fit"]; gA = res.get("gA_fit")
+        r2 = res.get("r2", [0.0] * len(names))
         rows = []
         for i, nm in enumerate(names):
-            if q["C"][i] <= 0 and Ct[i] <= 0:
-                continue
             rows.append(
                 f"<tr><td style='padding-right:12px;color:{SERIES[i%len(SERIES)]};"
                 f"font-weight:600'>{nm}</td>"
-                f"<td style='padding-right:12px'>{q['C'][i]:.2e} M</td>"
-                f"<td style='padding-right:12px;color:{MUTE}'>{q['conc_ratio'][i]*100:.0f}%"
-                f"</td><td style='color:{MUTE}'>θ {q['theta'][i]:.3f}</td></tr>")
-        verdict = (
-            f"<b style='color:{CORAL}'>Competitive adsorption</b> — "
-            f"<b>{comp['surface_dominant']}</b> dominates the surface but "
-            f"<b>{comp['solution_dominant']}</b> dominates in solution "
-            f"(selectivity {comp['selectivity']:.1f}×). "
-            f"{comp['buried'] or '—'} is the most buried."
-            if comp["flipped"] else
-            f"<b style='color:{TEAL}'>Consistent</b> — surface and solution agree "
-            f"(selectivity {comp['selectivity']:.1f}×).")
-        self.readout.setText(
-            f"<div style='color:{INK};font-size:13px'>"
-            f"<table style='font-size:13px'>{''.join(rows)}</table>"
-            f"<p style='margin-top:10px;font-size:13px'>{verdict}</p>"
-            f"<p style='color:{FAINT};font-size:12px'>absolute M assumes the "
-            f"substrate gain is stable between calibration and measurement</p></div>")
+                f"<td style='padding-right:12px'>K={K[i]:.2e}</td>"
+                f"<td style='padding-right:12px'>gA="
+                f"{(gA[i] if gA is not None else float('nan')):.2e}</td>"
+                f"<td style='color:{MUTE}'>R²={r2[i]:.2f}</td></tr>")
+        html = (f"<div style='color:{INK};font-size:13px'>"
+                f"<b>Langmuir fit</b>  (B = gA·K·C / (1+K·C))"
+                f"<table style='font-size:13px;margin-top:6px'>{''.join(rows)}</table>")
+        if res["example"] is not None:                    # ≥2 compounds → competition
+            comp = res["example"]["competition"]
+            html += (f"<p style='margin-top:10px'><b style='color:{CORAL}'>"
+                     "Competitive adsorption</b> — " +
+                     (f"<b>{comp['surface_dominant']}</b> dominates the surface but "
+                      f"<b>{comp['solution_dominant']}</b> dominates in solution "
+                      f"(selectivity {comp['selectivity']:.1f}×)."
+                      if comp["flipped"] else
+                      f"surface and solution agree (selectivity "
+                      f"{comp['selectivity']:.1f}×).") + "</p>")
+        else:
+            html += (f"<p style='color:{FAINT};margin-top:10px'>load another "
+                     "compound's concentration folder to add competition analysis.</p>")
+        html += "</div>"
+        self.readout.setText(html)
