@@ -7,7 +7,7 @@ import sys
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QFileDialog,
-    QTableWidget, QTableWidgetItem, QHeaderView,
+    QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
 )
 
 from ui_common import *
@@ -107,11 +107,18 @@ class SamplingPage(QWidget):
             self.table.setItem(r, 1, px)
             self.table.setItem(r, 2, QTableWidgetItem(str(cls)))
             self.table.setItem(r, 3, QTableWidgetItem(str(batch)))
-            self.table.setItem(r, 4, QTableWidgetItem(role))
+            self.table.setCellWidget(r, 4, self._role_combo(role))
         self._loading = False
         if refs:
             self.status.setText(f"{len(refs)} maps"); self.status.setStyleSheet(f"color:{MUTE};")
         self._update_summary()
+
+    def _role_combo(self, role):
+        cb = QComboBox()
+        cb.addItems(["train", "test", "exclude"])
+        cb.setCurrentText(role if role in ("train", "test", "exclude") else "train")
+        cb.currentIndexChanged.connect(lambda _=0: self._on_edit(None))
+        return cb
 
     def _rows(self):
         out = []
@@ -119,7 +126,8 @@ class SamplingPage(QWidget):
             fn = self.table.item(r, 0).text()
             cls = (self.table.item(r, 2).text() or "").strip()
             bt = (self.table.item(r, 3).text() or "").strip()
-            role = (self.table.item(r, 4).text() or "").strip()
+            cb = self.table.cellWidget(r, 4)
+            role = cb.currentText() if cb else "train"
             out.append((fn, cls, int(bt) if bt.isdigit() else 1, role))
         return out
 
@@ -128,20 +136,25 @@ class SamplingPage(QWidget):
             self._update_summary()
 
     def _update_summary(self):
-        groups = {}; n_train = n_test = 0
+        groups = {}; n_train = n_test = n_excl = 0
         for _fn, cls, _b, role in self._rows():
+            role = role.strip().lower()
+            if role.startswith(("ex", "sk", "ig", "off")):
+                n_excl += 1
+                continue                                   # excluded maps aren't used
             groups[cls] = groups.get(cls, 0) + 1
-            if role.strip().lower().startswith("te"):
+            if role.startswith("te"):
                 n_test += 1
             else:
                 n_train += 1
         if not groups:
-            self.summary.setText("no maps found in this folder"); return
+            self.summary.setText("no maps in use in this folder"); return
         parts = [f"{c} ×{n}" if n > 1 else c for c, n in sorted(groups.items())]
+        excl = f"  ·  {n_excl} excluded" if n_excl else ""
         self.summary.setText(
             f"{len(groups)} classes:   " + "   ·   ".join(parts)
-            + f"      |      maps: {n_train} train / {n_test} test  "
-            "(set Role = test to hold maps out; Model → split = manual)")
+            + f"      |      maps: {n_train} train / {n_test} test{excl}  "
+            "(Role = exclude drops a map; = test holds it out for Model → split = manual)")
 
     def _save(self):
         rows = self._rows()

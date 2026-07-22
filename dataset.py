@@ -25,6 +25,8 @@ import re
 
 BLANK_ALIASES = {"blk", "blank", "background", "bg", "none"}
 _SUFFIX = "_corrected"
+# CSVs that live beside the maps but are NOT maps — never treat them as references
+_NON_MAP = {"samples.csv", "mixtures.csv"}
 # a batch marker = a trailing number with a clear separator or in ()/[]:
 #   THI_2 · THI 2 · THI-2 · THI_(2) · THI (2) · THI(2) · THI[2]
 # (a bare trailing number like 'PCB77' is NOT treated as a batch — keep as-is)
@@ -73,6 +75,7 @@ def discover_references(data_dir):
     files = sorted(glob.glob(os.path.join(rd, "*_corrected.csv")))
     if not files:
         files = sorted(glob.glob(os.path.join(rd, "*.csv")))
+    files = [p for p in files if os.path.basename(p).lower() not in _NON_MAP]
     pairs = [(class_name(p), p) for p in files]
     non_blank = [(n, p) for n, p in pairs if not is_blank(n)]
     blank = [(n, p) for n, p in pairs if is_blank(n)]
@@ -93,6 +96,8 @@ def map_pixel_count(path):
 
 def _role(v):
     v = (v or "").strip().lower()
+    if v.startswith(("ex", "sk", "ig", "off")):     # exclude / skip / ignore / off
+        return "exclude"
     return "test" if v.startswith("te") else "train"
 
 
@@ -150,6 +155,8 @@ def discover_dataset(data_dir):
                 cls, batch, role = hit
         if cls is None:
             cls, batch = base_and_batch(name)
+        if role == "exclude":                       # user opted this map out
+            continue
         groups.setdefault(cls, []).append((batch, path, role))
     non_blank = sorted((c for c in groups if not is_blank(c)), key=str.lower)
     blank = [c for c in groups if is_blank(c)]
