@@ -24,9 +24,11 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.metrics import confusion_matrix
 
+from scipy.signal import savgol_filter
+
 from real_data import load_map, PEST_DEFAULT
 from dataset import discover_references, reference_dir, is_blank
-from sers_mixture import preprocess
+from sers_mixture import als_baseline
 
 
 @dataclass
@@ -47,19 +49,42 @@ class TrainResult:
     n_train: int
     n_test: int
     wn: np.ndarray = None            # wavenumber axis
+    split: str = "spatial"           # "spatial" (honest) or "random" (leaky)
 
 
 # --------------------------------------------------------------------------
 # data — discovered reference maps, honest spatial (block) split
 # --------------------------------------------------------------------------
-def _load_split(data_dir, baseline=True, trim=None):
-    """Discover the reference maps and split each by its X-median into a
-    train (left) / test (right) block. Returns preprocessed per-pixel matrices
-    plus the ordered class names.
+def _featurize(cube, baseline=True, deriv=0, norm="l2"):
+    """Per-pixel feature transform: (optional ALS baseline) → (optional Savitzky-
+    Golay derivative) → normalization (l2 / snv / none)."""
+    X = np.asarray(cube, float)
+    if baseline:
+        X = np.stack([y - als_baseline(y) for y in X])
+        X = np.clip(X, 0, None)                        # SERS intensities >= 0
+    if deriv in (1, 2):
+        w = min(11, X.shape[1] // 2 * 2 - 1)           # odd window <= n_features
+        X = savgol_filter(X, window_length=max(5, w), polyorder=3,
+                          deriv=deriv, axis=1)
+    if norm == "l2":
+        n = np.linalg.norm(X, axis=1, keepdims=True)
+        X = X / np.where(n > 0, n, 1.0)
+    elif norm == "snv":                                # standard normal variate
+        mu = X.mean(axis=1, keepdims=True)
+        sd = X.std(axis=1, keepdims=True)
+        X = (X - mu) / np.where(sd > 0, sd, 1.0)
+    return X
 
-    ``baseline`` toggles ALS baseline removal in preprocessing; ``trim`` is an
-    optional (low, high) wavenumber window applied before preprocessing (e.g. to
-    drop edge artefacts)."""
+
+def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
+                split="spatial", seed=0):
+    """Discover the reference maps, featurize each, and split into train/test.
+
+    ``split`` is "spatial" (honest block split — left half of each map trains,
+    right half tests) or "random" (leaky per-pixel shuffle — for comparison).
+    ``trim`` is an optional (low, high) wavenumber window; ``baseline`` / ``deriv``
+    / ``norm`` control the feature transform. Returns per-pixel matrices + the
+    ordered class names."""
     refs = discover_references(data_dir)
     if len(refs) < 2:
         found = [n for n, _ in refs]
@@ -69,21 +94,30 @@ def _load_split(data_dir, baseline=True, trim=None):
             f"\nlooked in: {reference_dir(data_dir)}\nfound: {found}")
 
     classes = [n for n, _ in refs]
-    Xtr, ytr, Xte, yte, wn = [], [], [], [], None
-    for i, (_name, path) in enumerate(refs):
+    feats, coords, wn = [], [], None
+    for _name, path in refs:
         wn, cube, _mean, coord = load_map(path)
         if trim is not None:
             lo, hi = trim
             m = (wn >= lo) & (wn <= hi)
             if m.sum() >= 10:                          # ignore degenerate windows
                 wn = wn[m]; cube = cube[:, m]
-        Xp = preprocess(cube, do_baseline=baseline)
-        xc = coord[:, 0]
-        left = xc < np.median(xc)                     # spatial block split
-        if left.all() or (~left).all():               # degenerate map -> alternate
-            left = np.arange(len(Xp)) % 2 == 0
-        Xtr.append(Xp[left]); ytr += [i] * int(left.sum())
-        Xte.append(Xp[~left]); yte += [i] * int((~left).sum())
+        feats.append(_featurize(cube, baseline=baseline, deriv=deriv, norm=norm))
+        coords.append(coord)
+
+    rng = np.random.default_rng(seed)
+    Xtr, ytr, Xte, yte = [], [], [], []
+    for i, (X, coord) in enumerate(zip(feats, coords)):
+        if split == "random":                          # leaky per-pixel shuffle
+            idx = rng.permutation(len(X)); cut = len(X) // 2
+            tr, te = idx[:cut], idx[cut:]
+        else:                                          # spatial block split (honest)
+            left = coord[:, 0] < np.median(coord[:, 0])
+            if left.all() or (~left).all():            # degenerate map -> alternate
+                left = np.arange(len(X)) % 2 == 0
+            tr, te = np.where(left)[0], np.where(~left)[0]
+        Xtr.append(X[tr]); ytr += [i] * len(tr)
+        Xte.append(X[te]); yte += [i] * len(te)
     return (np.vstack(Xtr), np.array(ytr),
             np.vstack(Xte), np.array(yte), wn, classes)
 
@@ -209,12 +243,14 @@ def _per_class_prf(cm, classes):
 
 
 def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
-                n_estimators=300, seed=0, baseline=True, trim=None) -> TrainResult:
-    """Discover the reference maps in ``pest_dir`` and train the chosen algorithm
-    on the honest spatial split. ``backend`` is one of rf / resnet / svm / knn /
-    logreg / gbm. ``baseline`` toggles ALS baseline removal and ``trim`` is an
-    optional (low, high) wavenumber window. ``pest_dir`` is the data folder (or
-    its Reference/ subfolder)."""
+                n_estimators=300, seed=0, baseline=True, trim=None,
+                deriv=0, norm="l2", split="spatial") -> TrainResult:
+    """Discover the reference maps in ``pest_dir`` and train the chosen algorithm.
+    ``backend`` is one of rf / resnet / svm / knn / logreg / gbm. Feature options:
+    ``baseline`` (ALS on/off), ``deriv`` (0/1/2 Savitzky-Golay), ``norm``
+    (l2/snv/none), ``trim`` (low, high) wavenumber window. ``split`` is "spatial"
+    (honest) or "random" (leaky). ``pest_dir`` is the data folder (or its
+    Reference/ subfolder)."""
     if backend == "resnet":
         try:
             import torch  # noqa: F401  (fail early with a clear message)
@@ -223,7 +259,9 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
                 "ResNet1D backend needs PyTorch — install it (pip install torch) "
                 "or pick a scikit-learn algorithm (RandomForest, SVM, k-NN…).") from exc
 
-    Xtr, ytr, Xte, yte, wn, classes = _load_split(pest_dir, baseline=baseline, trim=trim)
+    Xtr, ytr, Xte, yte, wn, classes = _load_split(
+        pest_dir, baseline=baseline, trim=trim, deriv=deriv, norm=norm,
+        split=split, seed=seed)
     K = len(classes)
 
     if backend == "resnet":
@@ -255,7 +293,7 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
         confusion=cm, acc=acc, macro_f1=macro_f1, per_component=per,
         curve_x=cx, curve_y=cy, curve_label=ylab, curve_xlabel=xlab,
         pca_emb=pca_emb, pca_lab=pca_lab,
-        n_train=len(ytr), n_test=len(yte), wn=wn)
+        n_train=len(ytr), n_test=len(yte), wn=wn, split=split)
 
 
 if __name__ == "__main__":

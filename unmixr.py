@@ -235,28 +235,14 @@ class ModelPage(QWidget):
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
 
-        # controls
+        # ---- controls: row 1 = model + data + actions ----
         ctl = QHBoxLayout(); ctl.setSpacing(10)
-        bcol = QVBoxLayout(); bcol.setSpacing(2)
-        blb = QLabel("algorithm"); blb.setObjectName("field")
-        self.cmb = QComboBox()
-        for label, key in self.ALGOS:
-            self.cmb.addItem(label, key)
-        bcol.addWidget(blb); bcol.addWidget(self.cmb)
-        ctl.addLayout(bcol)
+        ctl.addLayout(self._combo_col("algorithm", "cmb", self.ALGOS))
         self.sp_ep = self._spin(QSpinBox(), 2, 100, 25, "epochs (ResNet)")
         self.sp_tr = self._spin(QSpinBox(), 60, 600, 300, "trees (RF)", step=20)
         self.sp_seed = self._spin(QSpinBox(), 0, 999, 0, "seed")
-        self.sp_lo = self._spin(QSpinBox(), 0, 4000, 0, "trim lo cm⁻¹", step=50)
-        self.sp_hi = self._spin(QSpinBox(), 0, 4000, 4000, "trim hi cm⁻¹", step=50)
-        for w in (self.sp_ep, self.sp_tr, self.sp_seed, self.sp_lo, self.sp_hi):
+        for w in (self.sp_ep, self.sp_tr, self.sp_seed):
             ctl.addLayout(w)
-        bcol2 = QVBoxLayout(); bcol2.setSpacing(2)
-        spacer = QLabel("preprocess"); spacer.setObjectName("field")
-        bcol2.addWidget(spacer)
-        self.chk_base = QCheckBox("baseline"); self.chk_base.setChecked(True)
-        bcol2.addWidget(self.chk_base)
-        ctl.addLayout(bcol2)
         self.src = QLabel(self._short(self.pest_dir)); self.src.setObjectName("field")
         ctl.addWidget(self.src, 1)
         browse = QPushButton("Training data…"); browse.setObjectName("ghost")
@@ -268,9 +254,30 @@ class ModelPage(QWidget):
         ctl.addWidget(browse); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
+        # ---- controls: row 2 = features + split (the experimentation knobs) ----
+        ctl2 = QHBoxLayout(); ctl2.setSpacing(10)
+        bcol = QVBoxLayout(); bcol.setSpacing(2)
+        lb = QLabel("baseline"); lb.setObjectName("field")
+        self.chk_base = QCheckBox("ALS on"); self.chk_base.setChecked(True)
+        bcol.addWidget(lb); bcol.addWidget(self.chk_base)
+        ctl2.addLayout(bcol)
+        ctl2.addLayout(self._combo_col("derivative", "cmb_deriv",
+                                       [("none", 0), ("1st", 1), ("2nd", 2)]))
+        ctl2.addLayout(self._combo_col("normalize", "cmb_norm",
+                                       [("L2", "l2"), ("SNV", "snv"), ("none", "none")]))
+        self.sp_lo = self._spin(QSpinBox(), 0, 4000, 0, "trim lo cm⁻¹", step=50)
+        self.sp_hi = self._spin(QSpinBox(), 0, 4000, 4000, "trim hi cm⁻¹", step=50)
+        for w in (self.sp_lo, self.sp_hi):
+            ctl2.addLayout(w)
+        ctl2.addLayout(self._combo_col("split", "cmb_split",
+                                       [("spatial (honest)", "spatial"),
+                                        ("random (leaky)", "random")]))
+        ctl2.addStretch(1)
+        root.addLayout(ctl2)
+
         # KPI row
         kpis = QHBoxLayout(); kpis.setSpacing(12)
-        self.k_acc = Kpi("spatial accuracy"); self.k_f1 = Kpi("macro F1")
+        self.k_acc = Kpi("test accuracy"); self.k_f1 = Kpi("macro F1")
         self.k_tr = Kpi("train pixels"); self.k_te = Kpi("test pixels")
         for k in (self.k_acc, self.k_f1, self.k_tr, self.k_te):
             kpis.addWidget(k)
@@ -282,7 +289,7 @@ class ModelPage(QWidget):
         self.c_pca = Canvas(); self.c_bar = Canvas()
         for (cv, title, r, c) in [
             (self.c_curve, "Learning curve", 0, 0),
-            (self.c_cm, "Confusion matrix (spatial split)", 0, 1),
+            (self.c_cm, "Confusion matrix (held-out test)", 0, 1),
             (self.c_pca, "PCA — real per-pixel spectra by class", 1, 0),
             (self.c_bar, "Per-class precision / recall / F1", 1, 1),
         ]:
@@ -309,6 +316,17 @@ class ModelPage(QWidget):
         spin.setSingleStep(step)
         spin.setRange(lo, hi); spin.setValue(val)
         col.addWidget(lb); col.addWidget(spin)
+        return col
+
+    def _combo_col(self, label, attr, items):
+        """A labelled combo box; stores the widget on self.<attr>."""
+        col = QVBoxLayout(); col.setSpacing(2)
+        lb = QLabel(label); lb.setObjectName("field")
+        cb = QComboBox()
+        for text, data in items:
+            cb.addItem(text, data)
+        setattr(self, attr, cb)
+        col.addWidget(lb); col.addWidget(cb)
         return col
 
     def _browse(self):
@@ -345,15 +363,17 @@ class ModelPage(QWidget):
 
     # ---- training ----
     def _train(self):
-        backend = self.cmb.currentData()
         lo = self.sp_lo.itemAt(1).widget().value()
         hi = self.sp_hi.itemAt(1).widget().value()
         trim = (lo, hi) if (hi > lo and (lo > 0 or hi < 4000)) else None
-        params = dict(pest_dir=self.pest_dir, backend=backend,
+        params = dict(pest_dir=self.pest_dir, backend=self.cmb.currentData(),
                       epochs=self.sp_ep.itemAt(1).widget().value(),
                       n_estimators=self.sp_tr.itemAt(1).widget().value(),
                       seed=self.sp_seed.itemAt(1).widget().value(),
-                      baseline=self.chk_base.isChecked(), trim=trim)
+                      baseline=self.chk_base.isChecked(), trim=trim,
+                      deriv=self.cmb_deriv.currentData(),
+                      norm=self.cmb_norm.currentData(),
+                      split=self.cmb_split.currentData())
         self.btn.setEnabled(False); self.btn.setText("Training…")
         self.c_curve.placeholder("Training…")
         self._thread = QThread()
@@ -375,7 +395,10 @@ class ModelPage(QWidget):
     def _apply(self, res: TrainResult):
         self._res = res
         self.btn.setEnabled(True); self.btn.setText("Train + evaluate")
-        self.k_acc.set(f"{res.acc:.0%}", TEAL)
+        # random split is leaky — flag the (inflated) accuracy in warning colour
+        leaky = getattr(res, "split", "spatial") == "random"
+        self.k_acc.set(f"{res.acc:.0%}" + ("  ⚠leaky" if leaky else ""),
+                       CORAL if leaky else TEAL)
         self.k_f1.set(f"{res.macro_f1:.3f}", BLUE)
         self.k_tr.set(f"{res.n_train:,}", AMBER)
         self.k_te.set(f"{res.n_test:,}", PURPLE)
