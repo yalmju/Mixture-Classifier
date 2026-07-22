@@ -8,7 +8,9 @@ import sys
 import traceback
 
 import numpy as np
+from matplotlib.colors import to_rgb
 from matplotlib.patches import Wedge, Patch
+from matplotlib.collections import PatchCollection
 
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
@@ -87,11 +89,6 @@ class RealDataPage(QWidget):
                            "used by the 'Trained model' method")
         model_b.clicked.connect(self._browse_model)
         self.model_lbl = QLabel(""); self.model_lbl.setObjectName("field")
-        self.sp_lo = QSpinBox(); self.sp_lo.setRange(0, 4000); self.sp_lo.setSingleStep(50)
-        self.sp_hi = QSpinBox(); self.sp_hi.setRange(0, 4000); self.sp_hi.setSingleStep(50)
-        self.sp_hi.setValue(4000)
-        self.sp_lo.valueChanged.connect(self._reband)
-        self.sp_hi.valueChanged.connect(self._reband)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
@@ -99,8 +96,6 @@ class RealDataPage(QWidget):
         ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x)
         ctl.addLayout(self.cmb_method)
         ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
-        ctl.addLayout(self._spin_col("band lo cm⁻¹", self.sp_lo))
-        ctl.addLayout(self._spin_col("band hi cm⁻¹", self.sp_hi))
         ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
@@ -125,14 +120,14 @@ class RealDataPage(QWidget):
         self.c_int = Canvas(); self.c_pie = Canvas()
         self.c_spec = Canvas(); self.c_comp = Canvas()
         for (cv, title, r, c) in [
-            (self.c_int, "Band-intensity map (click a pixel)", 0, 0),
+            (self.c_int, "Merged composite — substances in their colours (click a pixel)", 0, 0),
             (self.c_pie, "Per-pixel composition — pie per pixel (click a pixel)", 0, 1),
             (self.c_spec, "Selected pixel spectrum", 1, 0),
             (self.c_comp, "Composition (overall)", 1, 1),
         ]:
             card, lay = _card(title); lay.addWidget(cv)
             grid.addWidget(card, r, c)
-        grid.setRowStretch(0, 1); grid.setRowStretch(1, 1)
+        grid.setRowStretch(0, 3); grid.setRowStretch(1, 2)   # maps get more room than pies
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
         root.addLayout(grid, 1)
         for cv, m in [(self.c_int, "Load a test map, then Unmix"),
@@ -284,11 +279,6 @@ class RealDataPage(QWidget):
         self.btn.setEnabled(True); self.btn.setText("Unmix")
         self.status.setText(f"done — {r.method.upper()}")
         self.status.setStyleSheet(f"color:{MUTE};")
-        # default the band spins to the full available range on first result
-        if self.sp_lo.value() == 0 and self.sp_hi.value() == 4000 and r.wn is not None:
-            self.sp_lo.blockSignals(True); self.sp_hi.blockSignals(True)
-            self.sp_lo.setValue(int(r.wn.min())); self.sp_hi.setValue(int(r.wn.max()))
-            self.sp_lo.blockSignals(False); self.sp_hi.blockSignals(False)
         nb = [r.comps[i] for i in r.nonbg]
         self.k_dom.set(r.dominant, TEAL)
         self.k_n.set(str(int(np.sum(r.mean_ratio >= 0.05))), AMBER)
@@ -305,23 +295,35 @@ class RealDataPage(QWidget):
             f"<b>dominant:</b> {r.dominant}")
 
     # ---- plots ----
-    def _band_mask(self, r):
-        lo, hi = self.sp_lo.value(), self.sp_hi.value()
-        m = (r.wn >= lo) & (r.wn <= hi)
-        return m if m.sum() >= 1 else np.ones(len(r.wn), bool)
+    def _grid_rc(self, r):
+        """Grid row/col index per pixel + the imshow extent (coordinate units)."""
+        x, y = r.coords[:, 0], r.coords[:, 1]
+        ux, uy = np.unique(x), np.unique(y)
+        xi = {v: i for i, v in enumerate(ux)}; yi = {v: i for i, v in enumerate(uy)}
+        rows = np.array([yi[v] for v in y]); cols = np.array([xi[v] for v in x])
+        extent = [ux.min() - 0.5, ux.max() + 0.5, uy.max() + 0.5, uy.min() - 0.5]
+        return rows, cols, len(uy), len(ux), extent
 
     def _plot_intensity(self, r):
+        """Merged false-colour composite: each substance's abundance painted in its
+        chosen colour and added together (background = dark), as a pixel image."""
         ax = self.c_int.new_ax(); self._maps_ax["int"] = ax
-        inten = r.spectra[:, self._band_mask(r)].sum(axis=1)
-        x, y = r.coords[:, 0], r.coords[:, 1]
-        vmax = float(np.quantile(inten, 0.99)) or 1.0
-        sc = ax.scatter(x, y, c=inten, cmap=INTEN_CMAP, marker="s", s=16,
-                        vmin=0, vmax=vmax, edgecolors="none")
-        self.c_int.fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
+        cols = np.array([to_rgb(c) for c in self._nb_colors(r)])   # (Knb, 3)
+        Anb = r.A[:, r.nonbg]
+        scale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
+        rgb = np.clip((Anb / scale) @ cols, 0.0, 1.0)              # (n, 3)
+        rows, cc, ny, nx, extent = self._grid_rc(r)
+        img = np.zeros((ny, nx, 3))                                # dark background
+        img[rows, cc] = rgb
+        ax.imshow(img, extent=extent, origin="upper", aspect="equal",
+                  interpolation="nearest")
+        ax.legend(handles=[Patch(facecolor=self._nb_colors(r)[i], label=r.comps[j])
+                           for i, j in enumerate(r.nonbg)],
+                  fontsize=7, framealpha=0.0, labelcolor=MUTE,
+                  loc="upper center", bbox_to_anchor=(0.5, -0.02),
+                  ncol=len(r.nonbg), frameon=False)
         self._mark_sel(ax, r)
-        ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
-        ax.set_title(f"Σ intensity  {self.sp_lo.value()}–{self.sp_hi.value()} cm⁻¹",
-                     fontsize=8, color=INK)
+        ax.set_xticks([]); ax.set_yticks([])
         self.c_int.fig.tight_layout(); self.c_int.draw_idle()
 
     def _plot_pies(self, r):
@@ -329,23 +331,30 @@ class RealDataPage(QWidget):
         cols = self._nb_colors(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux = np.unique(x); rad = (np.median(np.diff(ux)) * 0.46) if len(ux) > 1 else 0.46
-        if r.n_pixels > 2000:
+        hit = r.hit
+        # background / non-hit pixels: one fast scatter (not one patch each)
+        if (~hit).any():
+            ax.scatter(x[~hit], y[~hit], c=BG_GREY, marker="s", s=16, edgecolors="none")
+        if r.method == "model":                           # classifier → one class/pixel
             dom = r.ratio_nb.argmax(axis=1)
-            fc = [cols[dom[i]] if r.hit[i] else BG_GREY for i in range(r.n_pixels)]
-            ax.scatter(x, y, c=fc, marker="s", s=14, edgecolors="none")
-        else:
-            for i in range(r.n_pixels):
-                if not r.hit[i]:
-                    ax.add_patch(Wedge((x[i], y[i]), rad, 0, 360, facecolor=BG_GREY,
-                                       edgecolor="none")); continue
+            if hit.any():
+                ax.scatter(x[hit], y[hit], c=[cols[dom[i]] for i in np.where(hit)[0]],
+                           marker="s", s=16, edgecolors="none")
+            ax.set_title("predicted class per pixel (not a mixture ratio)",
+                         fontsize=8, color=INK)
+        else:                                             # per-pixel pie for hit pixels
+            wedges, wcols = [], []
+            for i in np.where(hit)[0]:
                 a0 = 90.0
                 for k, frac in enumerate(r.ratio_nb[i]):
                     if frac <= 0.002:
                         continue
                     a1 = a0 - frac * 360.0
-                    ax.add_patch(Wedge((x[i], y[i]), rad, a1, a0, facecolor=cols[k],
-                                       edgecolor="none"))
+                    wedges.append(Wedge((x[i], y[i]), rad, a1, a0)); wcols.append(cols[k])
                     a0 = a1
+            if wedges:
+                ax.add_collection(PatchCollection(wedges, facecolors=wcols,
+                                                  edgecolors="none"))
         self._mark_sel(ax, r)
         ax.set_xlim(x.min() - 1, x.max() + 1); ax.set_ylim(y.max() + 1, y.min() - 1)
         ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
@@ -385,8 +394,6 @@ class RealDataPage(QWidget):
             recon = r.A[i] @ r.templates
             ax.plot(axis, recon / (recon.max() or 1.0), lw=1.1, color=TEAL,
                     ls="--", label="reconstructed")
-        # shade the intensity band that the map integrates
-        ax.axvspan(self.sp_lo.value(), self.sp_hi.value(), color=AMBER, alpha=0.10)
         xp, yp = r.coords[i]
         rat = "  ·  ".join(f"{r.comps[j]} {r.ratio_nb[i, k] * 100:.0f}%"
                            for k, j in enumerate(r.nonbg) if r.ratio_nb[i, k] > 0.02)
@@ -398,12 +405,6 @@ class RealDataPage(QWidget):
         self.c_spec.fig.tight_layout(); self.c_spec.draw_idle()
 
     # ---- interaction ----
-    def _reband(self):
-        if self._res is not None:
-            self._plot_intensity(self._res)
-            if self._sel is not None:
-                self._plot_spec(self._res, self._sel)
-
     def _on_click(self, event):
         r = self._res
         if r is None or event.xdata is None or event.inaxes not in self._maps_ax.values():
@@ -426,8 +427,8 @@ class RealDataPage(QWidget):
         write_csv(os.path.join(d, "composition.csv"),
                   ["substance", "mean_ratio"],
                   [[nm, f"{r.mean_ratio[i]:.4f}"] for i, nm in enumerate(nb)])
-        band = self._band_mask(r); inten = r.spectra[:, band].sum(axis=1)
-        head = (["x", "y", "hit", f"intensity_{self.sp_lo.value()}_{self.sp_hi.value()}"]
+        inten = r.spectra.sum(axis=1)                      # total baseline-removed signal
+        head = (["x", "y", "hit", "total_intensity"]
                 + [f"ratio_{nm}" for nm in nb] + [f"A_{c}" for c in r.comps]
                 + ["reliability_r2"])
         rows = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}", int(r.hit[i]),

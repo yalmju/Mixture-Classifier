@@ -400,10 +400,9 @@ class ModelPage(QWidget):
         if use_vip:                                       # VIP > 1 = important band
             ax.axhline(1.0, color=MUTE, lw=0.8, ls="--")
             ax.text(wn[-1], 1.0, " VIP=1", fontsize=6, color=MUTE, va="bottom", ha="right")
-        # label the strongest discriminative bands with their cm⁻¹
-        k = min(6, len(f))
-        top = np.argsort(f)[-k:]
-        for idx in top:
+        # label the strongest discriminative bands — distinct peaks, not adjacent points
+        from model_training import top_bands
+        for idx in top_bands(f, wn, k=min(6, len(f))):
             ax.annotate(f"{wn[idx]:.0f}", (wn[idx], f[idx]), fontsize=7, color=INK,
                         ha="center", va="bottom",
                         xytext=(0, 2), textcoords="offset points")

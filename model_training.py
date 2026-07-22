@@ -433,15 +433,27 @@ def _train_batch_cv(data_dir, backend, epochs, n_estimators, seed,
         box_wn=box_wn, box_vals=box_vals, box_lab=box_lab)
 
 
+def top_bands(importance, wn, k=6, min_sep=30.0):
+    """Indices of the k most discriminative bands, but spaced ≥ ``min_sep`` cm⁻¹
+    apart so the list is distinct PEAKS, not several adjacent points of the same
+    peak (greedy non-maximum suppression by importance)."""
+    picked = []
+    for idx in np.argsort(importance)[::-1]:
+        if all(abs(wn[idx] - wn[j]) >= min_sep for j in picked):
+            picked.append(int(idx))
+        if len(picked) >= k:
+            break
+    return np.array(picked, int)
+
+
 def _top_band_box(Xall, yall, importance, wn, K, seed, k=6, per_class=150):
-    """For the k most discriminative bands (by ``importance``: VIP or ANOVA F),
-    collect a per-class subsample of the intensity at each band, so the UI can show
-    a box plot of how each substance's signal distributes at the best peaks.
+    """For the k most discriminative (and well-separated) bands, collect a per-class
+    subsample of the intensity at each band, so the UI can show a box plot of how
+    each substance's signal distributes at the best peaks.
     Returns (box_wn (k,), box_vals (n_sub, k), box_lab (n_sub,))."""
     if importance is None or wn is None or len(importance) != Xall.shape[1]:
         return None, None, None
-    k = min(k, len(importance))
-    top = np.argsort(importance)[-k:][::-1]            # strongest first
+    top = top_bands(importance, wn, k=k)              # distinct peaks, strongest first
     rng = np.random.default_rng(seed)
     sel = np.concatenate([
         rng.choice(np.where(yall == i)[0],
