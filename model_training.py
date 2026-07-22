@@ -27,7 +27,7 @@ from sklearn.metrics import confusion_matrix
 from scipy.signal import savgol_filter
 
 from real_data import load_map, PEST_DEFAULT
-from dataset import discover_references, reference_dir, is_blank
+from dataset import discover_dataset, reference_dir, is_blank
 from sers_mixture import als_baseline
 
 
@@ -78,46 +78,65 @@ def _featurize(cube, baseline=True, deriv=0, norm="l2"):
 
 def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
                 split="spatial", seed=0):
-    """Discover the reference maps, featurize each, and split into train/test.
+    """Group the reference maps into classes (merging batches of the same
+    substance), featurize each map, and split into train/test.
 
-    ``split`` is "spatial" (honest block split — left half of each map trains,
-    right half tests) or "random" (leaky per-pixel shuffle — for comparison).
+    ``split``:
+      "spatial"  honest block split — left half of each map trains, right tests
+      "random"   leaky per-pixel shuffle (for comparison)
+      "batch"    leave-one-batch-out — hold each class's last batch's map out as
+                 test (classes with a single map fall back to a spatial split)
     ``trim`` is an optional (low, high) wavenumber window; ``baseline`` / ``deriv``
     / ``norm`` control the feature transform. Returns per-pixel matrices + the
     ordered class names."""
-    refs = discover_references(data_dir)
-    if len(refs) < 2:
-        found = [n for n, _ in refs]
+    groups = discover_dataset(data_dir)
+    if len(groups) < 2:
         raise FileNotFoundError(
-            "need at least 2 reference maps (one per class). Pick the data folder "
-            "holding your reference maps (a Reference/ subfolder is used if present)."
-            f"\nlooked in: {reference_dir(data_dir)}\nfound: {found}")
+            "need at least 2 substance classes (one or more maps each). Pick the "
+            "data folder with your reference maps (a Reference/ subfolder is used "
+            f"if present).\nlooked in: {reference_dir(data_dir)}"
+            f"\nfound classes: {[c for c, _ in groups]}")
 
-    classes = [n for n, _ in refs]
-    feats, coords, wn = [], [], None
-    for _name, path in refs:
-        wn, cube, _mean, coord = load_map(path)
+    classes = [c for c, _ in groups]
+
+    def _feat_map(path):
+        wn_, cube, _mean, coord = load_map(path)
         if trim is not None:
             lo, hi = trim
-            m = (wn >= lo) & (wn <= hi)
+            m = (wn_ >= lo) & (wn_ <= hi)
             if m.sum() >= 10:                          # ignore degenerate windows
-                wn = wn[m]; cube = cube[:, m]
-        feats.append(_featurize(cube, baseline=baseline, deriv=deriv, norm=norm))
-        coords.append(coord)
+                wn_ = wn_[m]; cube = cube[:, m]
+        return wn_, _featurize(cube, baseline=baseline, deriv=deriv, norm=norm), coord
+
+    def _spatial(X, coord):
+        left = coord[:, 0] < np.median(coord[:, 0])
+        if left.all() or (~left).all():                # degenerate map -> alternate
+            left = np.arange(len(X)) % 2 == 0
+        return left
 
     rng = np.random.default_rng(seed)
-    Xtr, ytr, Xte, yte = [], [], [], []
-    for i, (X, coord) in enumerate(zip(feats, coords)):
-        if split == "random":                          # leaky per-pixel shuffle
-            idx = rng.permutation(len(X)); cut = len(X) // 2
-            tr, te = idx[:cut], idx[cut:]
-        else:                                          # spatial block split (honest)
-            left = coord[:, 0] < np.median(coord[:, 0])
-            if left.all() or (~left).all():            # degenerate map -> alternate
-                left = np.arange(len(X)) % 2 == 0
-            tr, te = np.where(left)[0], np.where(~left)[0]
-        Xtr.append(X[tr]); ytr += [i] * len(tr)
-        Xte.append(X[te]); yte += [i] * len(te)
+    Xtr, ytr, Xte, yte, wn = [], [], [], [], None
+    for i, (_cls, maps) in enumerate(groups):
+        feats = []
+        for batch, path in maps:
+            wn, X, coord = _feat_map(path)
+            feats.append((batch, X, coord))
+
+        if split == "random":                          # pool all pixels, shuffle
+            allX = np.vstack([X for _b, X, _c in feats])
+            idx = rng.permutation(len(allX)); cut = len(allX) // 2
+            Xtr.append(allX[idx[:cut]]); ytr += [i] * cut
+            Xte.append(allX[idx[cut:]]); yte += [i] * (len(allX) - cut)
+        elif split == "batch" and len(feats) >= 2:     # leave the last batch out
+            held = max(b for b, _X, _c in feats)
+            for batch, X, _c in feats:
+                (Xte if batch == held else Xtr).append(X)
+                (yte if batch == held else ytr).extend([i] * len(X))
+        else:                                          # spatial (also 1-map fallback)
+            for _b, X, coord in feats:
+                left = _spatial(X, coord)
+                Xtr.append(X[left]); ytr += [i] * int(left.sum())
+                Xte.append(X[~left]); yte += [i] * int((~left).sum())
     return (np.vstack(Xtr), np.array(ytr),
             np.vstack(Xte), np.array(yte), wn, classes)
 

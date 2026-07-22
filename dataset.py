@@ -21,9 +21,22 @@ from __future__ import annotations
 import csv
 import glob
 import os
+import re
 
 BLANK_ALIASES = {"blk", "blank", "background", "bg", "none"}
 _SUFFIX = "_corrected"
+_BATCH_RE = re.compile(r"^(.*?)[ _\-]+(\d+)$")
+
+
+def base_and_batch(name):
+    """Split a reference name into (substance, batch#) so repeat measurements of
+    the SAME substance group together instead of becoming separate classes:
+    'THI_2' -> ('THI', 2), 'TBZ 3' -> ('TBZ', 3), 'THI' -> ('THI', 1). A name that
+    is only a number, or has no base before the number, is left as-is."""
+    m = _BATCH_RE.match(name)
+    if m and m.group(1).strip(" _-"):
+        return m.group(1).strip(" _-"), int(m.group(2))
+    return name, 1
 
 
 def class_name(path):
@@ -60,6 +73,63 @@ def discover_references(data_dir):
     blank = [(n, p) for n, p in pairs if is_blank(n)]
     non_blank.sort(key=lambda t: t[0].lower())
     return non_blank + blank
+
+
+def load_manifest(data_dir):
+    """Read samples.csv (columns: file, class[, batch]) -> {abs_path: (class,
+    batch)}, or None if absent. Lets the Sampling tab pin how files map to
+    classes/batches, overriding the filename heuristic."""
+    p = os.path.join(data_dir, "samples.csv")
+    if not os.path.exists(p):
+        return None
+    rd = reference_dir(data_dir)
+    out = {}
+    with open(p, newline="") as f:
+        rows = [r for r in csv.reader(f) if r and r[0].strip()]
+    for r in rows[1:]:
+        fn = r[0].strip()
+        cls = r[1].strip() if len(r) > 1 else ""
+        batch = int(r[2]) if len(r) > 2 and r[2].strip().isdigit() else 1
+        cand = fn if os.path.isabs(fn) else os.path.join(rd, fn)
+        if not os.path.exists(cand):
+            cand = os.path.join(data_dir, fn)
+        out[os.path.abspath(cand)] = (cls, batch)
+    return out
+
+
+def save_manifest(data_dir, rows):
+    """Write <data_dir>/samples.csv from rows of (filename, class, batch)."""
+    p = os.path.join(data_dir, "samples.csv")
+    with open(p, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["file", "class", "batch"])
+        for fn, cls, batch in rows:
+            w.writerow([fn, cls, batch])
+    return p
+
+
+def discover_dataset(data_dir):
+    """Group reference maps into classes, merging batches of the same substance.
+
+    Returns an ordered list ``[(class_name, [(batch, path), …]), …]`` — non-blank
+    classes alphabetical, blank class(es) last, batches sorted. Uses samples.csv
+    when present (Sampling tab), otherwise auto-groups by base name so 'THI' and
+    'THI_2' land in one 'THI' class rather than two."""
+    refs = discover_references(data_dir)
+    manifest = load_manifest(data_dir)
+    groups = {}
+    for name, path in refs:
+        cls = batch = None
+        if manifest is not None:
+            hit = manifest.get(os.path.abspath(path))
+            if hit and hit[0]:
+                cls, batch = hit
+        if cls is None:
+            cls, batch = base_and_batch(name)
+        groups.setdefault(cls, []).append((batch, path))
+    non_blank = sorted((c for c in groups if not is_blank(c)), key=str.lower)
+    blank = [c for c in groups if is_blank(c)]
+    return [(c, sorted(groups[c])) for c in (non_blank + blank)]
 
 
 def ratio_map_path(data_dir, mix_name):
