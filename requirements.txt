@@ -1,7 +1,11 @@
+# UNMIXR native app (python UNMIXR.py) — core dependencies
 numpy
 scipy
-scikit-learn
+scikit-learn        # also pulls in joblib (model save / load)
 matplotlib
-PyQt6                  # UNMIXR native app (unmixr.py) + embedded matplotlib
-# optional: ResNet1D deep detector — only needed for the "ResNet1D" model backend
-torch
+PyQt6               # native GUI + embedded matplotlib
+
+# OPTIONAL — only for the "ResNet1D (torch)" model backend. Not required to run the
+# app; install separately if you want that backend:
+#   pip install torch
+# (on Apple Silicon, first: python3 -m pip install --upgrade pip)
