@@ -6,16 +6,16 @@ bar with pill navigation over a stacked content area:
 The top bar has two groups. Native pages (switch the view in place):
 
     Samples       group raw maps into substance classes (batches of one class);
-                  saves samples.csv that Model / Real data read
+                  saves samples.csv that Model / Predict / Real data read
     Model         train a classifier on a set of reference SERS maps
                   (RandomForest or ResNet1D): learning curve · confusion · F1 · PCA
+    Predict       load one unknown sample → its component ratio (NNLS unmix)
     Quantify      ratio → M calibration + Langmuir competition
     Real data     map analysis: single-component / mixture / composition / calib
 
 and, after the divider, external tools (each opens in its OWN window):
 
     Mixture tool  the mixture detector / ratio tool   (customtkinter)
-    Map tool      the per-pixel hyperspectral classifier (customtkinter)
 
     python unmixr.py
 
@@ -49,6 +49,7 @@ from PyQt6.QtWidgets import (
 from matplotlib.patches import Patch, Rectangle
 
 from model_training import train_model, TrainResult
+from predict import predict_sample
 from calibration import build_synthetic_lab, calibrate, quantify
 from real_data import compute_real, PEST_DEFAULT
 from dataset import (discover_references, base_and_batch, load_manifest,
@@ -1018,6 +1019,165 @@ class RealDataPage(QWidget):
 
 
 # --------------------------------------------------------------------------
+# Predict page — load one unknown sample, read its composition ratio
+# --------------------------------------------------------------------------
+class PredictWorker(QObject):
+    done = pyqtSignal(object)
+    fail = pyqtSignal(str)
+
+    def __init__(self, params):
+        super().__init__()
+        self.params = params
+
+    def run(self):
+        try:
+            self.done.emit(predict_sample(**self.params))
+        except Exception:
+            self.fail.emit(traceback.format_exc())
+
+
+class PredictPage(QWidget):
+    def __init__(self):
+        super().__init__()
+        self._thread = None
+        self._res = None
+        self.data_dir = PEST_DEFAULT
+        self.sample = None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
+
+        head = QVBoxLayout(); head.setSpacing(2)
+        h1 = QLabel("Predict — sample composition"); h1.setObjectName("h1")
+        sub = QLabel("Load one unknown map and read the ratio of your reference "
+                     "substances in it (mean-spectrum NNLS unmix + per-pixel vote). "
+                     "Organise the references in Samples first.")
+        sub.setObjectName("sub"); sub.setWordWrap(True)
+        head.addWidget(h1); head.addWidget(sub)
+        root.addLayout(head)
+
+        ctl = QHBoxLayout(); ctl.setSpacing(10)
+        ref_b = QPushButton("Reference data…"); ref_b.setObjectName("ghost")
+        ref_b.clicked.connect(self._browse_ref)
+        self.ref_lbl = QLabel(self._short(self.data_dir)); self.ref_lbl.setObjectName("field")
+        samp_b = QPushButton("Load sample…"); samp_b.setObjectName("ghost")
+        samp_b.clicked.connect(self._browse_sample)
+        self.samp_lbl = QLabel("no sample"); self.samp_lbl.setObjectName("field")
+        tcol = QVBoxLayout(); tcol.setSpacing(2)
+        tl = QLabel("threshold"); tl.setObjectName("field")
+        self.thr = QDoubleSpinBox(); self.thr.setDecimals(2); self.thr.setSingleStep(0.05)
+        self.thr.setRange(0.05, 0.9); self.thr.setValue(0.30)
+        tcol.addWidget(tl); tcol.addWidget(self.thr)
+        bcol = QVBoxLayout(); bcol.setSpacing(2)
+        bl = QLabel("baseline"); bl.setObjectName("field")
+        self.chk_base = QCheckBox("ALS on"); self.chk_base.setChecked(True)
+        bcol.addWidget(bl); bcol.addWidget(self.chk_base)
+        self.btn = QPushButton("Predict"); self.btn.setObjectName("primary")
+        self.btn.clicked.connect(self._run)
+        ctl.addWidget(ref_b); ctl.addWidget(self.ref_lbl)
+        ctl.addWidget(samp_b); ctl.addWidget(self.samp_lbl, 1)
+        ctl.addLayout(tcol); ctl.addLayout(bcol); ctl.addWidget(self.btn)
+        root.addLayout(ctl)
+
+        kpis = QHBoxLayout(); kpis.setSpacing(12)
+        self.k_dom = Kpi("dominant"); self.k_domp = Kpi("dominant %")
+        self.k_n = Kpi("components"); self.k_px = Kpi("pixels")
+        for k in (self.k_dom, self.k_domp, self.k_n, self.k_px):
+            kpis.addWidget(k)
+        root.addLayout(kpis)
+
+        grid = QGridLayout(); grid.setSpacing(12)
+        self.c_ratio = Canvas(); self.c_spec = Canvas()
+        for cv, title, c in [(self.c_ratio, "Composition ratio", 0),
+                             (self.c_spec, "Sample vs reference templates", 1)]:
+            card, lay = _card(title); lay.addWidget(cv)
+            grid.addWidget(card, 0, c)
+        grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
+        root.addLayout(grid, 1)
+        self.c_ratio.placeholder("Load a sample, then Predict")
+        self.c_spec.placeholder("Load a sample, then Predict")
+
+        self.readout = QLabel(""); self.readout.setObjectName("sub")
+        self.readout.setWordWrap(True)
+        root.addWidget(self.readout)
+
+    def _short(self, p):
+        return "refs: " + ("…" + p[-38:] if len(p) > 38 else p)
+
+    def _browse_ref(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "Reference data folder (your Samples)", self.data_dir)
+        if d:
+            self.data_dir = d; self.ref_lbl.setText(self._short(d))
+
+    def _browse_sample(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Unknown sample map CSV", "",
+                                           "CSV (*.csv)")
+        if p:
+            self.sample = p; self.samp_lbl.setText(os.path.basename(p))
+
+    def _run(self):
+        if not self.sample:
+            self.readout.setText("load a sample first"); return
+        params = dict(data_dir=self.data_dir, sample_path=self.sample,
+                      threshold=self.thr.value(), baseline=self.chk_base.isChecked())
+        self.btn.setEnabled(False); self.btn.setText("Predicting…")
+        self._thread = QThread(); self._worker = PredictWorker(params)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.done.connect(self._apply)
+        self._worker.fail.connect(self._error)
+        self._worker.done.connect(self._thread.quit)
+        self._worker.fail.connect(self._thread.quit)
+        self._thread.start()
+
+    def _error(self, tb):
+        self.btn.setEnabled(True); self.btn.setText("Predict")
+        self.readout.setText("failed — " + tb.strip().splitlines()[-1][:90])
+        print(tb, file=sys.stderr)
+
+    def _apply(self, res):
+        self._res = res
+        self.btn.setEnabled(True); self.btn.setText("Predict")
+        ratio = res.ratio
+        if ratio:
+            dom = max(ratio, key=ratio.get)
+            self.k_dom.set(dom, TEAL); self.k_domp.set(f"{ratio[dom]:.0%}", BLUE)
+        else:
+            self.k_dom.set("—"); self.k_domp.set("—")
+        self.k_n.set(str(len(res.detected)), AMBER)
+        self.k_px.set(f"{res.n_pixels:,}", PURPLE)
+        self._plot_ratio(res); self._plot_spec(res)
+        parts = "  ·  ".join(f"{nm} {ratio.get(nm, 0):.0%}" for nm in res.detected)
+        self.readout.setText(f"<b>detected:</b> {' + '.join(res.detected)}   "
+                             f"&nbsp;&nbsp; <b>ratio:</b> {parts}")
+        self.readout.setTextFormat(Qt.TextFormat.RichText)
+
+    def _plot_ratio(self, res):
+        ax = self.c_ratio.new_ax()
+        names = res.detected or res.comps
+        vals = [res.ratio.get(n, 0.0) for n in names]
+        x = np.arange(len(names))
+        ax.bar(x, vals, color=[SERIES[res.comps.index(n) % len(SERIES)]
+                               if n in res.comps else FAINT for n in names])
+        for xi, v in zip(x, vals):
+            ax.text(xi, v + 0.02, f"{v:.0%}", ha="center", fontsize=9, color=INK)
+        ax.set_xticks(x); ax.set_xticklabels(names, fontsize=9)
+        ax.set_ylim(0, 1.1); ax.set_ylabel("proportion")
+        self.c_ratio.fig.tight_layout(); self.c_ratio.draw_idle()
+
+    def _plot_spec(self, res):
+        ax = self.c_spec.new_ax()
+        axis = res.wn if res.wn is not None else np.arange(res.mean_spectrum.shape[0])
+        for i, nm in enumerate(res.comps):
+            ax.plot(axis, res.templates[i], lw=0.9, alpha=0.6,
+                    color=SERIES[i % len(SERIES)], label=nm)
+        ax.plot(axis, res.mean_spectrum, lw=1.6, color=INK, label="sample")
+        ax.set_xlabel("wavenumber (cm⁻¹)"); ax.set_yticks([])
+        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=2)
+        self.c_spec.fig.tight_layout(); self.c_spec.draw_idle()
+
+
+# --------------------------------------------------------------------------
 # Sampling page — organise raw maps into substance classes (batches)
 # --------------------------------------------------------------------------
 class SamplingPage(QWidget):
@@ -1151,6 +1311,7 @@ class MainWindow(QMainWindow):
     PAGES = [
         ("Samples",   "samples", "Group your maps into substance classes (batches)"),
         ("Model",     "model", "Train a classifier on your reference maps"),
+        ("Predict",   "predict", "Load an unknown sample → read its component ratio"),
         ("Quantify",  "quant", "Ratio → concentration + adsorption competition"),
         ("Real data", "real",  "Analyze real maps: identify · mixtures · calibration"),
     ]
@@ -1158,8 +1319,6 @@ class MainWindow(QMainWindow):
     TOOLS = [
         ("Mixture tool", "sers_app.py",
          "Mixture detector / ratio  —  opens in its own window"),
-        ("Map tool", "sers_discriminator_ctk.py",
-         "Per-pixel hyperspectral map classifier  —  opens in its own window"),
     ]
 
     def __init__(self):
@@ -1209,10 +1368,11 @@ class MainWindow(QMainWindow):
         self.pages = {
             "samples": SamplingPage(),
             "model": ModelPage(),
+            "predict": PredictPage(),
             "quant": QuantifyPage(),
             "real": RealDataPage(),
         }
-        for key in ("samples", "model", "quant", "real"):
+        for key in ("samples", "model", "predict", "quant", "real"):
             self.stack.addWidget(self.pages[key])
 
         self.select("samples")
