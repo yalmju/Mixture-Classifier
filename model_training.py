@@ -50,6 +50,7 @@ class TrainResult:
     n_test: int
     wn: np.ndarray = None            # wavenumber axis
     split: str = "spatial"           # "spatial" (honest) or "random" (leaky)
+    band_f: np.ndarray = None        # per-wavenumber ANOVA F (class discriminability)
 
 
 # --------------------------------------------------------------------------
@@ -324,8 +325,13 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
     per = _per_class_prf(cm, classes)
     macro_f1 = float(np.mean([per[nm][2] for nm in classes]))
 
-    # PCA of the real per-pixel spectra (subsample per class for a clean plot)
+    # per-wavenumber ANOVA F across classes — which bands discriminate substances
+    from sklearn.feature_selection import f_classif
     Xall = np.vstack([Xtr, Xte]); yall = np.concatenate([ytr, yte])
+    F, _pval = f_classif(Xall, yall)
+    band_f = np.nan_to_num(np.asarray(F, float), nan=0.0, posinf=0.0, neginf=0.0)
+
+    # PCA of the real per-pixel spectra (subsample per class for a clean plot)
     rng = np.random.default_rng(seed)
     sel = np.concatenate([
         rng.choice(np.where(yall == i)[0],
@@ -340,7 +346,7 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
         confusion=cm, acc=acc, macro_f1=macro_f1, per_component=per,
         curve_x=cx, curve_y=cy, curve_label=ylab, curve_xlabel=xlab,
         pca_emb=pca_emb, pca_lab=pca_lab,
-        n_train=len(ytr), n_test=len(yte), wn=wn, split=split)
+        n_train=len(ytr), n_test=len(yte), wn=wn, split=split, band_f=band_f)
 
 
 if __name__ == "__main__":

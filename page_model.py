@@ -117,10 +117,10 @@ class ModelPage(QWidget):
             kpis.addWidget(k)
         root.addLayout(kpis)
 
-        # 2x2 plot grid
+        # plot grid: 2x2 + a full-width discriminative-band row
         grid = QGridLayout(); grid.setSpacing(12)
         self.c_curve = Canvas(); self.c_cm = Canvas()
-        self.c_pca = Canvas(); self.c_bar = Canvas()
+        self.c_pca = Canvas(); self.c_bar = Canvas(); self.c_bands = Canvas()
         for (cv, title, r, c) in [
             (self.c_curve, "Learning curve", 0, 0),
             (self.c_cm, "Confusion matrix (held-out test)", 0, 1),
@@ -130,14 +130,18 @@ class ModelPage(QWidget):
             card, lay = _card(title)
             lay.addWidget(cv)
             grid.addWidget(card, r, c)
-        grid.setRowStretch(0, 1); grid.setRowStretch(1, 1)
+        bcard, blay = _card("Discriminative bands — ANOVA F per wavenumber "
+                            "(which bands separate the substances)")
+        blay.addWidget(self.c_bands); grid.addWidget(bcard, 2, 0, 1, 2)
+        grid.setRowStretch(0, 1); grid.setRowStretch(1, 1); grid.setRowStretch(2, 1)
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
         root.addLayout(grid, 1)
 
         for cv, msg in [(self.c_curve, "Train to watch the learning curve"),
                         (self.c_cm, "Train to compute confusion matrix"),
                         (self.c_pca, "Train to compute PCA"),
-                        (self.c_bar, "Train to compute per-class F1")]:
+                        (self.c_bar, "Train to compute per-class F1"),
+                        (self.c_bands, "Train to rank discriminative bands (ANOVA F)")]:
             cv.placeholder(msg)
 
     def _short(self, p):
@@ -192,7 +196,8 @@ class ModelPage(QWidget):
                   [[f"{x:g}", f"{y:.6f}"] for x, y in zip(r.curve_x, r.curve_y)])
         n = _save_figs([("model_learning_curve", self.c_curve),
                         ("model_confusion", self.c_cm),
-                        ("model_pca", self.c_pca), ("model_prf", self.c_bar)], d)
+                        ("model_pca", self.c_pca), ("model_prf", self.c_bar),
+                        ("model_bands", self.c_bands)], d)
         self.src.setText(f"exported CSV + {n} PNG → {os.path.basename(d)}")
 
     # ---- training ----
@@ -252,7 +257,7 @@ class ModelPage(QWidget):
         self.k_tr.set(f"{res.n_train:,}", AMBER)
         self.k_te.set(f"{res.n_test:,}", PURPLE)
         self._plot_curve(res); self._plot_cm(res)
-        self._plot_pca(res); self._plot_bar(res)
+        self._plot_pca(res); self._plot_bar(res); self._plot_bands(res)
 
     # ---- plots ----
     def _plot_curve(self, res):
@@ -308,3 +313,23 @@ class ModelPage(QWidget):
         ax.set_ylim(0, 1.05); ax.set_ylabel("score")
         ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=3)
         self.c_bar.fig.tight_layout(); self.c_bar.draw_idle()
+
+    def _plot_bands(self, res):
+        ax = self.c_bands.new_ax()
+        f = getattr(res, "band_f", None)
+        wn = res.wn
+        if f is None or wn is None or len(f) != len(wn):
+            self.c_bands.placeholder("no band statistics"); return
+        ax.plot(wn, f, lw=1.0, color=PURPLE)
+        ax.fill_between(wn, f, color=PURPLE, alpha=0.15)
+        # label the strongest discriminative bands with their cm⁻¹
+        k = min(6, len(f))
+        top = np.argsort(f)[-k:]
+        for idx in top:
+            ax.annotate(f"{wn[idx]:.0f}", (wn[idx], f[idx]), fontsize=7, color=INK,
+                        ha="center", va="bottom",
+                        xytext=(0, 2), textcoords="offset points")
+            ax.plot([wn[idx]], [f[idx]], "o", ms=3, color=CORAL)
+        ax.set_xlabel("wavenumber (cm⁻¹)"); ax.set_ylabel("ANOVA F")
+        ax.margins(y=0.15)
+        self.c_bands.fig.tight_layout(); self.c_bands.draw_idle()
