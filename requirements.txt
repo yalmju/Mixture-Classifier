@@ -2,7 +2,6 @@ numpy
 scipy
 scikit-learn
 matplotlib
-customtkinter          # legacy tools (sers_app.py, sers_discriminator_ctk.py)
-PyQt6                  # UNMIXR shell + Model-metrics dashboard (unmixr.py)
-# optional: ResNet1D detector (resnet1d.py / demo_resnet.py)
+PyQt6                  # UNMIXR native app (unmixr.py) + embedded matplotlib
+# optional: ResNet1D deep detector — only needed for the "ResNet1D" model backend
 torch
