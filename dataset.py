@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import glob
+import json
 import os
 import re
 
@@ -132,6 +133,41 @@ def save_manifest(data_dir, rows):
         w.writerow(["file", "class", "batch", "role"])
         for fn, cls, batch, role in rows:
             w.writerow([fn, cls, batch, _role(role)])
+    return p
+
+
+_PREPROCESS = "preprocess.json"
+_PREPROCESS_DEFAULT = {"baseline": True, "deriv": 0, "norm": "l2", "trim": None}
+
+
+def load_preprocess(data_dir):
+    """Read <data_dir>/preprocess.json (the preprocessing chosen once in Samples)
+    -> {baseline, deriv, norm, trim}. Returns sensible defaults if absent, so every
+    tab can preprocess identically without asking the user again."""
+    cfg = dict(_PREPROCESS_DEFAULT)
+    try:
+        with open(os.path.join(data_dir, _PREPROCESS)) as f:
+            cfg.update(json.load(f))
+    except Exception:
+        pass
+    t = cfg.get("trim")
+    cfg["trim"] = tuple(t) if (t and len(t) == 2) else None
+    cfg["baseline"] = bool(cfg.get("baseline", True))
+    cfg["deriv"] = int(cfg.get("deriv", 0) or 0)
+    cfg["norm"] = cfg.get("norm") or "l2"
+    return cfg
+
+
+def save_preprocess(data_dir, cfg):
+    """Persist the Samples-chosen preprocessing to <data_dir>/preprocess.json."""
+    trim = cfg.get("trim")
+    out = {"baseline": bool(cfg.get("baseline", True)),
+           "deriv": int(cfg.get("deriv", 0) or 0),
+           "norm": cfg.get("norm") or "l2",
+           "trim": [trim[0], trim[1]] if trim else None}
+    p = os.path.join(data_dir, _PREPROCESS)
+    with open(p, "w") as f:
+        json.dump(out, f, indent=2)
     return p
 
 

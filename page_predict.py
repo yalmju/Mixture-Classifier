@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from ui_common import *
 from predict import predict_sample
 from real_data import PEST_DEFAULT
+from dataset import load_preprocess
 from io_utils import load_calibration_csv
 
 
@@ -79,16 +80,12 @@ class PredictPage(QWidget):
         self.thr = QDoubleSpinBox(); self.thr.setDecimals(2); self.thr.setSingleStep(0.05)
         self.thr.setRange(0.05, 0.9); self.thr.setValue(0.30)
         tcol.addWidget(tl); tcol.addWidget(self.thr)
-        bcol = QVBoxLayout(); bcol.setSpacing(2)
-        bl = QLabel("baseline"); bl.setObjectName("field")
-        self.chk_base = QCheckBox("ALS on"); self.chk_base.setChecked(True)
-        bcol.addWidget(bl); bcol.addWidget(self.chk_base)
         self.btn = QPushButton("Predict"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(ref_b); ctl.addWidget(self.ref_lbl)
         ctl.addWidget(samp_b); ctl.addWidget(self.samp_lbl); ctl.addWidget(self.samp_x)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl, 1); ctl.addWidget(self.cal_x)
-        ctl.addLayout(tcol); ctl.addLayout(bcol); ctl.addWidget(self.btn)
+        ctl.addLayout(tcol); ctl.addWidget(self.btn)
         root.addLayout(ctl)
         self._sync_clear()
 
@@ -201,9 +198,10 @@ class PredictPage(QWidget):
     def _run(self):
         if not self.sample:
             self.readout.setText("load a sample first"); return
+        cfg = load_preprocess(self.data_dir)              # preprocessing set in Samples
         params = dict(data_dir=self.data_dir, sample_path=self.sample,
-                      threshold=self.thr.value(), baseline=self.chk_base.isChecked(),
-                      calib_path=self.calib_path)
+                      threshold=self.thr.value(), baseline=cfg["baseline"],
+                      trim=cfg["trim"], calib_path=self.calib_path)
         self.btn.setEnabled(False); self.btn.setText("Predicting…")
         self._thread = QThread(); self._worker = PredictWorker(params)
         self._worker.moveToThread(self._thread)

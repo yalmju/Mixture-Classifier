@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from ui_common import *
 from unmix import unmix_map
 from real_data import PEST_DEFAULT
+from dataset import load_preprocess
 from io_utils import write_csv
 
 
@@ -77,10 +78,6 @@ class RealDataPage(QWidget):
         self.cmb_method = QComboBox()
         for text, data in self.METHODS:
             self.cmb_method.addItem(text, data)
-        bcol = QVBoxLayout(); bcol.setSpacing(2)
-        bl = QLabel("baseline"); bl.setObjectName("field")
-        self.chk_base = QCheckBox("ALS on"); self.chk_base.setChecked(True)
-        bcol.addWidget(bl); bcol.addWidget(self.chk_base)
         tcol = QVBoxLayout(); tcol.setSpacing(2)
         tl = QLabel("min fraction"); tl.setObjectName("field")
         self.thr = QDoubleSpinBox(); self.thr.setDecimals(2); self.thr.setSingleStep(0.05)
@@ -92,7 +89,7 @@ class RealDataPage(QWidget):
         self.btn.clicked.connect(self._run)
         ctl.addWidget(ref_b); ctl.addWidget(self.ref_lbl)
         ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x, 0)
-        ctl.addWidget(self.cmb_method); ctl.addLayout(bcol); ctl.addLayout(tcol)
+        ctl.addWidget(self.cmb_method); ctl.addLayout(tcol)
         ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
@@ -150,9 +147,10 @@ class RealDataPage(QWidget):
         if not self.test:
             self.status.setText("load a test map first")
             self.status.setStyleSheet(f"color:{RED};"); return
+        cfg = load_preprocess(self.data_dir)              # preprocessing set in Samples
         params = dict(data_dir=self.data_dir, test_path=self.test,
                       method=self.cmb_method.currentData(),
-                      baseline=self.chk_base.isChecked())
+                      baseline=cfg["baseline"], trim=cfg["trim"])
         self.btn.setEnabled(False); self.btn.setText("Unmixing…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
         self._thread = QThread(); self._worker = RealWorker(params)

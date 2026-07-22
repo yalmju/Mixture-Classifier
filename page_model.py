@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from ui_common import *
 from model_training import train_model, TrainResult
 from real_data import PEST_DEFAULT
+from dataset import load_preprocess
 from io_utils import write_csv
 
 
@@ -83,21 +84,8 @@ class ModelPage(QWidget):
         ctl.addWidget(browse); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
-        # ---- controls: row 2 = features + split (the experimentation knobs) ----
+        # ---- controls: row 2 = split only (preprocessing comes from Samples) ----
         ctl2 = QHBoxLayout(); ctl2.setSpacing(10)
-        bcol = QVBoxLayout(); bcol.setSpacing(2)
-        lb = QLabel("baseline"); lb.setObjectName("field")
-        self.chk_base = QCheckBox("ALS on"); self.chk_base.setChecked(True)
-        bcol.addWidget(lb); bcol.addWidget(self.chk_base)
-        ctl2.addLayout(bcol)
-        ctl2.addLayout(self._combo_col("derivative", "cmb_deriv",
-                                       [("none", 0), ("1st", 1), ("2nd", 2)]))
-        ctl2.addLayout(self._combo_col("normalize", "cmb_norm",
-                                       [("L2", "l2"), ("SNV", "snv"), ("none", "none")]))
-        self.sp_lo = self._spin(QSpinBox(), 0, 4000, 0, "trim lo cm⁻¹", step=50)
-        self.sp_hi = self._spin(QSpinBox(), 0, 4000, 4000, "trim hi cm⁻¹", step=50)
-        for w in (self.sp_lo, self.sp_hi):
-            ctl2.addLayout(w)
         ctl2.addLayout(self._combo_col("split", "cmb_split",
                                        [("spatial (honest)", "spatial"),
                                         ("random (leaky)", "random"),
@@ -106,8 +94,11 @@ class ModelPage(QWidget):
                                         ("manual (Samples)", "manual")]))
         self.sp_test = self._spin(QSpinBox(), 5, 90, 50, "test %", step=5)
         ctl2.addLayout(self.sp_test)
+        self.prep_lbl = QLabel(""); self.prep_lbl.setObjectName("field")
+        ctl2.addSpacing(8); ctl2.addWidget(self.prep_lbl)
         ctl2.addStretch(1)
         root.addLayout(ctl2)
+        self._refresh_prep()
 
         # progress bar — visible (busy) only while training, so it never reads as frozen
         self.pbar = QProgressBar(); self.pbar.setTextVisible(False)
@@ -178,7 +169,17 @@ class ModelPage(QWidget):
             "(the data root or its Reference/ subfolder)",
             self.pest_dir)
         if d:
-            self.pest_dir = d; self.src.setText(self._short(d))
+            self.pest_dir = d; self.src.setText(self._short(d)); self._refresh_prep()
+
+    def _refresh_prep(self):
+        """Show the preprocessing that Samples saved for this folder (read-only)."""
+        cfg = load_preprocess(self.pest_dir)
+        deriv = {0: "none", 1: "1st", 2: "2nd"}.get(cfg["deriv"], "none")
+        trim = f"{cfg['trim'][0]}–{cfg['trim'][1]}" if cfg["trim"] else "full"
+        base = "ALS" if cfg["baseline"] else "no-baseline"
+        self.prep_lbl.setText(
+            f"preprocessing (from Samples): {base} · deriv {deriv} · "
+            f"{cfg['norm'].upper()} · trim {trim}")
 
     def _export(self):
         if self._res is None:
@@ -247,16 +248,14 @@ class ModelPage(QWidget):
 
     # ---- training ----
     def _train(self):
-        lo = self.sp_lo.itemAt(1).widget().value()
-        hi = self.sp_hi.itemAt(1).widget().value()
-        trim = (lo, hi) if (hi > lo and (lo > 0 or hi < 4000)) else None
+        cfg = load_preprocess(self.pest_dir)              # preprocessing set in Samples
+        self._refresh_prep()
         params = dict(pest_dir=self.pest_dir, backend=self.cmb.currentData(),
                       epochs=self.sp_ep.itemAt(1).widget().value(),
                       n_estimators=self.sp_tr.itemAt(1).widget().value(),
                       seed=self.sp_seed.itemAt(1).widget().value(),
-                      baseline=self.chk_base.isChecked(), trim=trim,
-                      deriv=self.cmb_deriv.currentData(),
-                      norm=self.cmb_norm.currentData(),
+                      baseline=cfg["baseline"], trim=cfg["trim"],
+                      deriv=cfg["deriv"], norm=cfg["norm"],
                       split=self.cmb_split.currentData(),
                       test_frac=self.sp_test.itemAt(1).widget().value() / 100.0)
         self._train_params = dict(params)                 # remember for model export

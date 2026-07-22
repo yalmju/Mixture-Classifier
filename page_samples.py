@@ -7,13 +7,14 @@ import sys
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QFileDialog,
-    QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QCheckBox, QSpinBox,
 )
 
 from ui_common import *
 from real_data import PEST_DEFAULT
 from dataset import (discover_references, base_and_batch, load_manifest,
-                     save_manifest, map_pixel_count)
+                     save_manifest, map_pixel_count, load_preprocess,
+                     save_preprocess)
 
 
 # --------------------------------------------------------------------------
@@ -29,12 +30,11 @@ class SamplingPage(QWidget):
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Samples"); h1.setObjectName("h1")
-        sub = QLabel("Group your reference maps into substance classes. Repeat "
-                     "measurements of the same substance are BATCHES of one class — "
-                     "not separate classes (THI, THI_2 → one 'THI'). Edit Class / "
-                     "Batch / Role (train or test) per map, then Save. Model, "
-                     "Predict and Real data read this from samples.csv; the Model "
-                     "'manual' split trains on train-role maps and tests on test.")
+        sub = QLabel("Step 1 — prepare the data. Group your maps into substance "
+                     "classes (repeat measurements are BATCHES of one class: THI, "
+                     "THI_2 → one 'THI'), choose Role (train / test / exclude), and "
+                     "set the PREPROCESSING here once. Model, Predict and Real data "
+                     "all reuse it — you set it once and never re-enter it.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -53,9 +53,27 @@ class SamplingPage(QWidget):
         ctl.addWidget(rescan); ctl.addWidget(save)
         root.addLayout(ctl)
 
+        # preprocessing — set ONCE here, reused by every downstream tab
+        prep = QHBoxLayout(); prep.setSpacing(10)
+        pl = QLabel("preprocessing:"); pl.setObjectName("field")
+        prep.addWidget(pl)
+        self.chk_base = QCheckBox("ALS baseline"); self.chk_base.setChecked(True)
+        prep.addWidget(self.chk_base)
+        prep.addLayout(self._combo_col("derivative", "cmb_deriv",
+                                       [("none", 0), ("1st", 1), ("2nd", 2)]))
+        prep.addLayout(self._combo_col("normalize", "cmb_norm",
+                                       [("L2", "l2"), ("SNV", "snv"), ("none", "none")]))
+        self.sp_lo = QSpinBox(); self.sp_lo.setRange(0, 4000); self.sp_lo.setSingleStep(50)
+        self.sp_hi = QSpinBox(); self.sp_hi.setRange(0, 4000); self.sp_hi.setSingleStep(50)
+        self.sp_hi.setValue(4000)
+        prep.addLayout(self._spin_col("trim lo cm⁻¹", self.sp_lo))
+        prep.addLayout(self._spin_col("trim hi cm⁻¹", self.sp_hi))
+        prep.addStretch(1)
+        root.addLayout(prep)
+
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
-            ["File", "# px", "Class (substance)", "Batch", "Role (train/test)"])
+            ["File", "# px", "Class (substance)", "Batch", "Role (train/test/exclude)"])
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for c in (1, 2, 3, 4):
@@ -73,6 +91,39 @@ class SamplingPage(QWidget):
     def _short(self, p):
         return "data: " + ("…" + p[-42:] if len(p) > 42 else p)
 
+    def _combo_col(self, label, attr, items):
+        col = QVBoxLayout(); col.setSpacing(2)
+        lb = QLabel(label); lb.setObjectName("field")
+        cb = QComboBox()
+        for text, data in items:
+            cb.addItem(text, data)
+        setattr(self, attr, cb)
+        col.addWidget(lb); col.addWidget(cb)
+        return col
+
+    def _spin_col(self, label, spin):
+        col = QVBoxLayout(); col.setSpacing(2)
+        lb = QLabel(label); lb.setObjectName("field")
+        col.addWidget(lb); col.addWidget(spin)
+        return col
+
+    def _gather_prep(self):
+        """Current preprocessing choices as a config dict (trim None if full range)."""
+        lo, hi = self.sp_lo.value(), self.sp_hi.value()
+        trim = (lo, hi) if (hi > lo and (lo > 0 or hi < 4000)) else None
+        return {"baseline": self.chk_base.isChecked(),
+                "deriv": self.cmb_deriv.currentData(),
+                "norm": self.cmb_norm.currentData(), "trim": trim}
+
+    def _load_prep(self):
+        """Set the preprocessing widgets from the folder's saved config."""
+        cfg = load_preprocess(self.data_dir)
+        self.chk_base.setChecked(cfg["baseline"])
+        self.cmb_deriv.setCurrentIndex(max(0, self.cmb_deriv.findData(cfg["deriv"])))
+        self.cmb_norm.setCurrentIndex(max(0, self.cmb_norm.findData(cfg["norm"])))
+        self.sp_lo.setValue(cfg["trim"][0] if cfg["trim"] else 0)
+        self.sp_hi.setValue(cfg["trim"][1] if cfg["trim"] else 4000)
+
     def _browse(self):
         d = QFileDialog.getExistingDirectory(
             self, "Data folder with your reference maps", self.data_dir)
@@ -81,6 +132,7 @@ class SamplingPage(QWidget):
 
     def _reload(self):
         self._loading = True
+        self._load_prep()                                 # folder's saved preprocessing
         self.table.setRowCount(0)
         try:
             refs = discover_references(self.data_dir)
@@ -162,7 +214,8 @@ class SamplingPage(QWidget):
             self.status.setText("nothing to save"); return
         try:
             save_manifest(self.data_dir, rows)
-            self.status.setText(f"saved samples.csv ({len(rows)} maps)")
+            save_preprocess(self.data_dir, self._gather_prep())
+            self.status.setText(f"saved samples.csv + preprocess.json ({len(rows)} maps)")
             self.status.setStyleSheet(f"color:{TEAL};")
         except Exception as exc:
             self.status.setText("save failed"); self.status.setStyleSheet(f"color:{RED};")
