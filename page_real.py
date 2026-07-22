@@ -11,15 +11,16 @@ import numpy as np
 from matplotlib.patches import Wedge, Patch
 
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog,
+    QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QColorDialog,
 )
 
 from ui_common import *
 from unmix import unmix_map
 from real_data import PEST_DEFAULT
-from dataset import load_preprocess
+from dataset import load_preprocess, load_colors, save_colors
 from io_utils import write_csv
 
 BG_GREY = "#c7ccd3"
@@ -51,6 +52,7 @@ class RealDataPage(QWidget):
         self._res = None
         self._sel = None
         self._maps_ax = {}          # axes that accept a pixel click
+        self._colors = {}           # per-substance colour override {name: '#hex'}
         self.data_dir = PEST_DEFAULT
         self.test = None
         root = QVBoxLayout(self)
@@ -102,6 +104,12 @@ class RealDataPage(QWidget):
             kpis.addWidget(k)
         root.addLayout(kpis)
 
+        # per-substance colour swatches (click to recolour), filled after a result
+        self.swatches = QHBoxLayout(); self.swatches.setSpacing(6)
+        self.swatches.addWidget(self._mk_lbl("colours:"))
+        self.swatches.addStretch(1)
+        root.addLayout(self.swatches)
+
         grid = QGridLayout(); grid.setSpacing(12)
         self.c_int = Canvas(); self.c_pie = Canvas()
         self.c_spec = Canvas(); self.c_comp = Canvas()
@@ -146,6 +154,58 @@ class RealDataPage(QWidget):
 
     def set_data_dir(self, path):
         self.data_dir = path                              # references come from Samples
+        self._colors = load_colors(path)                  # remembered colour choices
+        if self._res is not None:
+            self._rebuild_swatches(self._res); self._redraw()
+
+    def _mk_lbl(self, text):
+        lb = QLabel(text); lb.setObjectName("field"); return lb
+
+    def _default_color(self, i):
+        return SERIES[i % len(SERIES)]
+
+    def _nb_colors(self, r):
+        """Colour per non-background substance — a saved override or the default."""
+        out = []
+        for i, j in enumerate(r.nonbg):
+            out.append(self._colors.get(r.comps[j], self._default_color(i)))
+        return out
+
+    def _rebuild_swatches(self, r):
+        while self.swatches.count():
+            it = self.swatches.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        self.swatches.addWidget(self._mk_lbl("colours:"))
+        cols = self._nb_colors(r)
+        for i, j in enumerate(r.nonbg):
+            name = r.comps[j]
+            b = QPushButton(name); b.setObjectName("ghost"); b.setFixedHeight(24)
+            b.setStyleSheet(f"QPushButton{{border:2px solid {cols[i]};"
+                            f"border-radius:6px;padding:2px 10px;color:{INK};}}")
+            b.clicked.connect(lambda _=False, nm=name: self._pick_color(nm))
+            self.swatches.addWidget(b)
+        self.swatches.addStretch(1)
+
+    def _pick_color(self, name):
+        cur = QColor(self._colors.get(name, "#1a73e8"))
+        c = QColorDialog.getColor(cur, self, f"Colour for {name}")
+        if not c.isValid():
+            return
+        self._colors[name] = c.name()
+        try:
+            save_colors(self.data_dir, self._colors)
+        except Exception as exc:
+            print("save colors:", exc, file=sys.stderr)
+        self._rebuild_swatches(self._res); self._redraw()
+
+    def _redraw(self):
+        r = self._res
+        if r is None:
+            return
+        self._plot_intensity(r); self._plot_pies(r); self._plot_comp(r)
+        if self._sel is not None:
+            self._plot_spec(r, self._sel)
 
     def _method(self):
         return self.cmb_method.itemAt(1).widget().currentData()
@@ -158,9 +218,6 @@ class RealDataPage(QWidget):
 
     def _clear_test(self):
         self.test = None; self.test_lbl.setText("no test map"); self.test_x.setVisible(False)
-
-    def _nb_colors(self, r):
-        return [SERIES[i % len(SERIES)] for i in range(len(r.nonbg))]
 
     # ---- run ----
     def _run(self):
@@ -210,6 +267,7 @@ class RealDataPage(QWidget):
         self.k_n.set(str(int(np.sum(r.mean_ratio >= 0.05))), AMBER)
         self.k_hit.set(f"{r.hit_frac:.0%}", BLUE)
         self.k_px.set(f"{r.n_pixels:,}", PURPLE)
+        self._rebuild_swatches(r)
         self._plot_intensity(r); self._plot_pies(r); self._plot_comp(r)
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
         ratio = "  :  ".join(f"{nm} {r.mean_ratio[i] * 100:.0f}"

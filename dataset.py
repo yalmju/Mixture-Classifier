@@ -158,6 +158,27 @@ def load_preprocess(data_dir):
     return cfg
 
 
+_COLORS = "colors.json"
+
+
+def load_colors(data_dir):
+    """Read <data_dir>/colors.json -> {class_name: '#hex'} (empty if absent)."""
+    try:
+        with open(os.path.join(data_dir, _COLORS)) as f:
+            m = json.load(f)
+        return {str(k): str(v) for k, v in m.items()}
+    except Exception:
+        return {}
+
+
+def save_colors(data_dir, mapping):
+    """Persist per-substance colours to <data_dir>/colors.json."""
+    p = os.path.join(data_dir, _COLORS)
+    with open(p, "w") as f:
+        json.dump({str(k): str(v) for k, v in mapping.items()}, f, indent=2)
+    return p
+
+
 def save_preprocess(data_dir, cfg):
     """Persist the Samples-chosen preprocessing to <data_dir>/preprocess.json."""
     trim = cfg.get("trim")
