@@ -1,6 +1,6 @@
 # UNMIXR — TODO (open items)
 
-_남긴 날: 2026-07-21. 다음 세션에서 이어서._
+_남긴 날: 2026-07-22. 다음 세션에서 이어서._
 
 ## 1. Model 페이지 중복 정리 (결정 필요) ★
 Map tool의 **Validation** 이 이미 다중참조 단일성분 분류 + **5-fold CV confusion (0.985)**
