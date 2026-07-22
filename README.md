@@ -10,26 +10,26 @@ numpy / scipy / scikit-learn so you can read and extend every line.
 
 ## UNMIXR — the app (PyQt6)
 
-A light PyQt6 front-end structured as a three-stage pipeline —
-**Train → Calibrate → Analyze** — over a top pill navigation:
+A single native PyQt6 window; every tool is a tab (the earlier customtkinter
+tools are retired — their jobs are covered natively here):
 
 ```bash
 pip install -r requirements.txt
 python unmixr.py
 ```
 
-| Stage | Page | What it does |
-|-------|------|--------------|
-| **1. Train** | **Model** | Train the mixture classifier on synthetic pure spectra and read its metrics **live** — KPI tiles (micro F1 / precision / recall / exact-match) over a 2×2 plot grid: **PCA scatter**, **confusion matrix**, per-component **precision / recall / F1**, reference templates. Core `model_metrics.py`. |
-| **2. Calibrate** | **Quantify** | **Ratio → absolute M + Langmuir competition**. Fits each compound's Langmuir isotherm from a dilution series (`K_i` and `gA_i` separately), inverts competitive adsorption to absolute **molarity**, and judges competition — surface- vs solution-dominant, selectivity `K_max/K_min`, which compound is buried. Core `calibration.py`. |
-| **3. Analyze** | **Discriminator** | The real DQ / THI / TBZ maps in one screen: **single-component 4-class confusion** (per pixel, ~100%), a **detection-strategy comparison** (RF-on-mean vs **per-pixel NNLS voting** vs matched-filter — per-pixel wins: F1 0.73→0.92, exact 20%→80% by using the spatial info the mean discards), the per-pixel **detection grid**, **composition confusion**, and **response-factor correction**. `Data folder…` re-points to the data; **Mixture tool** / **Map tool** buttons launch the detailed customtkinter apps in their own window. Core `real_data.py`. |
+| Tab | What it does |
+|-----|--------------|
+| **Samples** | Group your reference maps into substance classes. Repeat measurements of one substance are *batches* of one class (`THI`, `THI_2` → one "THI"), **not** separate classes. Edit Class/Batch and save `samples.csv`, which Model / Predict / Real data read. Core `dataset.py`. |
+| **Model** | Train a single-component classifier on your reference maps. Pick the **algorithm** (RandomForest / ResNet1D / SVM / k-NN / Logistic Reg. / Gradient Boosting), **preprocessing** (ALS baseline, Savitzky-Golay derivative, L2/SNV norm, wavenumber trim) and **split** (spatial = honest, random = leaky, batch = leave-one-batch-out); read a live learning curve, confusion matrix, per-class F1 and PCA. Core `model_training.py`. |
+| **Predict** | Load ONE unknown sample map → its component ratio from **per-pixel NNLS** averaged over the map (recovers minor components a mean spectrum buries), plus a per-pixel dominant-component map. Core `predict.py`. |
+| **Quantify** | **Ratio → absolute M + Langmuir competition**. Fits each compound's Langmuir isotherm from a dilution series (`K_i` and `gA_i` separately), inverts competitive adsorption to absolute **molarity**, and judges competition — surface- vs solution-dominant, selectivity `K_max/K_min`, which compound is buried. Core `calibration.py`. |
+| **Real data** | Map analysis in one screen: **single-component confusion** (spatial split), a **detection-strategy comparison** (RF-on-mean vs **per-pixel NNLS voting** vs matched-filter — per-pixel wins: F1 0.73→0.92, exact 20%→80%), the per-pixel **detection grid**, **composition confusion**, and **response-factor correction**. Generalised to any substances — the DQ / THI / TBZ pesticides are just the shipped example. Core `real_data.py`. |
 
-Every page has **Load…** (feed your own data — a reference-spectra CSV for Model,
-a dilution-series CSV for Quantify, a data folder for Discriminator) and
-**Export…** (results CSV + the page's figures as PNG). CSV formats are documented
-in `io_utils.py`. The two detailed tools (`sers_app.py`, `sers_discriminator_ctk.py`)
-are customtkinter and launch as separate processes. Rename the app by editing
-`APP_NAME` in `unmixr.py`.
+Every page has **Load… / Data folder…** (feed your own maps) and **Export…**
+(results CSV + figures as PNG). CSV formats are documented in `io_utils.py`; drop
+a PNG at `assets/icon.png` for the app icon. Rename the app via `APP_NAME` in
+`unmixr.py`.
 
 ## Why this design
 
@@ -45,7 +45,7 @@ compound's fingerprint, then:
    weight are dropped (at most 3 kept), removing false positives from overlapping
    peaks.
 
-The real-data lesson (see the **Discriminator** page): on the DQ/THI/TBZ maps,
+The real-data lesson (see the **Real data** page): on the DQ/THI/TBZ maps,
 THI's ~13× SERS response buries DQ/TBZ in the **mean** spectrum, so a mean-spectrum
 classifier misses them. **Per-pixel NNLS voting** recovers them (F1 0.73→0.92) by
 using the spatial variation the mean discards — the bottleneck was information, not
@@ -53,22 +53,24 @@ model capacity.
 
 ## Files
 
-**App + cores** (numpy / scipy / sklearn only for the cores, so any front-end can reuse them):
-- `unmixr.py` — the PyQt6 app (entry point).
-- `model_metrics.py` — training + evaluation (Model page).
+**App:**
+- `unmixr.py` — the PyQt6 app (entry point); every tab is native with embedded matplotlib.
+
+**UI-agnostic cores** (numpy / scipy / sklearn — reusable from any front-end):
+- `dataset.py` — turn a data folder into a dataset spec: discover reference maps, group batches into classes, read/write `samples.csv` and the mixture manifest (Samples page).
+- `model_training.py` — train a classifier on the reference maps with honest spatial / batch / random splits (Model page).
+- `predict.py` — apply the references to an unknown sample; per-pixel NNLS composition + dominant-component map (Predict page).
 - `calibration.py` — Langmuir isotherm fit, coverage→M inversion, competition judgment (Quantify page). `build_synthetic_lab()` gives a fully-known ground truth — `python calibration.py`.
-- `real_data.py` — load the real pesticide maps, run the three detection strategies (Discriminator page). `python real_data.py` prints the strategy table.
+- `real_data.py` — load the maps, run the detection strategies + response-factor calibration (Real data page). `python real_data.py` prints the strategy table.
 
 **Analysis engine:**
 - `sers_mixture.py` — component-DETECTION pipeline (which compounds present).
 - `competitive.py` — concentration-RATIO recovery under competitive Langmuir adsorption.
 - `competitive_compare.py` — explain competitive adsorption from measured mixtures (additive residual + Langmuir-vs-linear + partner displacement).
 - `synthetic.py` — synthetic SERS generator (competitive adsorption) so everything runs with zero real data.
-- `resnet1d.py` — ResNet1D multi-label detector (PyTorch), the Molecules-2025 architecture; a drop-in alternative to the RF heads.
+- `resnet1d.py` — ResNet1D multi-label detector (PyTorch), the Molecules-2025 architecture; the "ResNet1D" Model backend.
 
-**Detailed tools** (customtkinter, launched from the Discriminator page or run standalone; both share the UNMIXR light look — teal "U" header bar + white cards — via `family.py`):
-- `sers_app.py` — Mixture tool: sidebar + cards dashboard, load pure/unknown CSVs, detect + ratio + export. `brand.py` holds the colors.
-- `sers_discriminator_ctk.py` (+ `sers_discriminator.py` core) — Map tool: reference + hyperspectral-map CSVs → per-pixel identification and unmixing maps.
+**Folders:** `examples/` sample CSVs · `docs/` project status / reference pages · `assets/` the app icon.
 
 ## Concentration ratios under competitive adsorption (`competitive.py`)
 
