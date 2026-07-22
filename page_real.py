@@ -62,6 +62,7 @@ class RealDataPage(QWidget):
         self.data_dir = PEST_DEFAULT
         self.test = None
         self.model_path = None      # trained model (unmixr_model.joblib) for classify
+        self.calib_path = None      # optional dilution-series calibration CSV → µM
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(12)
 
@@ -89,6 +90,13 @@ class RealDataPage(QWidget):
                            "used by the 'Trained model' method")
         model_b.clicked.connect(self._browse_model)
         self.model_lbl = QLabel(""); self.model_lbl.setObjectName("field")
+        cal_b = QPushButton("Load calibration…"); cal_b.setObjectName("ghost")
+        cal_b.setToolTip("a dilution-series CSV → per-pixel absolute concentration (µM)")
+        cal_b.clicked.connect(self._browse_calib)
+        self.cal_lbl = QLabel(""); self.cal_lbl.setObjectName("field")
+        self.cal_x = QPushButton("✕"); self.cal_x.setObjectName("ghost")
+        self.cal_x.setFixedWidth(30); self.cal_x.setToolTip("clear calibration")
+        self.cal_x.clicked.connect(self._clear_calib); self.cal_x.setVisible(False)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
@@ -96,6 +104,7 @@ class RealDataPage(QWidget):
         ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x)
         ctl.addLayout(self.cmb_method)
         ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
+        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.cal_x)
         ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
@@ -232,6 +241,17 @@ class RealDataPage(QWidget):
             self.model_path = p; self.model_lbl.setText(os.path.basename(p))
             self.cmb_method.itemAt(1).widget().setCurrentIndex(2)   # switch to model
 
+    def _browse_calib(self):
+        p, _ = QFileDialog.getOpenFileName(
+            self, "Calibration CSV (compound, concentration_M, wavenumbers…)", "",
+            "CSV (*.csv)")
+        if p:
+            self.calib_path = p; self.cal_lbl.setText("calib: " + os.path.basename(p))
+            self.cal_x.setVisible(True)
+
+    def _clear_calib(self):
+        self.calib_path = None; self.cal_lbl.setText(""); self.cal_x.setVisible(False)
+
     # ---- run ----
     def _run(self):
         if not self.test:
@@ -249,7 +269,8 @@ class RealDataPage(QWidget):
             cfg = load_preprocess(self.data_dir)
             params = dict(data_dir=self.data_dir, test_path=self.test,
                           method=self._method(), baseline=cfg["baseline"],
-                          trim=cfg["trim"], min_frac=self.thr_value())
+                          trim=cfg["trim"], min_frac=self.thr_value(),
+                          calib_path=self.calib_path)
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
         self._thread = QThread(); self._worker = RealWorker(params, use_model=use_model)
@@ -289,10 +310,21 @@ class RealDataPage(QWidget):
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
         ratio = "  :  ".join(f"{nm} {r.mean_ratio[i] * 100:.0f}"
                              for i, nm in enumerate(nb))
-        self.readout.setText(
-            f"<b>hit:</b> {r.hit_frac:.0%} of pixels are a substance &nbsp;·&nbsp; "
-            f"<b>mean ratio</b> (hit pixels): {ratio} &nbsp;·&nbsp; "
-            f"<b>dominant:</b> {r.dominant}")
+        txt = (f"<b>hit:</b> {r.hit_frac:.0%} of pixels are a substance &nbsp;·&nbsp; "
+               f"<b>mean ratio</b> (hit pixels): {ratio} &nbsp;·&nbsp; "
+               f"<b>dominant:</b> {r.dominant}")
+        if getattr(r, "calibrated", False) and r.conc_avg is not None:
+            um = r.conc_avg * 1e6
+            cs = "  ·  ".join(f"{nm} {um[i]:.3g} µM" for i, nm in enumerate(nb)
+                              if np.isfinite(um[i]) and um[i] > 0)
+            txt += f"<br><b>mean concentration</b> (hit pixels): {cs}"
+            if r.calib_r2 is not None:
+                r2s = "  ·  ".join(f"{nm} R²={r.calib_r2[i]:.2f}" for i, nm in enumerate(nb))
+                tag = ("  ⚠ low-quality calibration — µM approximate"
+                       if float(np.min(r.calib_r2)) < 0.7 else "")
+                txt += (f"<br><span style='color:{FAINT}'>calibration fit: {r2s}{tag}"
+                        "  ·  click a pixel for its µM</span>")
+        self.readout.setText(txt)
 
     # ---- plots ----
     def _grid_rc(self, r):
@@ -398,6 +430,13 @@ class RealDataPage(QWidget):
         rat = "  ·  ".join(f"{r.comps[j]} {r.ratio_nb[i, k] * 100:.0f}%"
                            for k, j in enumerate(r.nonbg) if r.ratio_nb[i, k] > 0.02)
         tag = rat if r.hit[i] else "background"
+        if getattr(r, "conc", None) is not None and r.hit[i]:   # absolute µM per pixel
+            um = r.conc[i] * 1e6
+            cs = "  ·  ".join(f"{r.comps[j]} {um[k]:.3g}µM" for k, j in enumerate(r.nonbg)
+                              if np.isfinite(um[k]) and um[k] > 0)
+            sat = ("  ⚠sat" if r.pp_theta is not None and r.pp_theta[i] > 0.85 else "")
+            if cs:
+                tag += f"  |  {cs}{sat}"
         ax.set_title(f"pixel ({xp:.0f}, {yp:.0f}) — {tag}", fontsize=8, color=INK)
         ax.set_xlabel("wavenumber (cm⁻¹)"); ax.set_yticks([])
         ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE,
@@ -428,13 +467,15 @@ class RealDataPage(QWidget):
                   ["substance", "mean_ratio"],
                   [[nm, f"{r.mean_ratio[i]:.4f}"] for i, nm in enumerate(nb)])
         inten = r.spectra.sum(axis=1)                      # total baseline-removed signal
+        cal = getattr(r, "conc", None) is not None
         head = (["x", "y", "hit", "total_intensity"]
                 + [f"ratio_{nm}" for nm in nb] + [f"A_{c}" for c in r.comps]
-                + ["reliability_r2"])
+                + ([f"conc_uM_{nm}" for nm in nb] if cal else []) + ["reliability_r2"])
         rows = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}", int(r.hit[i]),
                  f"{inten[i]:.4f}"]
                 + [f"{r.ratio_nb[i, k]:.4f}" for k in range(len(nb))]
                 + [f"{r.A[i, k]:.5f}" for k in range(len(r.comps))]
+                + ([f"{r.conc[i, k] * 1e6:.4g}" for k in range(len(nb))] if cal else [])
                 + [f"{r.reliab[i]:.4f}"] for i in range(r.n_pixels)]
         write_csv(os.path.join(d, "per_pixel.csv"), head, rows)
         n = _save_figs([("real_intensity", self.c_int), ("real_composition_pies", self.c_pie),
