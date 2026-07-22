@@ -213,10 +213,10 @@ class ModelPage(QWidget):
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Model training"); h1.setObjectName("h1")
-        sub = QLabel("Train a single-component classifier on the real pesticide "
-                     "reference maps (DQ / THI / TBZ / BLK). Honest spatial split — "
-                     "train on the left half of each map, test on the right — with a "
-                     "live learning curve, confusion matrix and per-class F1.")
+        sub = QLabel("Train on the real pesticide reference maps "
+                     "(DQ / THI / TBZ / BLK). Spatial split — the left half of each "
+                     "map trains, the right half tests. Learning curve · confusion "
+                     "matrix · per-class F1 · PCA.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
