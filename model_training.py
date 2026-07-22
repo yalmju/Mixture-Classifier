@@ -1,42 +1,39 @@
-"""model_training.py — train a single-component classifier on the REAL pest
-reference maps (DQ / THI / TBZ / BLK), for the UNMIXR "Model" page.
+"""model_training.py — train a single-component classifier on a set of reference
+SERS maps, for the UNMIXR "Model" page.
 
-The Model page used to train on *synthetic* pure spectra (a demo that overlapped
-the Discriminator page). This turns it into a genuine model-training tool that
-learns from the real pesticide reference maps, with two selectable backends:
+The classes are whatever reference maps the data folder holds (one pure substance
+per map) — discovered by `dataset.discover_references`, not hardcoded. The
+DQ / THI / TBZ / BLK pesticides are just the example that ships.
+
+Two selectable backends, both trained on the honest spatial (block) split — the
+left half of each map trains, the right half tests (no adjacent-pixel leakage):
 
     "rf"      RandomForest on the per-pixel spectra  (scikit-learn, no torch).
               Learning curve = out-of-bag error as trees are added.
     "resnet"  ResNet1D deep classifier on the per-pixel spectra  (torch), with a
-              live per-epoch training-loss curve — the "model learning" view the
-              GUI never had before.
+              per-epoch training-loss curve.
 
-Both backends train on the SAME honest spatial (block) split the Discriminator
-page uses — train on the left half of each map (by X coordinate), test on the
-right half — so per-pixel accuracy is not inflated by adjacent-pixel leakage.
-
-UI-agnostic: only numpy / scikit-learn are imported at module load. torch is
-imported lazily inside the resnet path, so the RF backend (and importing this
-module from the Qt app) works even when torch is not installed.
+UI-agnostic: only numpy / scikit-learn are imported at module load; torch is
+imported lazily inside the resnet path.
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.metrics import confusion_matrix
 
-from real_data import load_map, REF_FILES, CLASSES4, COMPS, PEST_DEFAULT
+from real_data import load_map, PEST_DEFAULT
+from dataset import discover_references, reference_dir, is_blank
 from sers_mixture import preprocess
 
 
 @dataclass
 class TrainResult:
     backend: str                     # "rf" or "resnet"
-    classes: list                    # CLASSES4  (DQ / THI / TBZ / BLK)
-    comps: list                      # COMPS     (the 3 detectable pesticides)
+    classes: list                    # discovered class names (blank last)
+    comps: list                      # non-blank classes
     confusion: np.ndarray            # (K, K) int, spatial split, rows=true cols=pred
     acc: float                       # spatial-split test accuracy
     macro_f1: float                  # unweighted mean of per-class F1
@@ -46,54 +43,46 @@ class TrainResult:
     curve_label: str                 # y-axis label for the learning curve
     curve_xlabel: str                # x-axis label for the learning curve
     pca_emb: np.ndarray              # (n_sample, 2) PCA of real per-pixel spectra
-    pca_lab: np.ndarray              # (n_sample,) class index 0-3
+    pca_lab: np.ndarray              # (n_sample,) class index
     n_train: int
     n_test: int
     wn: np.ndarray = None            # wavenumber axis
 
 
 # --------------------------------------------------------------------------
-# data — real pest references, honest spatial (block) split
+# data — discovered reference maps, honest spatial (block) split
 # --------------------------------------------------------------------------
-def _resolve_ref_dir(pest_dir):
-    """Find the folder that actually holds the reference CSVs. Accept either the
-    Pest_Discriminator root (maps live in .../Reference/) or the Reference folder
-    itself — so 'Training data…' works whichever of the two the user picks."""
-    candidates = [os.path.join(pest_dir, "Reference"), pest_dir]
-    for d in candidates:
-        if all(os.path.exists(os.path.join(d, f)) for f in REF_FILES.values()):
-            return d
-    missing = [f for f in REF_FILES.values()
-               if not os.path.exists(os.path.join(candidates[0], f))]
-    raise FileNotFoundError(
-        "reference CSVs not found. Pick the Pest_Discriminator folder (or its "
-        f"Reference/ subfolder).\nlooked in: {candidates[0]}  and  {candidates[1]}"
-        f"\nmissing: {missing}")
+def _load_split(data_dir):
+    """Discover the reference maps and split each by its X-median into a
+    train (left) / test (right) block. Returns preprocessed per-pixel matrices
+    plus the ordered class names."""
+    refs = discover_references(data_dir)
+    if len(refs) < 2:
+        found = [n for n, _ in refs]
+        raise FileNotFoundError(
+            "need at least 2 reference maps (one per class). Pick the data folder "
+            "holding your reference maps (a Reference/ subfolder is used if present)."
+            f"\nlooked in: {reference_dir(data_dir)}\nfound: {found}")
 
-
-def _load_split(pest_dir):
-    """Load the 4 reference maps and split each by its X-median into a
-    train (left) / test (right) block. Returns preprocessed per-pixel matrices."""
-    ref_dir = _resolve_ref_dir(pest_dir)
-
+    classes = [n for n, _ in refs]
     Xtr, ytr, Xte, yte, wn = [], [], [], [], None
-    for i, lab in enumerate(CLASSES4):
-        wn, cube, _mean, coord = load_map(os.path.join(ref_dir, REF_FILES[lab]))
+    for i, (_name, path) in enumerate(refs):
+        wn, cube, _mean, coord = load_map(path)
         Xp = preprocess(cube)
         xc = coord[:, 0]
         left = xc < np.median(xc)                     # spatial block split
-        if left.all() or (~left).all():               # degenerate map -> random
+        if left.all() or (~left).all():               # degenerate map -> alternate
             left = np.arange(len(Xp)) % 2 == 0
         Xtr.append(Xp[left]); ytr += [i] * int(left.sum())
         Xte.append(Xp[~left]); yte += [i] * int((~left).sum())
     return (np.vstack(Xtr), np.array(ytr),
-            np.vstack(Xte), np.array(yte), wn)
+            np.vstack(Xte), np.array(yte), wn, classes)
 
 
 # --------------------------------------------------------------------------
 # backends
 # --------------------------------------------------------------------------
-def _train_rf(Xtr, ytr, Xte, yte, n_estimators=300, seed=0):
+def _train_rf(Xtr, ytr, Xte, yte, K, n_estimators=300, seed=0):
     """RandomForest on per-pixel spectra; OOB-error learning curve as trees grow."""
     from sklearn.ensemble import RandomForestClassifier
 
@@ -111,20 +100,19 @@ def _train_rf(Xtr, ytr, Xte, yte, n_estimators=300, seed=0):
         xs.append(n)
         ys.append(1.0 - float(rf.oob_score_))         # OOB error
     yp = rf.predict(Xte)
-    cm = confusion_matrix(yte, yp, labels=range(len(CLASSES4)))
+    cm = confusion_matrix(yte, yp, labels=range(K))
     acc = float(np.mean(yp == yte))
     return cm, acc, np.array(xs, float), np.array(ys, float), "OOB error", "trees"
 
 
-def _train_resnet(Xtr, ytr, Xte, yte, epochs=25, batch_size=128, lr=1e-3,
+def _train_resnet(Xtr, ytr, Xte, yte, K, epochs=25, batch_size=128, lr=1e-3,
                   base=16, seed=0):
-    """ResNet1D 4-class classifier on per-pixel spectra; per-epoch loss curve."""
+    """ResNet1D K-class classifier on per-pixel spectra; per-epoch loss curve."""
     import torch
     import torch.nn as nn
     from resnet1d import ResNet1D
 
     torch.manual_seed(seed)
-    K = len(CLASSES4)
     Xt = torch.tensor(np.asarray(Xtr, np.float32))
     yt = torch.tensor(np.asarray(ytr, np.int64))
     ds = torch.utils.data.TensorDataset(Xt, yt)
@@ -159,10 +147,10 @@ def _train_resnet(Xtr, ytr, Xte, yte, epochs=25, batch_size=128, lr=1e-3,
 # --------------------------------------------------------------------------
 # entry point
 # --------------------------------------------------------------------------
-def _per_class_prf(cm):
+def _per_class_prf(cm, classes):
     """Per-class (precision, recall, f1, support) from a confusion matrix."""
     per = {}
-    for i, nm in enumerate(CLASSES4):
+    for i, nm in enumerate(classes):
         tp = int(cm[i, i])
         fp = int(cm[:, i].sum() - tp)
         fn = int(cm[i, :].sum() - tp)
@@ -175,8 +163,9 @@ def _per_class_prf(cm):
 
 def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
                 n_estimators=300, seed=0) -> TrainResult:
-    """Load the real pest references and train the chosen backend on the honest
-    spatial split. ``backend`` is "rf" (RandomForest) or "resnet" (ResNet1D)."""
+    """Discover the reference maps in ``pest_dir`` and train the chosen backend on
+    the honest spatial split. ``backend`` is "rf" (RandomForest) or "resnet"
+    (ResNet1D). ``pest_dir`` is the data folder (or its Reference/ subfolder)."""
     if backend == "resnet":
         try:
             import torch  # noqa: F401  (fail early with a clear message)
@@ -185,17 +174,18 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
                 "ResNet1D backend needs PyTorch — install it (pip install torch) "
                 "or pick the RandomForest backend.") from exc
 
-    Xtr, ytr, Xte, yte, wn = _load_split(pest_dir)
+    Xtr, ytr, Xte, yte, wn, classes = _load_split(pest_dir)
+    K = len(classes)
 
     if backend == "resnet":
         cm, acc, cx, cy, ylab, xlab = _train_resnet(
-            Xtr, ytr, Xte, yte, epochs=epochs, seed=seed)
+            Xtr, ytr, Xte, yte, K, epochs=epochs, seed=seed)
     else:
         cm, acc, cx, cy, ylab, xlab = _train_rf(
-            Xtr, ytr, Xte, yte, n_estimators=n_estimators, seed=seed)
+            Xtr, ytr, Xte, yte, K, n_estimators=n_estimators, seed=seed)
 
-    per = _per_class_prf(cm)
-    macro_f1 = float(np.mean([per[nm][2] for nm in CLASSES4]))
+    per = _per_class_prf(cm, classes)
+    macro_f1 = float(np.mean([per[nm][2] for nm in classes]))
 
     # PCA of the real per-pixel spectra (subsample per class for a clean plot)
     Xall = np.vstack([Xtr, Xte]); yall = np.concatenate([ytr, yte])
@@ -203,12 +193,13 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
     sel = np.concatenate([
         rng.choice(np.where(yall == i)[0],
                    size=min(120, int((yall == i).sum())), replace=False)
-        for i in range(len(CLASSES4))])
+        for i in range(K)])
     pca_emb = PCA(n_components=2, random_state=seed).fit_transform(Xall[sel])
     pca_lab = yall[sel]
 
+    comps = [c for c in classes if not is_blank(c)]
     return TrainResult(
-        backend=backend, classes=CLASSES4, comps=COMPS,
+        backend=backend, classes=classes, comps=comps,
         confusion=cm, acc=acc, macro_f1=macro_f1, per_component=per,
         curve_x=cx, curve_y=cy, curve_label=ylab, curve_xlabel=xlab,
         pca_emb=pca_emb, pca_lab=pca_lab,
@@ -217,8 +208,8 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
 
 if __name__ == "__main__":
     r = train_model(backend="rf")
-    print(f"backend={r.backend}  spatial acc={r.acc:.3f}  macro F1={r.macro_f1:.3f}")
-    print("per-class P/R/F1:")
+    print(f"backend={r.backend}  classes={r.classes}")
+    print(f"spatial acc={r.acc:.3f}  macro F1={r.macro_f1:.3f}")
     for nm in r.classes:
         p, rc, f, s = r.per_component[nm]
-        print(f"  {nm:4s}  P={p:.2f} R={rc:.2f} F1={f:.2f}  (n={s})")
+        print(f"  {nm:8s}  P={p:.2f} R={rc:.2f} F1={f:.2f}  (n={s})")

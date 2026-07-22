@@ -32,7 +32,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QFrame,
     QHBoxLayout, QVBoxLayout, QGridLayout, QStackedWidget, QSpinBox,
@@ -58,6 +58,8 @@ def _save_figs(named_canvases, folder):
 APP_NAME = "UNMIXR"
 VERSION = "1.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# App icon: drop a PNG at assets/icon.png and it is picked up automatically.
+ICON_PATH = os.path.join(BASE_DIR, "assets", "icon.png")
 
 # ---- light palette -------------------------------------------------------
 PAGE   = "#fafbfc"
@@ -1065,7 +1067,11 @@ def main():
     app = QApplication(sys.argv)
     app.setStyleSheet(QSS)
     app.setFont(QFont("Segoe UI", 10))
+    if os.path.exists(ICON_PATH):
+        app.setWindowIcon(QIcon(ICON_PATH))
     win = MainWindow()
+    if os.path.exists(ICON_PATH):
+        win.setWindowIcon(QIcon(ICON_PATH))
     win.show()
     sys.exit(app.exec())
 
