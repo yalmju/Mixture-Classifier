@@ -15,21 +15,21 @@ tools are retired — their jobs are covered natively here):
 
 ```bash
 pip install -r requirements.txt
-python unmixr.py
+python UNMIXR.py
 ```
 
 | Tab | What it does |
 |-----|--------------|
-| **Samples** | Group your reference maps into substance classes. Repeat measurements of one substance are *batches* of one class (`THI`, `THI_2` → one "THI"), **not** separate classes. Edit Class/Batch and save `samples.csv`, which Model / Predict / Real data read. Core `dataset.py`. |
-| **Model** | Train a single-component classifier on your reference maps. Pick the **algorithm** (RandomForest / ResNet1D / SVM / k-NN / Logistic Reg. / Gradient Boosting), **preprocessing** (ALS baseline, Savitzky-Golay derivative, L2/SNV norm, wavenumber trim) and **split** (spatial = honest, random = leaky, batch = leave-one-batch-out); read a live learning curve, confusion matrix, per-class F1 and PCA. Core `model_training.py`. |
+| **Samples** | **Step 1 — prepare the data.** Group your reference maps into substance classes (repeat measurements of one substance are *batches* of one class: `THI`, `THI_2` → one "THI", **not** separate classes), set each map's Role (train / test / **exclude**), and choose the **preprocessing here once** (ALS baseline · Savitzky-Golay derivative · L2/SNV norm · wavenumber trim). Saved to `samples.csv` + `preprocess.json`; **Model / Predict / Real data all reuse the same preprocessing** — you set it once and never re-enter it. Core `dataset.py`. |
+| **Model** | **Step 2 — train.** Pick the **algorithm** (RandomForest / ResNet1D / SVM / k-NN / Logistic Reg. / Gradient Boosting / **PLS-DA**) and the **split** (spatial = honest, random = leaky, batch / batch-CV = leave-one-batch-out, manual = Samples roles); read a live learning curve, a row-normalised confusion matrix, per-class F1, PCA and the **discriminative bands** (ANOVA F, or PLS-DA **VIP**). Export saves every plot as PNG + CSV and the fitted model for reuse. Preprocessing comes from Samples. Core `model_training.py`. |
 | **Predict** | Load ONE unknown sample map → its component ratio from **per-pixel NNLS** averaged over the map (recovers minor components a mean spectrum buries), plus a per-pixel dominant-component map. Core `predict.py`. |
 | **Quantify** | **Ratio → absolute M + Langmuir competition**. Fits each compound's Langmuir isotherm from a dilution series (`K_i` and `gA_i` separately), inverts competitive adsorption to absolute **molarity**, and judges competition — surface- vs solution-dominant, selectivity `K_max/K_min`, which compound is buried. Core `calibration.py`. |
-| **Real data** | Map analysis in one screen: **single-component confusion** (spatial split), a **detection-strategy comparison** (RF-on-mean vs **per-pixel NNLS voting** vs matched-filter — per-pixel wins: F1 0.73→0.92, exact 20%→80%), the per-pixel **detection grid**, **composition confusion**, and **response-factor correction**. Generalised to any substances — the DQ / THI / TBZ pesticides are just the shipped example. Core `real_data.py`. |
+| **Real data** | Unmix ONE test map against your references by **NNLS** (fixed templates) or **MCR-ALS** (refines the component spectra), and read it four ways: per-substance **intensity maps** (where each substance is), a per-pixel **reliability** map (reconstruction R²), a measured-vs-reconstructed **validation** plot (+ spectral-angle), and the overall **composition pie**. Generalised to any substances — the DQ / THI / TBZ pesticides are just the shipped example. Core `unmix.py`. |
 
 Every page has **Load… / Data folder…** (feed your own maps) and **Export…**
 (results CSV + figures as PNG). CSV formats are documented in `io_utils.py`; drop
 a PNG at `assets/icon.png` for the app icon. Rename the app via `APP_NAME` in
-`unmixr.py`.
+`UNMIXR.py`.
 
 ## Why this design
 
@@ -54,7 +54,7 @@ model capacity.
 ## Files
 
 **App:**
-- `unmixr.py` — the PyQt6 app (entry point); every tab is native with embedded matplotlib.
+- `UNMIXR.py` — the PyQt6 app (entry point); every tab is native with embedded matplotlib.
 
 **UI-agnostic cores** (numpy / scipy / sklearn — reusable from any front-end):
 - `dataset.py` — turn a data folder into a dataset spec: discover reference maps, group batches into classes, read/write `samples.csv` and the mixture manifest (Samples page).

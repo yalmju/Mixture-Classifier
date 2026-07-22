@@ -39,8 +39,8 @@ class MainWindow(QMainWindow):
     PAGES = [
         ("Samples",   "samples", "Group your maps into substance classes (batches)"),
         ("Model",     "model", "Train a classifier on your reference maps"),
-        ("Predict",   "predict", "Load an unknown sample → read its component ratio"),
         ("Quantify",  "quant", "Ratio → concentration + adsorption competition"),
+        ("Predict",   "predict", "Load an unknown sample → read its component ratio"),
         ("Real data", "real",  "Analyze real maps: identify · mixtures · calibration"),
     ]
 
@@ -89,7 +89,7 @@ class MainWindow(QMainWindow):
             "quant": QuantifyPage(),
             "real": RealDataPage(),
         }
-        for key in ("samples", "model", "predict", "quant", "real"):
+        for key in ("samples", "model", "quant", "predict", "real"):
             self.stack.addWidget(self.pages[key])
 
         self.select("samples")

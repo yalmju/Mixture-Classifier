@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import csv
 import glob
+import json
 import os
 import re
 
 BLANK_ALIASES = {"blk", "blank", "background", "bg", "none"}
 _SUFFIX = "_corrected"
+# CSVs that live beside the maps but are NOT maps — never treat them as references
+_NON_MAP = {"samples.csv", "mixtures.csv"}
 # a batch marker = a trailing number with a clear separator or in ()/[]:
 #   THI_2 · THI 2 · THI-2 · THI_(2) · THI (2) · THI(2) · THI[2]
 # (a bare trailing number like 'PCB77' is NOT treated as a batch — keep as-is)
@@ -73,6 +76,7 @@ def discover_references(data_dir):
     files = sorted(glob.glob(os.path.join(rd, "*_corrected.csv")))
     if not files:
         files = sorted(glob.glob(os.path.join(rd, "*.csv")))
+    files = [p for p in files if os.path.basename(p).lower() not in _NON_MAP]
     pairs = [(class_name(p), p) for p in files]
     non_blank = [(n, p) for n, p in pairs if not is_blank(n)]
     blank = [(n, p) for n, p in pairs if is_blank(n)]
@@ -93,6 +97,8 @@ def map_pixel_count(path):
 
 def _role(v):
     v = (v or "").strip().lower()
+    if v.startswith(("ex", "sk", "ig", "off")):     # exclude / skip / ignore / off
+        return "exclude"
     return "test" if v.startswith("te") else "train"
 
 
@@ -130,6 +136,41 @@ def save_manifest(data_dir, rows):
     return p
 
 
+_PREPROCESS = "preprocess.json"
+_PREPROCESS_DEFAULT = {"baseline": True, "deriv": 0, "norm": "l2", "trim": None}
+
+
+def load_preprocess(data_dir):
+    """Read <data_dir>/preprocess.json (the preprocessing chosen once in Samples)
+    -> {baseline, deriv, norm, trim}. Returns sensible defaults if absent, so every
+    tab can preprocess identically without asking the user again."""
+    cfg = dict(_PREPROCESS_DEFAULT)
+    try:
+        with open(os.path.join(data_dir, _PREPROCESS)) as f:
+            cfg.update(json.load(f))
+    except Exception:
+        pass
+    t = cfg.get("trim")
+    cfg["trim"] = tuple(t) if (t and len(t) == 2) else None
+    cfg["baseline"] = bool(cfg.get("baseline", True))
+    cfg["deriv"] = int(cfg.get("deriv", 0) or 0)
+    cfg["norm"] = cfg.get("norm") or "l2"
+    return cfg
+
+
+def save_preprocess(data_dir, cfg):
+    """Persist the Samples-chosen preprocessing to <data_dir>/preprocess.json."""
+    trim = cfg.get("trim")
+    out = {"baseline": bool(cfg.get("baseline", True)),
+           "deriv": int(cfg.get("deriv", 0) or 0),
+           "norm": cfg.get("norm") or "l2",
+           "trim": [trim[0], trim[1]] if trim else None}
+    p = os.path.join(data_dir, _PREPROCESS)
+    with open(p, "w") as f:
+        json.dump(out, f, indent=2)
+    return p
+
+
 def discover_dataset(data_dir):
     """Group reference maps into classes, merging batches of the same substance.
 
@@ -150,6 +191,8 @@ def discover_dataset(data_dir):
                 cls, batch, role = hit
         if cls is None:
             cls, batch = base_and_batch(name)
+        if role == "exclude":                       # user opted this map out
+            continue
         groups.setdefault(cls, []).append((batch, path, role))
     non_blank = sorted((c for c in groups if not is_blank(c)), key=str.lower)
     blank = [c for c in groups if is_blank(c)]
