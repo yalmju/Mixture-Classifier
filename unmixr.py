@@ -3,9 +3,10 @@
 A dark, instrument-style desktop app. Not a sidebar dashboard — a top command
 bar with pill navigation over a stacked content area:
 
-    Model         train a single-component classifier on the REAL pest reference
+    Model         train a single-component classifier on a set of reference SERS
                   maps (RandomForest or ResNet1D) and read it live: learning curve
                   · confusion matrix · per-class P/R/F1 · PCA · KPI tiles
+                  (example data shipped: DQ / THI / TBZ / BLK)
     Quantify      ratio → M calibration + Langmuir competition
     Discriminator the real-data map analysis (single-component / mixture / calib)
 
@@ -198,7 +199,7 @@ def _card(title):
 
 
 # --------------------------------------------------------------------------
-# Model page — train a single-component classifier on the REAL pest maps
+# Model page — train a single-component classifier on a set of reference SERS maps
 # --------------------------------------------------------------------------
 class ModelPage(QWidget):
     BACKENDS = [("RandomForest", "rf"), ("ResNet1D (torch)", "resnet")]
@@ -213,10 +214,10 @@ class ModelPage(QWidget):
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Model training"); h1.setObjectName("h1")
-        sub = QLabel("Train on the real pesticide reference maps "
-                     "(DQ / THI / TBZ / BLK). Spatial split — the left half of each "
-                     "map trains, the right half tests. Learning curve · confusion "
-                     "matrix · per-class F1 · PCA.")
+        sub = QLabel("Train on a set of reference SERS maps — one pure substance "
+                     "per map. Spatial split: the left half of each map trains, the "
+                     "right half tests. Learning curve · confusion matrix · "
+                     "per-class F1 · PCA.  (example data: DQ / THI / TBZ / BLK)")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -291,7 +292,8 @@ class ModelPage(QWidget):
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(
-            self, "Training data — Pest_Discriminator folder (holds Reference/ maps)",
+            self, "Training data — folder with your reference maps "
+            "(the data root or its Reference/ subfolder)",
             self.pest_dir)
         if d:
             self.pest_dir = d; self.src.setText(self._short(d))
@@ -783,7 +785,7 @@ class RealDataPage(QWidget):
         return "…" + p[-42:] if len(p) > 42 else p
 
     def _browse(self):
-        d = QFileDialog.getExistingDirectory(self, "Pest_Discriminator folder",
+        d = QFileDialog.getExistingDirectory(self, "Data folder (Reference/ + Ratio/ maps)",
                                              self.pest_dir)
         if d:
             self.pest_dir = d; self.folder_lbl.setText(self._short(d))
