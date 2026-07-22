@@ -1,0 +1,14 @@
+file,class,batch,role
+BLK-1.csv,BLK,1,train
+BLK-2.csv,BLK,2,train
+BLK-3.csv,BLK,3,train
+BLK-4.csv,BLK,4,test
+DQ-1.csv,DQ,1,train
+DQ-2.csv,DQ,2,train
+DQ-3.csv,DQ,3,test
+TBZ-1.csv,TBZ,1,train
+TBZ-2.csv,TBZ,2,train
+TBZ-3.csv,TBZ,3,test
+THI-1.csv,THI,1,train
+THI-2.csv,THI,2,train
+THI-3.csv,THI,3,test
