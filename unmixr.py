@@ -21,6 +21,7 @@ All pages are PyQt6 with embedded matplotlib. Rename the app by editing APP_NAME
 from __future__ import annotations
 
 import os
+import re
 import sys
 import traceback
 
@@ -38,7 +39,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QFrame,
     QHBoxLayout, QVBoxLayout, QGridLayout, QStackedWidget, QSpinBox,
     QDoubleSpinBox, QComboBox, QCheckBox, QSizePolicy, QFileDialog,
-    QTableWidget, QTableWidgetItem, QHeaderView,
+    QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar,
 )
 from matplotlib.patches import Patch, Rectangle
 
@@ -126,6 +127,8 @@ QComboBox QAbstractItemView {{ background: {PANEL}; color: {INK};
     border: 1px solid {LINE}; selection-background-color: {PAGE};
     selection-color: {INK}; outline: none; }}
 QLabel#field {{ color: {MUTE}; font-size: 13px; }}
+QProgressBar {{ background: {PAGE}; border: 1px solid {LINE}; border-radius: 3px; }}
+QProgressBar::chunk {{ background: {TEAL}; border-radius: 3px; }}
 """
 
 
@@ -272,6 +275,11 @@ class ModelPage(QWidget):
         ctl2.addStretch(1)
         root.addLayout(ctl2)
 
+        # progress bar — visible (busy) only while training, so it never reads as frozen
+        self.pbar = QProgressBar(); self.pbar.setTextVisible(False)
+        self.pbar.setFixedHeight(6); self.pbar.setVisible(False)
+        root.addWidget(self.pbar)
+
         # KPI row
         kpis = QHBoxLayout(); kpis.setSpacing(12)
         self.k_acc = Kpi("test accuracy"); self.k_f1 = Kpi("macro F1")
@@ -373,6 +381,7 @@ class ModelPage(QWidget):
                       split=self.cmb_split.currentData())
         self.btn.setEnabled(False); self.btn.setText("Training…")
         self.c_curve.placeholder("Training…")
+        self.pbar.setVisible(True); self.pbar.setRange(0, 0)   # busy until first step
         self._thread = QThread()
         self._worker = TrainWorker(params)
         self._worker.moveToThread(self._thread)
@@ -388,9 +397,15 @@ class ModelPage(QWidget):
         # live status so a long run reads as working, not frozen
         self.btn.setText("Training…  " + msg.split("  ")[0])
         self.c_curve.placeholder("● " + msg)
+        m = re.search(r"(\d+)\s*/\s*(\d+)", msg)          # "epoch 12/25" -> determinate
+        if m:
+            self.pbar.setRange(0, int(m.group(2))); self.pbar.setValue(int(m.group(1)))
+        else:
+            self.pbar.setRange(0, 0)                       # loading / finalising -> busy
 
     def _error(self, tb):
         self.btn.setEnabled(True); self.btn.setText("Train + evaluate")
+        self.pbar.setVisible(False)
         first = tb.strip().splitlines()[-1][:90]
         self.c_curve.placeholder("Training failed — " + first)
         print(tb, file=sys.stderr)
@@ -398,6 +413,7 @@ class ModelPage(QWidget):
     def _apply(self, res: TrainResult):
         self._res = res
         self.btn.setEnabled(True); self.btn.setText("Train + evaluate")
+        self.pbar.setVisible(False)
         # random split is leaky — flag the (inflated) accuracy in warning colour
         leaky = getattr(res, "split", "spatial") == "random"
         self.k_acc.set(f"{res.acc:.0%}" + ("  ⚠leaky" if leaky else ""),

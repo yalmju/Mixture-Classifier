@@ -25,17 +25,22 @@ import re
 
 BLANK_ALIASES = {"blk", "blank", "background", "bg", "none"}
 _SUFFIX = "_corrected"
-_BATCH_RE = re.compile(r"^(.*?)[ _\-]+(\d+)$")
+# a batch marker = a trailing number with a clear separator or in ()/[]:
+#   THI_2 · THI 2 · THI-2 · THI_(2) · THI (2) · THI(2) · THI[2]
+# (a bare trailing number like 'PCB77' is NOT treated as a batch — keep as-is)
+_BATCH_RE = re.compile(r"^(.+?)(?:[ _\-]+[\(\[]?(\d+)[\)\]]?|[\(\[](\d+)[\)\]])$")
 
 
 def base_and_batch(name):
     """Split a reference name into (substance, batch#) so repeat measurements of
     the SAME substance group together instead of becoming separate classes:
-    'THI_2' -> ('THI', 2), 'TBZ 3' -> ('TBZ', 3), 'THI' -> ('THI', 1). A name that
-    is only a number, or has no base before the number, is left as-is."""
+    'THI_2' / 'THI_(2)' / 'THI(2)' -> ('THI', 2), 'THI' -> ('THI', 1). A name with
+    no clear batch marker is left as-is."""
     m = _BATCH_RE.match(name)
-    if m and m.group(1).strip(" _-"):
-        return m.group(1).strip(" _-"), int(m.group(2))
+    if m:
+        base = m.group(1).strip(" _-")
+        if base:
+            return base, int(m.group(2) or m.group(3))
     return name, 1
 
 
