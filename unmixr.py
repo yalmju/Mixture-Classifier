@@ -274,6 +274,8 @@ class ModelPage(QWidget):
                                         ("random (leaky)", "random"),
                                         ("batch (leave-1-out)", "batch"),
                                         ("manual (Samples)", "manual")]))
+        self.sp_test = self._spin(QSpinBox(), 5, 90, 50, "test %", step=5)
+        ctl2.addLayout(self.sp_test)
         ctl2.addStretch(1)
         root.addLayout(ctl2)
 
@@ -380,7 +382,8 @@ class ModelPage(QWidget):
                       baseline=self.chk_base.isChecked(), trim=trim,
                       deriv=self.cmb_deriv.currentData(),
                       norm=self.cmb_norm.currentData(),
-                      split=self.cmb_split.currentData())
+                      split=self.cmb_split.currentData(),
+                      test_frac=self.sp_test.itemAt(1).widget().value() / 100.0)
         self.btn.setEnabled(False); self.btn.setText("Training…")
         self.c_curve.placeholder("Training…")
         self.pbar.setVisible(True); self.pbar.setRange(0, 0)   # busy until first step

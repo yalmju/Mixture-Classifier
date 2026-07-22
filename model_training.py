@@ -77,18 +77,21 @@ def _featurize(cube, baseline=True, deriv=0, norm="l2"):
 
 
 def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
-                split="spatial", seed=0, progress=None):
+                split="spatial", seed=0, test_frac=0.5, progress=None):
     """Group the reference maps into classes (merging batches of the same
     substance), featurize each map, and split into train/test.
 
     ``split``:
-      "spatial"  honest block split — left half of each map trains, right tests
-      "random"   leaky per-pixel shuffle (for comparison)
+      "spatial"  honest block split within each map — the top ``test_frac`` by X
+                 tests, the rest trains
+      "random"   leaky per-pixel shuffle, holding out ``test_frac`` (for comparison)
       "batch"    leave-one-batch-out — hold each class's last batch's map out as
-                 test (classes with a single map fall back to a spatial split)
-    ``trim`` is an optional (low, high) wavenumber window; ``baseline`` / ``deriv``
-    / ``norm`` control the feature transform. Returns per-pixel matrices + the
-    ordered class names."""
+                 test (single-map classes fall back to a spatial split)
+      "manual"   honour per-map train/test roles from Samples (samples.csv)
+    ``test_frac`` (0-1) sets the held-out fraction for the spatial / random splits
+    (and the spatial fallback). ``trim`` is an optional (low, high) wavenumber
+    window; ``baseline`` / ``deriv`` / ``norm`` control the feature transform.
+    Returns per-pixel matrices + the ordered class names."""
     groups = discover_dataset(data_dir)
     if len(groups) < 2:
         raise FileNotFoundError(
@@ -108,11 +111,17 @@ def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
                 wn_ = wn_[m]; cube = cube[:, m]
         return wn_, _featurize(cube, baseline=baseline, deriv=deriv, norm=norm), coord
 
+    frac = min(0.9, max(0.05, float(test_frac)))       # keep both sides non-empty
+
     def _spatial(X, coord):
-        left = coord[:, 0] < np.median(coord[:, 0])
-        if left.all() or (~left).all():                # degenerate map -> alternate
-            left = np.arange(len(X)) % 2 == 0
-        return left
+        """train = the lower (1-frac) by X, test = the top `frac` (contiguous)."""
+        xc = coord[:, 0]
+        thr = np.quantile(xc, 1.0 - frac)
+        train = xc < thr
+        if train.all() or (~train).all():              # degenerate coords -> by count
+            k = max(1, int(round(len(X) * (1.0 - frac))))
+            train = np.arange(len(X)) < k
+        return train
 
     rng = np.random.default_rng(seed)
     Xtr, ytr, Xte, yte, wn = [], [], [], [], None
@@ -126,9 +135,10 @@ def _load_split(data_dir, baseline=True, trim=None, deriv=0, norm="l2",
 
         if split == "random":                          # pool all pixels, shuffle
             allX = np.vstack([X for _b, X, _c, _r in feats])
-            idx = rng.permutation(len(allX)); cut = len(allX) // 2
-            Xtr.append(allX[idx[:cut]]); ytr += [i] * cut
-            Xte.append(allX[idx[cut:]]); yte += [i] * (len(allX) - cut)
+            n = len(allX); n_te = min(n - 1, max(1, int(round(n * frac))))
+            idx = rng.permutation(n)
+            Xte.append(allX[idx[:n_te]]); yte += [i] * n_te
+            Xtr.append(allX[idx[n_te:]]); ytr += [i] * (n - n_te)
         elif split == "manual" and any(r == "test" for _b, _X, _c, r in feats):
             for _batch, X, _c, role in feats:          # honour the Samples roles
                 (Xte if role == "test" else Xtr).append(X)
@@ -276,7 +286,8 @@ def _per_class_prf(cm, classes):
 
 def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
                 n_estimators=300, seed=0, baseline=True, trim=None,
-                deriv=0, norm="l2", split="spatial", progress=None) -> TrainResult:
+                deriv=0, norm="l2", split="spatial", test_frac=0.5,
+                progress=None) -> TrainResult:
     """Discover the reference maps in ``pest_dir`` and train the chosen algorithm.
     ``backend`` is one of rf / resnet / svm / knn / logreg / gbm. Feature options:
     ``baseline`` (ALS on/off), ``deriv`` (0/1/2 Savitzky-Golay), ``norm``
@@ -293,7 +304,7 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
 
     Xtr, ytr, Xte, yte, wn, classes = _load_split(
         pest_dir, baseline=baseline, trim=trim, deriv=deriv, norm=norm,
-        split=split, seed=seed, progress=progress)
+        split=split, seed=seed, test_frac=test_frac, progress=progress)
     K = len(classes)
 
     if backend == "resnet":
