@@ -77,11 +77,15 @@ class ModelPage(QWidget):
             ctl.addLayout(w)
         self.src = QLabel(self._short(self.pest_dir)); self.src.setObjectName("field")
         ctl.addWidget(self.src, 1)
+        save_b = QPushButton("Save model"); save_b.setObjectName("ghost")
+        save_b.setToolTip("save the trained model into the dataset folder so Real "
+                          "data / Predict reuse it — no need to retrain each time")
+        save_b.clicked.connect(self._save_model_to_dataset)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Train + evaluate"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._train)
-        ctl.addWidget(exp_b); ctl.addWidget(self.btn)
+        ctl.addWidget(save_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
         # ---- controls: row 2 = split only (preprocessing comes from Samples) ----
@@ -234,6 +238,15 @@ class ModelPage(QWidget):
         saved = self._save_model(d, r)
         tail = f" + {saved}" if saved else ""
         self.src.setText(f"exported CSV + {n} PNG{tail} → {os.path.basename(d)}")
+
+    def _save_model_to_dataset(self):
+        """One-click: write the trained model into the dataset folder, where Real
+        data and Predict auto-find it (train once, then just change the test map)."""
+        if self._res is None:
+            self.src.setText("train first, then Save model"); return
+        saved = self._save_model(self.pest_dir, self._res)
+        self.src.setText(f"saved {saved or 'nothing'} → {self._short(self.pest_dir)}"
+                         if saved else "nothing to save (batch-CV has no single model)")
 
     def _save_model(self, d, r):
         """Persist the fitted estimator (+ classes and preprocessing) so it can be
