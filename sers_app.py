@@ -115,8 +115,11 @@ class SERSApp:
         self.maxc_var = tk.StringVar(value="3")
         ctk.CTkEntry(top, textvariable=self.maxc_var, width=48, height=30).pack(side="left")
 
-        ctk.CTkOptionMenu(top, values=["System", "Light", "Dark"], width=96, height=30,
-                          command=ctk.set_appearance_mode).pack(side="right")
+        theme_menu = ctk.CTkOptionMenu(top, values=["System", "Light", "Dark"],
+                                       width=96, height=30,
+                                       command=ctk.set_appearance_mode)
+        theme_menu.set("Light")
+        theme_menu.pack(side="right")
         ctk.CTkButton(top, text="Export PNG", height=34, width=104, **self._btn(),
                       command=self.export_png).pack(side="right", padx=8)
         ctk.CTkButton(top, text="Export CSV", height=34, width=104, **self._btn(),

@@ -898,7 +898,7 @@ class SERSDiscriminatorApp(ctk.CTkFrame):
             command=lambda v: ctk.set_appearance_mode(v.lower()),
             width=110, height=26, font=ctk.CTkFont(size=10),
         )
-        self.theme_menu.set("System")
+        self.theme_menu.set("Light")
         self.theme_menu.pack(side="left")
 
     # ---- Welcome placeholder -----------------------------------------
