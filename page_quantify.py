@@ -23,7 +23,14 @@ def _real_lab(cal, seed=0, n_validation=6):
     Validation mixtures are synthesized from the real templates + fitted physics
     to demonstrate recovery (clearly a synthetic check on real calibration)."""
     from competitive import forward_spectrum
+    from sers_mixture import als_baseline
     axis, names, dilutions = cal
+    # baseline-remove each standard (keep magnitude, no normalisation) so the fitted
+    # signal B tracks the peak vs concentration, not the fluorescence background
+    dilutions = [(np.asarray(c, float),
+                  np.clip(np.stack([y - als_baseline(np.asarray(y, float)) for y in sp]),
+                          0.0, None))
+                 for c, sp in dilutions]
     Praw = np.array([sp[int(np.argmax(c))] for c, sp in dilutions])
     P = Praw / (np.linalg.norm(Praw, axis=1, keepdims=True) + 1e-12)
     n = len(names)
@@ -200,25 +207,31 @@ class QuantifyPage(QWidget):
             print("load cal:", exc, file=sys.stderr)
 
     def _load_cal_folder(self):
-        """Add ONE compound's dilution series from a folder of per-concentration
-        map CSVs (concentration parsed from each filename). Load several folders to
-        assemble a multi-compound calibration."""
+        """Load a dilution series from either ONE compound's concentration folder,
+        or a PARENT folder that holds a per-compound subfolder each (conc_tbz/,
+        conc_dq/, …) — every subfolder becomes a compound. Concentration is parsed
+        from each filename (1nM/10uM/1_mM…). Loads accumulate across calls."""
         d = QFileDialog.getExistingDirectory(
-            self, "Concentration folder for ONE compound (files named 1nM/10uM/1mM…)")
+            self, "Concentration folder (one compound), or a parent of per-compound folders")
         if not d:
             return
-        try:
-            axis, name, concs, specs = load_calibration_folder(d)
+        subdirs = [os.path.join(d, x) for x in sorted(os.listdir(d))
+                   if os.path.isdir(os.path.join(d, x))]
+        added, errs = [], []
+        for f in [d] + subdirs:                            # the folder itself, then children
+            try:
+                axis, name, concs, specs = load_calibration_folder(f)
+            except Exception as exc:
+                errs.append(str(exc)); continue
             if self._axis is not None and len(axis) != len(self._axis):
-                raise ValueError(f"{name}: axis length {len(axis)} ≠ {len(self._axis)} "
-                                 "— all compounds must share one wavenumber axis.")
-            self._axis = axis
-            self._acc[name] = (concs, specs)
+                errs.append(f"{name}: axis {len(axis)} ≠ {len(self._axis)}"); continue
+            self._axis = axis; self._acc[name] = (concs, specs); added.append(name)
+        if added:
             self._rebuild_cal()
             pts = "  ·  ".join(f"{n} ({len(c)})" for n, (c, _s) in self._acc.items())
             self.src.setText(f"source: {pts}"); self.src.setStyleSheet("")
-        except Exception as exc:
-            self.src.setText(f"folder load failed — {exc}")
+        else:
+            self.src.setText("folder load failed — " + (errs[-1] if errs else "no data"))
             self.src.setStyleSheet(f"color:{RED};")
             print("load cal folder:", exc, file=sys.stderr)
 
