@@ -18,18 +18,26 @@ from calibration import build_synthetic_lab, calibrate, quantify
 from io_utils import load_calibration_csv, load_calibration_folder, write_csv
 
 
-def _real_lab(cal, seed=0, n_validation=6):
+def _prep_specs(specs, baseline=True):
+    """ALS-baseline-remove each spectrum (keep magnitude, no normalisation) then clip
+    negatives. With baseline=False the data is assumed already baseline-corrected, so
+    only the clip is applied — no second ALS pass."""
+    specs = np.asarray(specs, float)
+    if baseline:
+        from sers_mixture import als_baseline
+        specs = np.stack([y - als_baseline(y) for y in specs])
+    return np.clip(specs, 0.0, None)
+
+
+def _real_lab(cal, seed=0, n_validation=6, baseline=True):
     """Build a lab dict from a loaded calibration CSV (real dilution series).
     Validation mixtures are synthesized from the real templates + fitted physics
     to demonstrate recovery (clearly a synthetic check on real calibration)."""
     from competitive import forward_spectrum
-    from sers_mixture import als_baseline
     axis, names, dilutions = cal
     # baseline-remove each standard (keep magnitude, no normalisation) so the fitted
     # signal B tracks the peak vs concentration, not the fluorescence background
-    dilutions = [(np.asarray(c, float),
-                  np.clip(np.stack([y - als_baseline(np.asarray(y, float)) for y in sp]),
-                          0.0, None))
+    dilutions = [(np.asarray(c, float), _prep_specs(sp, baseline))
                  for c, sp in dilutions]
     Praw = np.array([sp[int(np.argmax(c))] for c, sp in dilutions])
     P = Praw / (np.linalg.norm(Praw, axis=1, keepdims=True) + 1e-12)
@@ -132,12 +140,11 @@ def _lod_loq(C, B):
     return 3.3 * sigma / m, 10.0 * sigma / m
 
 
-def _peak_quant(cal, peak, window=10.0, model="langmuir"):
+def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True):
     """Calibration from a marker band: B = baseline-removed intensity summed over
     peak ± window, Langmuir-fit per compound. ``peak`` is one wavenumber (same band
     for every compound) or a {compound: wavenumber} map (each compound at its own
     band). Curve only (no competition)."""
-    from sers_mixture import als_baseline
     from calibration import _langmuir_B
     axis, names, dilutions = cal
     iso, r2, K_fit, gA_fit, peaks_used, lods, loqs = [], [], [], [], [], [], []
@@ -147,8 +154,8 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir"):
         m = (axis >= pk - window) & (axis <= pk + window)
         if m.sum() < 1:
             m = np.abs(axis - pk).argmin() == np.arange(len(axis))
-        C = np.asarray(C, float); specs = np.asarray(specs, float)
-        bl = np.clip(np.stack([y - als_baseline(y) for y in specs]), 0.0, None)
+        C = np.asarray(C, float)
+        bl = _prep_specs(specs, baseline)
         B = bl[:, m].sum(axis=1)
         dense = np.geomspace(C.min(), C.max(), 60)
         if model == "linear":
@@ -173,13 +180,13 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir"):
 
 
 def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None,
-               model="langmuir"):
+               model="langmuir", baseline=True):
     from calibration import _langmuir_B
     if cal is not None and peak_map:
-        return _peak_quant(cal, peak_map, model=model)
+        return _peak_quant(cal, peak_map, model=model, baseline=baseline)
     if cal is not None and peak_wn and peak_wn > 0:
-        return _peak_quant(cal, peak_wn, model=model)
-    lab = (_real_lab(cal, seed) if cal is not None
+        return _peak_quant(cal, peak_wn, model=model, baseline=baseline)
+    lab = (_real_lab(cal, seed, baseline=baseline) if cal is not None
            else build_synthetic_lab(n_components=n_components, seed=seed))
     calib = calibrate(lab["dilutions"], lab["P"], lab["names"])
 
@@ -294,6 +301,13 @@ class QuantifyPage(QWidget):
                                    "Langmuir isotherm (LOD/LOQ use a linear low-range "
                                    "fit either way)")
         lcol.addWidget(self.chk_linear); ctl.addLayout(lcol)
+        bcol = QVBoxLayout(); bcol.setSpacing(2)
+        _bl = QLabel("baseline"); _bl.setObjectName("field"); bcol.addWidget(_bl)
+        self.chk_baselined = QCheckBox("already corrected")
+        self.chk_baselined.setToolTip("your CSVs are already baseline-corrected — skip "
+                                      "the app's internal ALS baseline so it isn't "
+                                      "applied twice")
+        bcol.addWidget(self.chk_baselined); ctl.addLayout(bcol)
         self.src = QLabel("source: synthetic"); self.src.setObjectName("field")
         ctl.addWidget(self.src); ctl.addStretch(1)
         fold_b = QPushButton("Load conc. folder…"); fold_b.setObjectName("ghost")
@@ -563,7 +577,8 @@ class QuantifyPage(QWidget):
                       seed=self.sp_seed.itemAt(1).widget().value(), cal=self._cal,
                       peak_wn=float(self.sp_peak.itemAt(1).widget().value()),
                       peak_map=peak_map,
-                      model="linear" if self.chk_linear.isChecked() else "langmuir")
+                      model="linear" if self.chk_linear.isChecked() else "langmuir",
+                      baseline=not self.chk_baselined.isChecked())
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self._thread = QThread(); self._worker = QuantWorker(params)
         self._worker.moveToThread(self._thread)
