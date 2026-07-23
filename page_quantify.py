@@ -10,7 +10,7 @@ import numpy as np
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QSpinBox, QCheckBox, QFileDialog,
+    QSpinBox, QCheckBox, QLineEdit, QFileDialog,
 )
 
 from ui_common import *
@@ -81,7 +81,58 @@ def _langmuir_fit(C, B):
     return float(gA), float(K)
 
 
-def _peak_quant(cal, peak, window=10.0):
+def _fmt_conc(c):
+    """Human concentration: 3.3e-9 M → '3.3 nM', 1.2e-6 → '1.2 µM', etc."""
+    if c is None or not np.isfinite(c) or c <= 0:
+        return "—"
+    for scale, unit in ((1e-3, "mM"), (1e-6, "µM"), (1e-9, "nM"), (1e-12, "pM")):
+        if c >= scale:
+            return f"{c / scale:.3g} {unit}"
+    return f"{c:.3g} M"
+
+
+def _linear_fit(C, B):
+    """Ordinary least-squares line B = m·C + b."""
+    C = np.asarray(C, float); B = np.asarray(B, float)
+    m, b = np.polyfit(C, B, 1)
+    return float(m), float(b)
+
+
+def _r2_lin_on_means(C, B, m, b):
+    """R² of a linear fit against the mean response per concentration."""
+    C = np.asarray(C, float); B = np.asarray(B, float)
+    uc = np.unique(C)
+    mean_B = np.array([B[C == c].mean() for c in uc])
+    pred = m * uc + b
+    sst = float(np.sum((mean_B - mean_B.mean()) ** 2))
+    return 1.0 - float(np.sum((mean_B - pred) ** 2)) / sst if sst > 0 else 0.0
+
+
+def _lod_loq(C, B):
+    """IUPAC calibration-curve limit of detection / quantification. Fit a line to the
+    low-concentration (still-linear) region, take σ = residual standard deviation and
+    m = slope, then LOD = 3.3·σ/m and LOQ = 10·σ/m (both in M). Returns (lod, loq),
+    NaN when it can't be estimated (too few points, flat/negative slope)."""
+    C = np.asarray(C, float); B = np.asarray(B, float)
+    uc = np.unique(C)
+    if len(uc) < 3:
+        return float("nan"), float("nan")
+    lin_uc = uc[:max(3, min(len(uc), 5))]          # lowest ~5 concs ≈ linear region
+    mask = np.isin(C, lin_uc)
+    Cl, Bl = C[mask], B[mask]
+    if len(np.unique(Cl)) < 2:
+        return float("nan"), float("nan")
+    m, b = np.polyfit(Cl, Bl, 1)
+    if m <= 0:
+        return float("nan"), float("nan")
+    resid = Bl - (m * Cl + b)
+    sigma = float(np.std(resid, ddof=1)) if len(resid) > 2 else float(np.std(resid))
+    if sigma <= 0:
+        return float("nan"), float("nan")
+    return 3.3 * sigma / m, 10.0 * sigma / m
+
+
+def _peak_quant(cal, peak, window=10.0, model="langmuir"):
     """Calibration from a marker band: B = baseline-removed intensity summed over
     peak ± window, Langmuir-fit per compound. ``peak`` is one wavenumber (same band
     for every compound) or a {compound: wavenumber} map (each compound at its own
@@ -89,7 +140,7 @@ def _peak_quant(cal, peak, window=10.0):
     from sers_mixture import als_baseline
     from calibration import _langmuir_B
     axis, names, dilutions = cal
-    iso, r2, K_fit, gA_fit, peaks_used = [], [], [], [], []
+    iso, r2, K_fit, gA_fit, peaks_used, lods, loqs = [], [], [], [], [], [], []
     for name, (C, specs) in zip(names, dilutions):
         pk = peak.get(name) if isinstance(peak, dict) else peak
         peaks_used.append(pk)
@@ -99,42 +150,60 @@ def _peak_quant(cal, peak, window=10.0):
         C = np.asarray(C, float); specs = np.asarray(specs, float)
         bl = np.clip(np.stack([y - als_baseline(y) for y in specs]), 0.0, None)
         B = bl[:, m].sum(axis=1)
-        gA, K = _langmuir_fit(C, B)
         dense = np.geomspace(C.min(), C.max(), 60)
-        iso.append((C, B, dense, _langmuir_B(dense, gA, K)))
-        r2.append(_r2_on_means(C, B, gA, K))
-        K_fit.append(K); gA_fit.append(gA)
+        if model == "linear":
+            slope, b0 = _linear_fit(C, B)
+            iso.append((C, B, dense, slope * dense + b0))
+            r2.append(_r2_lin_on_means(C, B, slope, b0))
+            K_fit.append(slope); gA_fit.append(b0)     # slope, intercept
+        else:
+            gA, K = _langmuir_fit(C, B)
+            iso.append((C, B, dense, _langmuir_B(dense, gA, K)))
+            r2.append(_r2_on_means(C, B, gA, K))
+            K_fit.append(K); gA_fit.append(gA)
+        lod, loq = _lod_loq(C, B); lods.append(lod); loqs.append(loq)
     per_cmpd = isinstance(peak, dict)
     return {"names": names, "K_true": None, "K_fit": np.array(K_fit),
-            "gA_fit": np.array(gA_fit), "iso": iso, "r2": r2,
+            "gA_fit": np.array(gA_fit), "iso": iso, "r2": r2, "model": model,
+            "lod": lods, "loq": loqs,
             "parity": (np.array([]), np.array([]), np.array([], int)),
             "log_err": float("nan"), "example": None, "example_true": None,
             "selectivity": float("nan"),
             "peak_wn": None if per_cmpd else peak, "peaks_used": peaks_used}
 
 
-def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None):
+def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None,
+               model="langmuir"):
     from calibration import _langmuir_B
     if cal is not None and peak_map:
-        return _peak_quant(cal, peak_map)
+        return _peak_quant(cal, peak_map, model=model)
     if cal is not None and peak_wn and peak_wn > 0:
-        return _peak_quant(cal, peak_wn)
+        return _peak_quant(cal, peak_wn, model=model)
     lab = (_real_lab(cal, seed) if cal is not None
            else build_synthetic_lab(n_components=n_components, seed=seed))
     calib = calibrate(lab["dilutions"], lab["P"], lab["names"])
 
-    iso, r2 = [], []
+    iso, r2, K_out, gA_out, lods, loqs = [], [], [], [], [], []
     for i in range(calib.n):
-        C = calib.C_series[i]
+        C = np.asarray(calib.C_series[i], float); B = np.asarray(calib.B_series[i], float)
         dense = np.geomspace(C.min(), C.max(), 60)
-        fit = _langmuir_B(dense, calib.gA[i], calib.K[i])
-        iso.append((C, calib.B_series[i], dense, fit))
-        r2.append(_r2_on_means(C, calib.B_series[i], calib.gA[i], calib.K[i]))
+        if model == "linear":
+            slope, b0 = _linear_fit(C, B)
+            iso.append((C, B, dense, slope * dense + b0))
+            r2.append(_r2_lin_on_means(C, B, slope, b0))
+            K_out.append(slope); gA_out.append(b0)     # slope, intercept
+        else:
+            iso.append((C, B, dense, _langmuir_B(dense, calib.gA[i], calib.K[i])))
+            r2.append(_r2_on_means(C, B, calib.gA[i], calib.K[i]))
+            K_out.append(calib.K[i]); gA_out.append(calib.gA[i])
+        lod, loq = _lod_loq(C, B); lods.append(lod); loqs.append(loq)
+    K_out = np.array(K_out); gA_out = np.array(gA_out)
 
     # single-compound calibration → fit the curve only (no competition / recovery)
     if len(lab["val_specs"]) == 0 or calib.n < 2:
-        return {"names": calib.names, "K_true": lab["K_true"], "K_fit": calib.K,
-                "gA_fit": calib.gA, "iso": iso, "r2": r2,
+        return {"names": calib.names, "K_true": lab["K_true"], "K_fit": K_out,
+                "gA_fit": gA_out, "iso": iso, "r2": r2, "model": model,
+                "lod": lods, "loq": loqs,
                 "parity": (np.array([]), np.array([]), np.array([], int)),
                 "log_err": float("nan"), "example": None,
                 "example_true": None, "selectivity": float("nan")}
@@ -151,8 +220,9 @@ def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None):
     ex = next((k for k, q in enumerate(quants)
                if q["competition"]["flipped"]), 0)
     return {
-        "names": calib.names, "K_true": lab["K_true"], "K_fit": calib.K,
-        "gA_fit": calib.gA, "iso": iso, "r2": r2,
+        "names": calib.names, "K_true": lab["K_true"], "K_fit": K_out,
+        "gA_fit": gA_out, "iso": iso, "r2": r2, "model": model,
+        "lod": lods, "loq": loqs,
         "parity": (np.array(true_flat), np.array(est_flat), np.array(col_flat, int)),
         "log_err": log_err, "example": quants[ex],
         "example_true": lab["val_true"][ex],
@@ -214,8 +284,16 @@ class QuantifyPage(QWidget):
         self.chk_autopeak = QCheckBox("auto peak")
         self.chk_autopeak.setToolTip("calibrate each compound on ITS OWN marker band "
                                      "(the wavenumber where it most exceeds the others) "
-                                     "— overrides the single peak box")
+                                     "— fills the per-compound peaks box, which you can edit")
+        self.chk_autopeak.toggled.connect(self._on_autopeak)
         acol.addWidget(self.chk_autopeak); ctl.addLayout(acol)
+        lcol = QVBoxLayout(); lcol.setSpacing(2)
+        _ll = QLabel("fit"); _ll.setObjectName("field"); lcol.addWidget(_ll)
+        self.chk_linear = QCheckBox("linear")
+        self.chk_linear.setToolTip("fit a straight line B = m·C + b instead of the "
+                                   "Langmuir isotherm (LOD/LOQ use a linear low-range "
+                                   "fit either way)")
+        lcol.addWidget(self.chk_linear); ctl.addLayout(lcol)
         self.src = QLabel("source: synthetic"); self.src.setObjectName("field")
         ctl.addWidget(self.src); ctl.addStretch(1)
         fold_b = QPushButton("Load conc. folder…"); fold_b.setObjectName("ghost")
@@ -233,6 +311,18 @@ class QuantifyPage(QWidget):
         ctl.addWidget(fold_b); ctl.addWidget(load_b); ctl.addWidget(clr_b)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
+
+        # per-compound marker peaks — auto-fills from 'auto peak', fully editable
+        ctl2 = QHBoxLayout(); ctl2.setSpacing(8)
+        pl = QLabel("per-compound peaks (cm⁻¹):"); pl.setObjectName("field")
+        self.peaks_txt = QLineEdit()
+        self.peaks_txt.setPlaceholderText("e.g.  DQ:610, TBZ:1000, THI:1370   "
+                                          "(leave blank to use the single peak / whole)")
+        self.peaks_txt.setToolTip("one band per compound as name:wavenumber, "
+                                  "comma-separated. Overrides the single peak box. "
+                                  "'auto peak' fills this in for you to correct.")
+        ctl2.addWidget(pl); ctl2.addWidget(self.peaks_txt, 1)
+        root.addLayout(ctl2)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
         self.k_ncmp = Kpi("compounds"); self.k_npts = Kpi("points / compound")
@@ -334,7 +424,7 @@ class QuantifyPage(QWidget):
         """Per-compound discriminative band: for each loaded compound, the wavenumber
         where its (top-concentration, baseline-removed) spectrum most exceeds every
         other loaded compound — its VIP-style marker band. {compound: wavenumber}."""
-        if self._cal is None or len(self._acc) < 1:
+        if self._cal is None:
             return None
         from sers_mixture import als_baseline
         axis, names, dils = self._cal
@@ -354,6 +444,38 @@ class QuantifyPage(QWidget):
             score = np.where(band, score, -np.inf)
             peaks[nm] = float(axis[int(np.argmax(score))])
         return peaks
+
+    def _on_autopeak(self, checked):
+        """Fill the editable per-compound peaks box from the auto marker bands, so the
+        user sees them and can correct any that landed on the wrong band."""
+        if not checked:
+            return
+        peaks = self._marker_peaks()
+        if not peaks:
+            self.src.setText("load a calibration first to auto-fill peaks")
+            self.src.setStyleSheet(f"color:{RED};")
+            self.chk_autopeak.setChecked(False); return
+        self.peaks_txt.setText(", ".join(f"{n}:{v:.0f}" for n, v in peaks.items()))
+
+    def _peaks_from_text(self):
+        """Parse the per-compound peaks box → {name: wavenumber}. Only names that are
+        actually in the loaded calibration are kept; empty/blank → None."""
+        txt = self.peaks_txt.text().strip()
+        if not txt:
+            return None
+        valid = set(self._cal[1]) if self._cal is not None else None
+        out = {}
+        for tok in txt.replace(";", ",").split(","):
+            if ":" not in tok:
+                continue
+            k, v = tok.split(":", 1); k = k.strip()
+            try:
+                wn = float(v)
+            except ValueError:
+                continue
+            if valid is None or k in valid:
+                out[k] = wn
+        return out or None
 
     def _rebuild_cal(self):
         names = list(self._acc)
@@ -386,11 +508,14 @@ class QuantifyPage(QWidget):
             C, B, _dc, _db = r["iso"][i]
             C = np.asarray(C, float); B = np.asarray(B, float)
             for c in np.unique(C):
-                b = B[C == c]; mu = b.mean(); sd = b.std()
-                srows.append([nm, f"{c:.4e}", len(b), f"{mu:.6f}", f"{sd:.6f}",
-                              f"{100 * sd / mu:.1f}" if mu else ""])
+                b = B[C == c]; n = len(b); mu = b.mean()
+                sd = b.std(ddof=1) if n > 1 else 0.0
+                sem = sd / np.sqrt(n) if n else 0.0
+                srows.append([nm, f"{c:.4e}", n, f"{mu:.6f}", f"{sd:.6f}",
+                              f"{sem:.6f}", f"{100 * sd / mu:.1f}" if mu else ""])
         write_csv(os.path.join(d, "calibration_stats.csv"),
-                  ["compound", "concentration_M", "n", "B_mean", "B_std", "CV_%"], srows)
+                  ["compound", "concentration_M", "n", "B_mean", "B_std", "B_SE", "CV_%"],
+                  srows)
         # calibration SPECTRA (mean spectrum per concentration) in the format Real
         # data / Predict 'Load calibration…' reads — bridges the folder calibration
         # to per-pixel µM quantification
@@ -404,12 +529,18 @@ class QuantifyPage(QWidget):
                     mean_sp = specs[C == c].mean(axis=0)
                     srows2.append([nm, f"{c:.4e}"] + [f"{v:.4f}" for v in mean_sp])
             write_csv(os.path.join(d, "calibration_spectra.csv"), head, srows2)
-        # fitted isotherm parameters (Langmuir K and gA) per compound
-        gA = r.get("gA_fit")
+        # fitted parameters + detection limits per compound. For Langmuir K/gA are the
+        # isotherm; for a linear fit K_fit holds the slope and gA_fit the intercept.
+        gA = r.get("gA_fit"); lod = r.get("lod", []); loq = r.get("loq", [])
+        model = r.get("model", "langmuir")
+        p1, p2 = ("slope", "intercept") if model == "linear" else ("K_fit", "gA_fit")
         write_csv(os.path.join(d, "calibration_fit.csv"),
-                  ["compound", "K_fit", "gA_fit"],
-                  [[nm, f"{r['K_fit'][i]:.4e}",
-                    f"{gA[i]:.4e}" if gA is not None else ""]
+                  ["compound", "model", p1, p2, "R2", "LOD_M", "LOQ_M"],
+                  [[nm, model, f"{r['K_fit'][i]:.4e}",
+                    f"{gA[i]:.4e}" if gA is not None else "",
+                    f"{r['r2'][i]:.4f}" if r.get('r2') else "",
+                    f"{lod[i]:.4e}" if i < len(lod) and np.isfinite(lod[i]) else "",
+                    f"{loq[i]:.4e}" if i < len(loq) and np.isfinite(loq[i]) else ""]
                    for i, nm in enumerate(r["names"])])
         # per-mixture quantification (only when a ≥2-compound example exists)
         if r["example"] is not None:
@@ -424,11 +555,15 @@ class QuantifyPage(QWidget):
         self.src.setStyleSheet("")
 
     def _run(self):
-        peak_map = self._marker_peaks() if self.chk_autopeak.isChecked() else None
+        # priority: an edited/auto per-compound peaks box wins over the single peak
+        peak_map = self._peaks_from_text()
+        if peak_map is None and self.chk_autopeak.isChecked():
+            peak_map = self._marker_peaks()
         params = dict(n_components=self.sp_k.itemAt(1).widget().value(),
                       seed=self.sp_seed.itemAt(1).widget().value(), cal=self._cal,
                       peak_wn=float(self.sp_peak.itemAt(1).widget().value()),
-                      peak_map=peak_map)
+                      peak_map=peak_map,
+                      model="linear" if self.chk_linear.isChecked() else "langmuir")
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self._thread = QThread(); self._worker = QuantWorker(params)
         self._worker.moveToThread(self._thread)
@@ -459,18 +594,22 @@ class QuantifyPage(QWidget):
     def _plot_iso(self, res):
         ax = self.c_iso.new_ax()
         r2 = res.get("r2", [None] * len(res["names"]))
-        pks = res.get("peaks_used")
+        pks = res.get("peaks_used"); lod = res.get("lod"); loq = res.get("loq")
         for i, nm in enumerate(res["names"]):
             C, B, dc, db = res["iso"][i]
             col = SERIES[i % len(SERIES)]
             C = np.asarray(C, float); B = np.asarray(B, float)
             uc = np.unique(C)
             means = np.array([B[C == c].mean() for c in uc])
-            stds = np.array([B[C == c].std() for c in uc])
-            reps = int(np.median([np.sum(C == c) for c in uc]))
-            if reps > 1:                                   # replicates → mean ± SD error bars
+            # standard ERROR of the mean (SD/√n), not SD — the uncertainty of the
+            # per-concentration mean the curve is fit to
+            ns = np.array([max(np.sum(C == c), 1) for c in uc])
+            sems = np.array([B[C == c].std(ddof=1) if np.sum(C == c) > 1 else 0.0
+                             for c in uc]) / np.sqrt(ns)
+            reps = int(np.median(ns))
+            if reps > 1:                                   # replicates → mean ± SE error bars
                 ax.scatter(C, B, s=12, color=col, alpha=0.25, edgecolors="none", zorder=2)
-                ax.errorbar(uc, means, yerr=stds, fmt="o", ms=5, color=col,
+                ax.errorbar(uc, means, yerr=sems, fmt="o", ms=5, color=col,
                             capsize=3, elinewidth=1.0, zorder=3)
             else:
                 ax.scatter(C, B, s=26, color=col, zorder=3,
@@ -478,30 +617,48 @@ class QuantifyPage(QWidget):
             lab = nm if r2[i] is None else f"{nm}  (R²={r2[i]:.2f})"
             if pks is not None and i < len(pks) and pks[i]:
                 lab += f"  @{pks[i]:.0f}"                   # per-compound marker band
+            if lod is not None and i < len(lod) and np.isfinite(lod[i]):
+                lab += f"  LOD {_fmt_conc(lod[i])}"
+                ax.axvline(lod[i], color=col, ls=":", lw=1.0, alpha=0.45, zorder=1)
             ax.plot(dc, db, color=col, lw=1.6, label=lab)
         ax.set_xscale("log"); ax.set_xlabel("concentration (M)")
         pk = res.get("peak_wn")
-        ax.set_ylabel(f"peak @ {pk:.0f} cm⁻¹  (mean ± SD)" if pk
-                      else ("marker-peak intensity (mean ± SD)" if pks
-                            else "signal  B  (mean ± SD)"))
+        ax.set_ylabel(f"peak @ {pk:.0f} cm⁻¹  (mean ± SE)" if pk
+                      else ("marker-peak intensity (mean ± SE)" if pks
+                            else "signal  B  (mean ± SE)"))
         ax.legend(fontsize=8, framealpha=0.0, labelcolor=MUTE)
         self.c_iso.fig.tight_layout(); self.c_iso.draw_idle()
 
     def _readout(self, res):
         names = res["names"]; K = res["K_fit"]; gA = res.get("gA_fit")
         r2 = res.get("r2", [0.0] * len(names))
+        lod = res.get("lod", [float("nan")] * len(names))
+        loq = res.get("loq", [float("nan")] * len(names))
+        linear = res.get("model") == "linear"
         rows = []
         for i, nm in enumerate(names):
+            if linear:                                     # K_fit=slope, gA_fit=intercept
+                p1 = f"<td style='padding-right:12px'>slope={K[i]:.2e}</td>"
+                p2 = (f"<td style='padding-right:12px'>b="
+                      f"{(gA[i] if gA is not None else float('nan')):.2e}</td>")
+            else:
+                p1 = f"<td style='padding-right:12px'>K={K[i]:.2e}</td>"
+                p2 = (f"<td style='padding-right:12px'>gA="
+                      f"{(gA[i] if gA is not None else float('nan')):.2e}</td>")
             rows.append(
                 f"<tr><td style='padding-right:12px;color:{SERIES[i%len(SERIES)]};"
-                f"font-weight:600'>{nm}</td>"
-                f"<td style='padding-right:12px'>K={K[i]:.2e}</td>"
-                f"<td style='padding-right:12px'>gA="
-                f"{(gA[i] if gA is not None else float('nan')):.2e}</td>"
-                f"<td style='color:{MUTE}'>R²={r2[i]:.2f}</td></tr>")
-        html = (f"<div style='color:{INK};font-size:13px'>"
-                f"<b>Langmuir fit</b>  (B = gA·K·C / (1+K·C))"
-                f"<table style='font-size:13px;margin-top:6px'>{''.join(rows)}</table>")
+                f"font-weight:600'>{nm}</td>{p1}{p2}"
+                f"<td style='padding-right:12px;color:{MUTE}'>R²={r2[i]:.2f}</td>"
+                f"<td style='padding-right:12px;color:{TEAL}'>LOD "
+                f"{_fmt_conc(lod[i] if i < len(lod) else None)}</td>"
+                f"<td style='color:{BLUE}'>LOQ "
+                f"{_fmt_conc(loq[i] if i < len(loq) else None)}</td></tr>")
+        title = ("<b>Linear fit</b>  (B = m·C + b)" if linear
+                 else "<b>Langmuir fit</b>  (B = gA·K·C / (1+K·C))")
+        html = (f"<div style='color:{INK};font-size:13px'>{title}"
+                f"<table style='font-size:13px;margin-top:6px'>{''.join(rows)}</table>"
+                f"<p style='color:{FAINT};margin-top:4px'>LOD = 3.3σ/slope, "
+                "LOQ = 10σ/slope (low-range linear fit).</p>")
         if res["example"] is not None:                    # ≥2 compounds → competition
             comp = res["example"]["competition"]
             html += (f"<p style='margin-top:10px'><b style='color:{CORAL}'>"
