@@ -141,7 +141,7 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     Anb = A[:, nonbg]
     nb_tot = Anb.sum(axis=1, keepdims=True)
     ratio_nb = np.divide(Anb, nb_tot, out=np.zeros_like(Anb), where=nb_tot > 0)
-    hit = frac[:, nonbg].sum(axis=1) >= max(min_frac, 0.5)
+    hit = frac[:, nonbg].sum(axis=1) >= min_frac      # substance share above threshold
     hit_frac = float(hit.mean())
     mean_ratio = ratio_nb[hit].mean(axis=0) if hit.any() else ratio_nb.mean(axis=0)
     dominant = [names[i] for i in nonbg][int(mean_ratio.argmax())] if nonbg else names[0]

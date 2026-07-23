@@ -16,8 +16,8 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QColorDialog, QScrollArea,
-    QFrame,
+    QComboBox, QDoubleSpinBox, QSpinBox, QCheckBox, QFileDialog, QColorDialog,
+    QScrollArea, QFrame,
 )
 
 from ui_common import *
@@ -98,6 +98,18 @@ class RealDataPage(QWidget):
         self.cal_x = QPushButton("✕"); self.cal_x.setObjectName("ghost")
         self.cal_x.setFixedWidth(30); self.cal_x.setToolTip("clear calibration")
         self.cal_x.clicked.connect(self._clear_calib); self.cal_x.setVisible(False)
+        self.thr = self._spin_col("min substance fraction", QDoubleSpinBox())
+        sp = self.thr.itemAt(1).widget()
+        sp.setDecimals(2); sp.setSingleStep(0.05); sp.setRange(0.01, 0.9); sp.setValue(0.15)
+        sp.setToolTip("a pixel counts as a substance (not background) when the "
+                      "substances make up at least this fraction of it — lower to "
+                      "catch weaker signal")
+        self.chk_flip = QCheckBox("flip Y")
+        self.chk_flip.setToolTip("flip the map top-to-bottom if it comes out upside down")
+        self.chk_flip.toggled.connect(lambda _=False: self._redraw())
+        flipcol = QVBoxLayout(); flipcol.setSpacing(2)
+        _fl = QLabel("orientation"); _fl.setObjectName("field")
+        flipcol.addWidget(_fl); flipcol.addWidget(self.chk_flip)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
@@ -106,6 +118,7 @@ class RealDataPage(QWidget):
         ctl.addLayout(self.cmb_method)
         ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.cal_x)
+        ctl.addLayout(self.thr); ctl.addLayout(flipcol)
         ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
@@ -292,7 +305,7 @@ class RealDataPage(QWidget):
         self._thread.start()
 
     def thr_value(self):
-        return 0.05
+        return float(self.thr.itemAt(1).widget().value())
 
     def _progress(self, msg):
         self.btn.setText("Unmixing…"); self.status.setText("● " + msg)
@@ -335,14 +348,16 @@ class RealDataPage(QWidget):
         self.readout.setText(txt)
 
     # ---- plots ----
+    def _flip(self):
+        return self.chk_flip.isChecked()
+
     def _grid_rc(self, r):
-        """Grid row/col index per pixel + the imshow extent (coordinate units)."""
+        """Grid row/col index per pixel (rows by ascending Y) + the unique axes."""
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux, uy = np.unique(x), np.unique(y)
         xi = {v: i for i, v in enumerate(ux)}; yi = {v: i for i, v in enumerate(uy)}
         rows = np.array([yi[v] for v in y]); cols = np.array([xi[v] for v in x])
-        extent = [ux.min() - 0.5, ux.max() + 0.5, uy.max() + 0.5, uy.min() - 0.5]
-        return rows, cols, len(uy), len(ux), extent
+        return rows, cols, len(uy), len(ux), ux, uy
 
     def _plot_intensity(self, r):
         """Merged false-colour composite: each substance's abundance painted in its
@@ -352,10 +367,16 @@ class RealDataPage(QWidget):
         Anb = r.A[:, r.nonbg]
         scale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
         rgb = np.clip((Anb / scale) @ cols, 0.0, 1.0)              # (n, 3)
-        rows, cc, ny, nx, extent = self._grid_rc(r)
+        rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         img = np.zeros((ny, nx, 3))                                # dark background
         img[rows, cc] = rgb
-        ax.imshow(img, extent=extent, origin="upper", aspect="equal",
+        if self._flip():                                           # Y downwards
+            origin, extent = "upper", [ux.min() - .5, ux.max() + .5,
+                                       uy.max() + .5, uy.min() - .5]
+        else:                                                      # Y upwards (default)
+            origin, extent = "lower", [ux.min() - .5, ux.max() + .5,
+                                       uy.min() - .5, uy.max() + .5]
+        ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                   interpolation="nearest")
         ax.legend(handles=[Patch(facecolor=self._nb_colors(r)[i], label=r.comps[j])
                            for i, j in enumerate(r.nonbg)],
@@ -396,7 +417,9 @@ class RealDataPage(QWidget):
                 ax.add_collection(PatchCollection(wedges, facecolors=wcols,
                                                   edgecolors="none"))
         self._mark_sel(ax, r)
-        ax.set_xlim(x.min() - 1, x.max() + 1); ax.set_ylim(y.max() + 1, y.min() - 1)
+        ax.set_xlim(x.min() - 1, x.max() + 1)
+        ax.set_ylim(*((y.max() + 1, y.min() - 1) if self._flip()
+                      else (y.min() - 1, y.max() + 1)))
         ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
         # legend OUTSIDE the map (below), so it never covers the pixels
         handles = [Patch(facecolor=cols[i], label=r.comps[j])

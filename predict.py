@@ -110,7 +110,7 @@ def predict_sample(data_dir, sample_path, threshold=0.30, baseline=True,
     detected = sorted({comps[i] for i in voted}) or [comps[int(ratio_pp.argmax())]]
 
     # ---- optional: per-pixel ABSOLUTE concentration via Langmuir calibration ----
-    calibrated, conc, conc_avg = False, None, None
+    calibrated, conc, conc_avg, pp_theta, calib_r2 = False, None, None, None, None
     if calib_path:
         axis_c, names_c, dils = load_calibration_csv(calib_path)
         cidx = {n: k for k, n in enumerate(names_c)}
