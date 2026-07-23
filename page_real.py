@@ -255,7 +255,8 @@ class RealDataPage(QWidget):
         return self.cmb_method.itemAt(1).widget().currentData()
 
     def _browse_test(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Test map CSV", "", "CSV (*.csv)")
+        p, _ = QFileDialog.getOpenFileName(self, "Test map", "",
+                                           "maps (*.csv *.txt);;all files (*)")
         if p:
             self.test = p; self.test_lbl.setText(os.path.basename(p))
             self.test_x.setVisible(True)
@@ -272,11 +273,43 @@ class RealDataPage(QWidget):
 
     def _browse_calib(self):
         p, _ = QFileDialog.getOpenFileName(
-            self, "Calibration CSV (compound, concentration_M, wavenumbers…)", "",
-            "CSV (*.csv)")
-        if p:
-            self.calib_path = p; self.cal_lbl.setText("calib: " + os.path.basename(p))
-            self.cal_x.setVisible(True)
+            self, "Calibration spectra CSV (compound, concentration_M, wavenumbers…) "
+            "— e.g. calibration_spectra.csv from Quantify Export", "", "CSV (*.csv)")
+        if not p:
+            return
+        problem = self._validate_calib(p)                 # reject fit/curve/wrong CSVs
+        if problem:
+            self.calib_path = None; self.cal_x.setVisible(False)
+            self.cal_lbl.setText("not a calibration"); self.cal_lbl.setStyleSheet(f"color:{RED};")
+            self.status.setText(
+                f"{os.path.basename(p)} is not a spectra calibration — {problem}. "
+                "Use calibration_spectra.csv (from Quantify → Export), not "
+                "calibration_fit/curve/stats.csv.")
+            self.status.setStyleSheet(f"color:{RED};")
+            return
+        self.calib_path = p; self.cal_lbl.setText("calib: " + os.path.basename(p))
+        self.cal_lbl.setStyleSheet(""); self.cal_x.setVisible(True)
+
+    @staticmethod
+    def _validate_calib(path):
+        """Return a reason string if `path` is not a per-standard spectra calibration
+        (compound, concentration_M, <wavenumbers>), else None."""
+        from io_utils import load_calibration_csv
+        try:
+            axis, names, dils = load_calibration_csv(path)
+        except Exception as exc:
+            return f"could not read it as spectra ({type(exc).__name__})"
+        if len(axis) < 10:
+            return "no wavenumber axis (needs many wavenumber columns)"
+
+        def _isnum(s):
+            try:
+                float(s); return True
+            except ValueError:
+                return False
+        if not names or all(_isnum(n) for n in names):
+            return "first column isn't compound names"
+        return None
 
     def _clear_calib(self):
         self.calib_path = None; self.cal_lbl.setText(""); self.cal_x.setVisible(False)
