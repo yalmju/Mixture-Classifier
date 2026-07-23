@@ -64,6 +64,7 @@ class RealDataPage(QWidget):
         self.test = None
         self.model_path = None      # trained model (unmixr_model.joblib) for classify
         self.calib_path = None      # optional dilution-series calibration CSV → µM
+        self.rf = {}                # response factors {name: ×} from Validate (correction)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(12)
 
@@ -118,6 +119,19 @@ class RealDataPage(QWidget):
         flipcol = QVBoxLayout(); flipcol.setSpacing(2)
         _fl = QLabel("orientation"); _fl.setObjectName("field")
         flipcol.addWidget(_fl); flipcol.addWidget(self.chk_flip)
+        corr_b = QPushButton("Load correction…"); corr_b.setObjectName("ghost")
+        corr_b.setToolTip("response_factors.csv from the Validate tab → convert the "
+                          "surface ratio to the solution ratio")
+        corr_b.clicked.connect(self._browse_corr)
+        self.chk_corr = QCheckBox("solution ratio")
+        self.chk_corr.setToolTip("apply the loaded response factors so the ratio / "
+                                 "composition reflect the SOLUTION, not the raw surface "
+                                 "signal (which over-weights high-response substances)")
+        self.chk_corr.setEnabled(False)
+        self.chk_corr.toggled.connect(lambda _=False: self._on_corr())
+        corrcol = QVBoxLayout(); corrcol.setSpacing(2)
+        self.corr_lbl = QLabel("correction"); self.corr_lbl.setObjectName("field")
+        corrcol.addWidget(self.corr_lbl); corrcol.addWidget(self.chk_corr)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
@@ -127,6 +141,7 @@ class RealDataPage(QWidget):
         ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.cal_x)
         ctl.addLayout(hitcol); ctl.addLayout(self.thr); ctl.addLayout(flipcol)
+        ctl.addWidget(corr_b); ctl.addLayout(corrcol)
         ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
@@ -356,6 +371,54 @@ class RealDataPage(QWidget):
     def _clear_calib(self):
         self.calib_path = None; self.cal_lbl.setText(""); self.cal_x.setVisible(False)
 
+    def _browse_corr(self):
+        """Load response_factors.csv (from Validate) → enable the solution-ratio toggle."""
+        p, _ = QFileDialog.getOpenFileName(
+            self, "response_factors.csv (from Validate → Export)", "", "CSV (*.csv)")
+        if not p:
+            return
+        try:
+            import csv as _csv
+            rf = {}
+            with open(p, newline="", encoding="utf-8-sig") as f:
+                for row in _csv.DictReader(f):
+                    rf[row["substance"]] = float(row["response_factor"])
+            if not rf:
+                raise ValueError("no rows")
+        except Exception as exc:
+            self.corr_lbl.setText("not a correction"); self.corr_lbl.setStyleSheet(f"color:{RED};")
+            self.status.setText(f"{os.path.basename(p)} is not a response_factors.csv "
+                                f"({type(exc).__name__}) — export it from the Validate tab.")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        self.rf = rf
+        self.corr_lbl.setText("correction ✓"); self.corr_lbl.setStyleSheet("")
+        self.chk_corr.setEnabled(True); self.chk_corr.setChecked(True)
+
+    def _on_corr(self):
+        if self._res is not None:
+            self._apply(self._res)              # recompute ratio/dominant + redraw
+
+    def _rf_vec(self, r):
+        """Response-factor vector aligned to the non-bg substances, or None when the
+        solution-ratio correction is off / unavailable."""
+        if not (self.chk_corr.isChecked() and self.rf):
+            return None
+        return np.array([self.rf.get(r.comps[j], 1.0) for j in r.nonbg], float)
+
+    def _ratio_nb(self, r):
+        """Per-pixel non-bg composition — corrected to the solution ratio when the
+        response-factor correction is active, otherwise the raw surface ratio."""
+        rf = self._rf_vec(r)
+        if rf is None:
+            return r.ratio_nb
+        Anb = r.A[:, r.nonbg] / np.where(rf > 0, rf, 1.0)
+        s = Anb.sum(axis=1, keepdims=True)
+        return np.divide(Anb, s, out=np.zeros_like(Anb), where=s > 0)
+
+    def _mean_ratio(self, r):
+        rn = self._ratio_nb(r)
+        return rn[r.hit].mean(axis=0) if r.hit.any() else rn.mean(axis=0)
+
     # ---- run ----
     def _run(self):
         if not self.test:
@@ -409,18 +472,23 @@ class RealDataPage(QWidget):
         self.status.setText(f"done — {r.method.upper()}")
         self.status.setStyleSheet(f"color:{MUTE};")
         nb = [r.comps[i] for i in r.nonbg]
-        self.k_dom.set(r.dominant, TEAL)
-        self.k_n.set(str(int(np.sum(r.mean_ratio >= 0.05))), AMBER)
+        mr = self._mean_ratio(r)                          # corrected when toggle on
+        corrected = self._rf_vec(r) is not None
+        dom = nb[int(mr.argmax())] if len(nb) else r.dominant
+        self.k_dom.set(dom, TEAL)
+        self.k_n.set(str(int(np.sum(mr >= 0.05))), AMBER)
         self.k_hit.set(f"{r.hit_frac:.0%}", BLUE)
         self.k_px.set(f"{r.n_pixels:,}", PURPLE)
         self._rebuild_swatches(r)
         self._plot_maps(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
-        ratio = "  :  ".join(f"{nm} {r.mean_ratio[i] * 100:.0f}"
-                             for i, nm in enumerate(nb))
+        ratio = "  :  ".join(f"{nm} {mr[i] * 100:.0f}" for i, nm in enumerate(nb))
+        rtag = "solution ratio" if corrected else "mean ratio"
         txt = (f"<b>hit:</b> {r.hit_frac:.0%} of pixels are a substance &nbsp;·&nbsp; "
-               f"<b>mean ratio</b> (hit pixels): {ratio} &nbsp;·&nbsp; "
-               f"<b>dominant:</b> {r.dominant}")
+               f"<b>{rtag}</b> (hit pixels): {ratio} &nbsp;·&nbsp; "
+               f"<b>dominant:</b> {dom}"
+               + ("  <span style='color:%s'>(response-corrected)</span>" % TEAL
+                  if corrected else ""))
         if getattr(r, "calibrated", False) and r.conc_avg is not None:
             um = r.conc_avg * 1e6
             cs = "  ·  ".join(f"{nm} {um[i]:.3g} µM" for i, nm in enumerate(nb)
@@ -550,10 +618,11 @@ class RealDataPage(QWidget):
             ax.set_title("predicted class per pixel (not a mixture ratio)",
                          fontsize=8, color=INK)
         else:                                             # per-pixel pie for hit pixels
+            ratio_nb = self._ratio_nb(r)                  # corrected when toggle on
             wedges, wcols = [], []
             for i in np.where(hit)[0]:
                 a0 = 90.0
-                for k, frac in enumerate(r.ratio_nb[i]):
+                for k, frac in enumerate(ratio_nb[i]):
                     if frac <= 0.002:
                         continue
                     a1 = a0 - frac * 360.0
@@ -584,13 +653,14 @@ class RealDataPage(QWidget):
     def _plot_comp(self, r):
         ax = self.c_comp.new_ax()
         cols = self._nb_colors(r); nb = [r.comps[i] for i in r.nonbg]
-        keep = [i for i in range(len(nb)) if r.mean_ratio[i] >= 0.01] or \
-               [int(r.mean_ratio.argmax())]
-        ax.pie([r.mean_ratio[i] for i in keep], labels=[nb[i] for i in keep],
+        mr = self._mean_ratio(r)                          # corrected when toggle on
+        keep = [i for i in range(len(nb)) if mr[i] >= 0.01] or [int(mr.argmax())]
+        ax.pie([mr[i] for i in keep], labels=[nb[i] for i in keep],
                colors=[cols[i] for i in keep], autopct="%1.0f%%",
                textprops={"fontsize": 8, "color": INK})
         ax.set_aspect("equal")
-        ax.set_title(f"hit {r.hit_frac:.0%}", fontsize=8, color=INK)
+        tag = " · solution" if self._rf_vec(r) is not None else ""
+        ax.set_title(f"hit {r.hit_frac:.0%}{tag}", fontsize=8, color=INK)
         self.c_comp.fig.tight_layout(); self.c_comp.draw_idle()
 
     def _plot_spec(self, r, i):
@@ -604,8 +674,9 @@ class RealDataPage(QWidget):
             ax.plot(axis, recon / (recon.max() or 1.0), lw=1.1, color=TEAL,
                     ls="--", label="reconstructed")
         xp, yp = r.coords[i]
-        rat = "  ·  ".join(f"{r.comps[j]} {r.ratio_nb[i, k] * 100:.0f}%"
-                           for k, j in enumerate(r.nonbg) if r.ratio_nb[i, k] > 0.02)
+        ratio_nb = self._ratio_nb(r)                      # corrected when toggle on
+        rat = "  ·  ".join(f"{r.comps[j]} {ratio_nb[i, k] * 100:.0f}%"
+                           for k, j in enumerate(r.nonbg) if ratio_nb[i, k] > 0.02)
         tag = rat if r.hit[i] else "background"
         if getattr(r, "conc", None) is not None and r.hit[i]:   # absolute µM per pixel
             um = r.conc[i] * 1e6
