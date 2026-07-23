@@ -159,9 +159,9 @@ class ModelPage(QWidget):
         # give each plot a readable minimum height and let the page scroll, so the
         # panels are never squashed flat when the window is short
         for cv in (self.c_curve, self.c_cm, self.c_pca, self.c_bar):
-            cv.setMinimumHeight(260)
-        self.c_bands.setMinimumHeight(200); self.c_box.setMinimumHeight(200)
-        self.c_marker.setMinimumHeight(220)
+            cv.setMinimumHeight(340)
+        self.c_bands.setMinimumHeight(300); self.c_box.setMinimumHeight(300)
+        self.c_marker.setMinimumHeight(320)
         gridw = QWidget(); gridw.setLayout(grid)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(gridw)

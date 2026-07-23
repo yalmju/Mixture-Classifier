@@ -10,7 +10,7 @@ import numpy as np
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QSpinBox, QCheckBox, QLineEdit, QFileDialog,
+    QSpinBox, QCheckBox, QLineEdit, QFileDialog, QDialog, QDialogButtonBox,
 )
 
 from ui_common import *
@@ -291,6 +291,79 @@ class QuantWorker(QObject):
             self.fail.emit(traceback.format_exc())
 
 
+class PeakPickerDialog(QDialog):
+    """Pick each compound's calibration peak by CLICKING on its learned spectrum,
+    instead of typing wavenumbers. One stacked panel per compound; a click snaps to
+    the strongest band near the cursor. Returns {compound: wavenumber}."""
+
+    def __init__(self, cal, initial=None, baseline=True, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Pick calibration peaks — click each spectrum")
+        self.resize(860, 560)
+        axis, names, dils = cal
+        self.axis = np.asarray(axis, float); self.names = list(names)
+        self.means = []
+        for C, specs in dils:                              # top-conc mean, baselined
+            C = np.asarray(C, float); specs = np.asarray(specs, float)
+            top = specs[C == C.max()].mean(axis=0)
+            self.means.append(_prep_specs(top[None, :], baseline)[0])
+        band = (self.axis >= 400) & (self.axis <= 1800)
+        self._band = band if band.sum() >= 5 else np.ones(len(self.axis), bool)
+        self.peaks = dict(initial or {})
+        for i, nm in enumerate(self.names):                # default = strongest band
+            if nm not in self.peaks:
+                self.peaks[nm] = float(self.axis[int(np.argmax(
+                    np.where(self._band, self.means[i], -np.inf)))])
+
+        lay = QVBoxLayout(self)
+        hint = QLabel("Click on a compound's spectrum to set its peak (snaps to the "
+                      "nearest band). One peak per compound — this fills the "
+                      "per-compound peaks box.")
+        hint.setObjectName("sub"); hint.setWordWrap(True); lay.addWidget(hint)
+        self.canvas = Canvas(); self.canvas.setMinimumHeight(380)
+        lay.addWidget(self.canvas, 1)
+        self.canvas.mpl_connect("button_press_event", self._on_click)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                              QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+        self._axmap = {}
+        self._draw()
+
+    def _draw(self):
+        self.canvas.fig.clear(); self._axmap = {}
+        n = len(self.names)
+        for i, nm in enumerate(self.names):
+            ax = self.canvas.style(self.canvas.fig.add_subplot(n, 1, i + 1))
+            y = self.means[i]; ym = y.max() or 1.0
+            ax.plot(self.axis, y / ym, lw=1.1, color=SERIES[i % len(SERIES)])
+            ax.axvline(self.peaks[nm], color=INK, ls="--", lw=1.1)
+            ax.annotate(f"{nm} @ {self.peaks[nm]:.0f} cm⁻¹", xy=(0.99, 0.8),
+                        xycoords="axes fraction", ha="right", fontsize=9, color=INK)
+            ax.set_yticks([])
+            if i < n - 1:
+                ax.set_xticklabels([])
+            else:
+                ax.set_xlabel("wavenumber (cm⁻¹)")
+            self._axmap[ax] = i
+        self.canvas.fig.tight_layout(); self.canvas.draw_idle()
+
+    def _on_click(self, event):
+        if event.inaxes not in self._axmap or event.xdata is None:
+            return
+        i = self._axmap[event.inaxes]; nm = self.names[i]
+        win = np.abs(self.axis - event.xdata) <= 15.0     # snap to nearest strong band
+        if win.any():
+            self.peaks[nm] = float(self.axis[int(np.argmax(
+                np.where(win, self.means[i], -np.inf)))])
+        else:
+            self.peaks[nm] = float(self.axis[int(np.abs(self.axis - event.xdata).argmin())])
+        self._draw()
+
+    def get_peaks(self):
+        return dict(self.peaks)
+
+
 # --------------------------------------------------------------------------
 # Quantify page
 # --------------------------------------------------------------------------
@@ -375,7 +448,11 @@ class QuantifyPage(QWidget):
         self.peaks_txt.setToolTip("one band per compound as name:wavenumber, "
                                   "comma-separated. Overrides the single peak box. "
                                   "'auto peak' fills this in for you to correct.")
-        ctl2.addWidget(pl); ctl2.addWidget(self.peaks_txt, 1)
+        pick_b = QPushButton("Pick from spectrum…"); pick_b.setObjectName("ghost")
+        pick_b.setToolTip("open the learned calibration spectra and click each "
+                          "compound's peak instead of typing it")
+        pick_b.clicked.connect(self._pick_peaks)
+        ctl2.addWidget(pl); ctl2.addWidget(self.peaks_txt, 1); ctl2.addWidget(pick_b)
         root.addLayout(ctl2)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
@@ -510,6 +587,19 @@ class QuantifyPage(QWidget):
             self.src.setStyleSheet(f"color:{RED};")
             self.chk_autopeak.setChecked(False); return
         self.peaks_txt.setText(", ".join(f"{n}:{v:.0f}" for n, v in peaks.items()))
+
+    def _pick_peaks(self):
+        """Open the peak-picker on the learned calibration spectra; the chosen bands
+        fill the per-compound peaks box."""
+        if self._cal is None:
+            self.src.setText("load a calibration first, then pick peaks")
+            self.src.setStyleSheet(f"color:{RED};"); return
+        initial = self._peaks_from_text() or self._marker_peaks()
+        dlg = PeakPickerDialog(self._cal, initial=initial,
+                               baseline=not self.chk_baselined.isChecked(), parent=self)
+        if dlg.exec():
+            peaks = dlg.get_peaks()
+            self.peaks_txt.setText(", ".join(f"{n}:{v:.0f}" for n, v in peaks.items()))
 
     def _peaks_from_text(self):
         """Parse the per-compound peaks box → {name: wavenumber}. Only names that are
