@@ -449,11 +449,17 @@ class QuantifyPage(QWidget):
         self.peaks_txt.setToolTip("one band per compound as name:wavenumber, "
                                   "comma-separated. Overrides the single peak box. "
                                   "'auto peak' fills this in for you to correct.")
+        best_b = QPushButton("Best R² band"); best_b.setObjectName("ghost")
+        best_b.setToolTip("for each compound, scan its real peaks and pick the band "
+                          "whose calibration fits best (highest R²) — fixes a compound "
+                          "stuck on a poor quantitative band")
+        best_b.clicked.connect(self._auto_best)
         pick_b = QPushButton("Pick from spectrum…"); pick_b.setObjectName("ghost")
         pick_b.setToolTip("open the learned calibration spectra and click each "
                           "compound's peak instead of typing it")
         pick_b.clicked.connect(self._pick_peaks)
-        ctl2.addWidget(pl); ctl2.addWidget(self.peaks_txt, 1); ctl2.addWidget(pick_b)
+        ctl2.addWidget(pl); ctl2.addWidget(self.peaks_txt, 1)
+        ctl2.addWidget(best_b); ctl2.addWidget(pick_b)
         root.addLayout(ctl2)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
@@ -576,6 +582,52 @@ class QuantifyPage(QWidget):
             score = np.where(band, score, -np.inf)
             peaks[nm] = float(axis[int(np.argmax(score))])
         return peaks
+
+    def _best_r2_peaks(self, window=10.0):
+        """Per compound, the band whose CALIBRATION FITS BEST — scan the compound's
+        real peaks (prominent local maxima) and keep the one whose peak-height curve
+        has the highest R². This fixes compounds (e.g. DQ) whose discriminative marker
+        band is a poor quantitative band. Returns ({name: wn}, {name: r2})."""
+        if self._cal is None:
+            return None, None
+        from scipy.signal import find_peaks
+        axis, names, dils = self._cal
+        baseline = not self.chk_baselined.isChecked()
+        linear = self.chk_linear.isChecked()
+        band = (axis >= 400) & (axis <= 1800)
+        if band.sum() < 5:
+            band = np.ones(len(axis), bool)
+        peaks, r2s = {}, {}
+        for nm, (C, specs) in zip(names, dils):
+            C = np.asarray(C, float)
+            bl = _prep_specs(specs, baseline)
+            top = bl[C == C.max()].mean(axis=0)
+            idx, _ = find_peaks(top, prominence=(top.max() or 1.0) * 0.05)
+            idx = [i for i in idx if band[i]]
+            if not idx:                                    # fallback: strongest band
+                idx = [int(np.argmax(np.where(band, top, -np.inf)))]
+            best_wn, best_r2 = float(axis[idx[0]]), -np.inf
+            for i in idx:
+                m = (axis >= axis[i] - window) & (axis <= axis[i] + window)
+                B = bl[:, m].max(axis=1)
+                if linear:
+                    s, b0 = _linear_fit(C, B); r2 = _r2_lin_on_means(C, B, s, b0)
+                else:
+                    gA, K = _langmuir_fit(C, B); r2 = _r2_on_means(C, B, gA, K)
+                if r2 > best_r2:
+                    best_r2, best_wn = r2, float(axis[i])
+            peaks[nm] = best_wn; r2s[nm] = best_r2
+        return peaks, r2s
+
+    def _auto_best(self):
+        """Fill the peaks box with the best-R² band per compound and report each R²."""
+        peaks, r2s = self._best_r2_peaks()
+        if not peaks:
+            self.src.setText("load a calibration first"); self.src.setStyleSheet(f"color:{RED};")
+            return
+        self.peaks_txt.setText(", ".join(f"{n}:{v:.0f}" for n, v in peaks.items()))
+        note = "  ·  ".join(f"{n} {v:.0f} (R²={r2s[n]:.2f})" for n, v in peaks.items())
+        self.src.setText("best-R² bands → " + note); self.src.setStyleSheet("")
 
     def _on_autopeak(self, checked):
         """Fill the editable per-compound peaks box from the auto marker bands, so the
