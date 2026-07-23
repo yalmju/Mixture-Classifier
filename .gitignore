@@ -15,3 +15,6 @@ preview_*.png
 # analysis figure outputs
 real_pest_*.png
 scripts/*.png
+
+# generated demo dataset (recreate with examples/make_demo_data.py)
+examples/demo/

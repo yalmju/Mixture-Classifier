@@ -58,7 +58,7 @@ class RealDataPage(QWidget):
         self._thread = None
         self._res = None
         self._sel = None
-        self._maps_ax = {}          # axes that accept a pixel click
+        self._click_axes = []       # axes that accept a pixel click
         self._colors = {}           # per-substance colour override {name: '#hex'}
         self.data_dir = PEST_DEFAULT
         self.test = None
@@ -147,33 +147,53 @@ class RealDataPage(QWidget):
         self.swatches.addStretch(1)
         root.addLayout(self.swatches)
 
-        grid = QGridLayout(); grid.setSpacing(12)
-        self.c_int = Canvas(); self.c_pie = Canvas()
-        self.c_spec = Canvas(); self.c_comp = Canvas()
-        for (cv, title, r, c) in [
-            (self.c_int, "Merged composite — substances in their colours (click a pixel)", 0, 0),
-            (self.c_pie, "Per-pixel composition — pie per pixel (click a pixel)", 0, 1),
-            (self.c_spec, "Selected pixel spectrum", 1, 0),
-            (self.c_comp, "Composition (overall)", 1, 1),
+        # ---------- stacked result sections (scrollable) ----------
+        body = QVBoxLayout(); body.setSpacing(12)
+
+        # 1) intensity maps: merged composite + each component (background included)
+        self.c_maps = Canvas()
+        card_maps, lay_maps = _card(
+            "Intensity maps — merged composite + each component in its colour "
+            "(background included; click a pixel)")
+        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(440)
+        body.addWidget(card_maps)
+
+        # 2) per-pixel composition pie map | overall composition
+        self.c_pie = Canvas(); self.c_comp = Canvas()
+        prow = QHBoxLayout(); prow.setSpacing(12)
+        for cv, title in [
+            (self.c_pie, "Per-pixel composition — pie per pixel (click a pixel)"),
+            (self.c_comp, "Composition (overall)"),
         ]:
-            card, lay = _card(title); lay.addWidget(cv)
-            grid.addWidget(card, r, c)
-        grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
-        for cv in (self.c_int, self.c_pie):
-            cv.setMinimumHeight(300)
-        for cv in (self.c_spec, self.c_comp):
-            cv.setMinimumHeight(260)
-        gridw = QWidget(); gridw.setLayout(grid)
+            card, lay = _card(title); lay.addWidget(cv); cv.setMinimumHeight(300)
+            prow.addWidget(card, 1)
+        proww = QWidget(); proww.setLayout(prow); body.addWidget(proww)
+
+        # 3) per-substance absolute concentration maps (only with a calibration)
+        self.c_conc = Canvas()
+        self.card_conc, lay_conc = _card(
+            "Per-substance concentration (µM) — load a calibration to enable")
+        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(320)
+        body.addWidget(self.card_conc); self.card_conc.setVisible(False)
+
+        # 4) selected-pixel spectrum (large)
+        self.c_spec = Canvas()
+        card_spec, lay_spec = _card("Selected pixel spectrum — measured vs reconstructed")
+        lay_spec.addWidget(self.c_spec); self.c_spec.setMinimumHeight(360)
+        body.addWidget(card_spec)
+
+        bodyw = QWidget(); bodyw.setLayout(body)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(gridw)
+        scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(bodyw)
         scroll.setStyleSheet("QScrollArea{background:transparent;}")
         root.addWidget(scroll, 1)
-        for cv, m in [(self.c_int, "Load a test map, then Unmix"),
+
+        for cv, m in [(self.c_maps, "Load a test map, then Unmix"),
                       (self.c_pie, "Composition appears here"),
-                      (self.c_spec, "Click a pixel in a map to see its spectrum"),
-                      (self.c_comp, "Composition appears here")]:
+                      (self.c_comp, "Composition appears here"),
+                      (self.c_spec, "Click a pixel in a map to see its spectrum")]:
             cv.placeholder(m)
-        self.c_int.mpl_connect("button_press_event", self._on_click)
+        self.c_maps.mpl_connect("button_press_event", self._on_click)
         self.c_pie.mpl_connect("button_press_event", self._on_click)
 
         self.readout = QLabel(""); self.readout.setObjectName("sub")
@@ -215,6 +235,13 @@ class RealDataPage(QWidget):
             out.append(self._colors.get(r.comps[j], self._default_color(i)))
         return out
 
+    def _all_colors(self, r):
+        """Colour per component (index in r.comps): its hue if a substance, grey if
+        background — so the background component gets its own panel too."""
+        nb = self._nb_colors(r)
+        nbmap = {j: nb[i] for i, j in enumerate(r.nonbg)}
+        return [nbmap.get(k, BG_GREY) for k in range(len(r.comps))]
+
     def _rebuild_swatches(self, r):
         while self.swatches.count():
             it = self.swatches.takeAt(0)
@@ -247,7 +274,7 @@ class RealDataPage(QWidget):
         r = self._res
         if r is None:
             return
-        self._plot_intensity(r); self._plot_pies(r); self._plot_comp(r)
+        self._plot_maps(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
         if self._sel is not None:
             self._plot_spec(r, self._sel)
 
@@ -372,7 +399,7 @@ class RealDataPage(QWidget):
         self.k_hit.set(f"{r.hit_frac:.0%}", BLUE)
         self.k_px.set(f"{r.n_pixels:,}", PURPLE)
         self._rebuild_swatches(r)
-        self._plot_intensity(r); self._plot_pies(r); self._plot_comp(r)
+        self._plot_maps(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
         ratio = "  :  ".join(f"{nm} {r.mean_ratio[i] * 100:.0f}"
                              for i, nm in enumerate(nb))
@@ -404,36 +431,78 @@ class RealDataPage(QWidget):
         rows = np.array([yi[v] for v in y]); cols = np.array([xi[v] for v in x])
         return rows, cols, len(uy), len(ux), ux, uy
 
-    def _plot_intensity(self, r):
-        """Merged false-colour composite: each substance's abundance painted in its
-        chosen colour and added together (background = dark), as a pixel image."""
-        ax = self.c_int.new_ax(); self._maps_ax["int"] = ax
-        cols = np.array([to_rgb(c) for c in self._nb_colors(r)])   # (Knb, 3)
-        Anb = r.A[:, r.nonbg]
-        scale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
-        rgb = np.clip((Anb / scale) @ cols, 0.0, 1.0)              # (n, 3)
-        rows, cc, ny, nx, ux, uy = self._grid_rc(r)
-        img = np.zeros((ny, nx, 3))                                # dark background
-        img[rows, cc] = rgb
+    def _extent_origin(self, ux, uy):
         if self._flip():                                           # Y downwards
-            origin, extent = "upper", [ux.min() - .5, ux.max() + .5,
-                                       uy.max() + .5, uy.min() - .5]
-        else:                                                      # Y upwards (default)
-            origin, extent = "lower", [ux.min() - .5, ux.max() + .5,
-                                       uy.min() - .5, uy.max() + .5]
-        ax.imshow(img, extent=extent, origin=origin, aspect="equal",
-                  interpolation="nearest")
-        ax.legend(handles=[Patch(facecolor=self._nb_colors(r)[i], label=r.comps[j])
-                           for i, j in enumerate(r.nonbg)],
-                  fontsize=7, framealpha=0.0, labelcolor=MUTE,
-                  loc="upper center", bbox_to_anchor=(0.5, -0.02),
-                  ncol=len(r.nonbg), frameon=False)
-        self._mark_sel(ax, r)
-        ax.set_xticks([]); ax.set_yticks([])
-        self.c_int.fig.tight_layout(); self.c_int.draw_idle()
+            return "upper", [ux.min() - .5, ux.max() + .5,
+                             uy.max() + .5, uy.min() - .5]
+        return "lower", [ux.min() - .5, ux.max() + .5,             # Y upwards (default)
+                         uy.min() - .5, uy.max() + .5]
+
+    def _plot_maps(self, r):
+        """Merged false-colour composite PLUS one panel per component (background
+        included). The merge sums every substance's abundance painted in its colour;
+        each single-component panel is that component alone in its own colour."""
+        self.c_maps.fig.clear(); self._click_axes = []
+        nbcols = self._nb_colors(r)
+        allcols = self._all_colors(r)
+        Anb = r.A[:, r.nonbg]
+        mscale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
+        rows, cc, ny, nx, ux, uy = self._grid_rc(r)
+        origin, extent = self._extent_origin(ux, uy)
+
+        panels = [("merged", None)] + [(r.comps[k], k) for k in range(len(r.comps))]
+        n = len(panels); ncol = min(3, n); nrow = int(np.ceil(n / ncol))
+        for idx, (title, k) in enumerate(panels):
+            ax = self.c_maps.style(self.c_maps.fig.add_subplot(nrow, ncol, idx + 1))
+            img = np.zeros((ny, nx, 3))
+            if k is None:                                          # merged composite
+                cols = np.array([to_rgb(c) for c in nbcols])
+                img[rows, cc] = np.clip((Anb / mscale) @ cols, 0.0, 1.0)
+                ax.set_title("merged", fontsize=8, color=INK)
+            else:                                                  # single component
+                sc = float(np.quantile(r.A[:, k], 0.99)) or 1.0
+                v = np.clip(r.A[:, k] / sc, 0.0, 1.0)
+                img[rows, cc] = v[:, None] * np.array(to_rgb(allcols[k]))
+                bg = " (background)" if r.bg_mask[k] else ""
+                ax.set_title(title + bg, fontsize=8, color=allcols[k])
+            ax.imshow(img, extent=extent, origin=origin, aspect="equal",
+                      interpolation="nearest")
+            self._mark_sel(ax, r)
+            ax.set_xticks([]); ax.set_yticks([])
+            self._click_axes.append(ax)
+        self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
+
+    def _plot_conc(self, r):
+        """Per-substance absolute concentration (µM) heat-maps — only when a
+        dilution-series calibration has been applied."""
+        if not getattr(r, "calibrated", False) or r.conc is None:
+            self.card_conc.setVisible(False)
+            return
+        self.card_conc.setVisible(True)
+        self.c_conc.fig.clear()
+        nb = [r.comps[i] for i in r.nonbg]; nbcols = self._nb_colors(r)
+        rows, cc, ny, nx, ux, uy = self._grid_rc(r)
+        origin, extent = self._extent_origin(ux, uy)
+        n = len(nb) or 1; ncol = min(3, n); nrow = int(np.ceil(n / ncol))
+        for i, nm in enumerate(nb):
+            ax = self.c_conc.style(self.c_conc.fig.add_subplot(nrow, ncol, i + 1))
+            um = r.conc[:, i] * 1e6
+            um = np.where(r.hit & np.isfinite(um) & (um > 0), um, np.nan)
+            grid = np.full((ny, nx), np.nan); grid[rows, cc] = um
+            vmax = float(np.nanquantile(um, 0.98)) if np.isfinite(um).any() else 1.0
+            im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                           interpolation="nearest", cmap="viridis",
+                           vmin=0.0, vmax=vmax or 1.0)
+            cb = self.c_conc.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cb.ax.tick_params(labelsize=6, colors=MUTE)
+            r2 = (f"  R²={r.calib_r2[i]:.2f}" if getattr(r, "calib_r2", None) is not None
+                  else "")
+            ax.set_title(f"{nm} (µM){r2}", fontsize=8, color=nbcols[i])
+            ax.set_xticks([]); ax.set_yticks([])
+        self.c_conc.fig.tight_layout(); self.c_conc.draw_idle()
 
     def _plot_pies(self, r):
-        ax = self.c_pie.new_ax(); self._maps_ax["pie"] = ax
+        ax = self.c_pie.new_ax(); self._click_axes.append(ax)
         cols = self._nb_colors(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux = np.unique(x); rad = (np.median(np.diff(ux)) * 0.46) if len(ux) > 1 else 0.46
@@ -522,13 +591,13 @@ class RealDataPage(QWidget):
     # ---- interaction ----
     def _on_click(self, event):
         r = self._res
-        if r is None or event.xdata is None or event.inaxes not in self._maps_ax.values():
+        if r is None or event.xdata is None or event.inaxes not in self._click_axes:
             return
         d = ((r.coords[:, 0] - event.xdata) ** 2
              + (r.coords[:, 1] - event.ydata) ** 2)
         self._sel = int(d.argmin())
         self._plot_spec(r, self._sel)
-        self._plot_intensity(r); self._plot_pies(r)     # redraw with the highlight ring
+        self._plot_maps(r); self._plot_pies(r)          # redraw with the highlight ring
 
     # ---- export ----
     def _export(self):
@@ -554,8 +623,12 @@ class RealDataPage(QWidget):
                 + ([f"{r.conc[i, k] * 1e6:.4g}" for k in range(len(nb))] if cal else [])
                 + [f"{r.reliab[i]:.4f}"] for i in range(r.n_pixels)]
         write_csv(os.path.join(d, "per_pixel.csv"), head, rows)
-        n = _save_figs([("real_intensity", self.c_int), ("real_composition_pies", self.c_pie),
-                        ("real_pixel_spectrum", self.c_spec),
-                        ("real_composition", self.c_comp)], d)
+        figs = [("real_intensity_maps", self.c_maps),
+                ("real_composition_pies", self.c_pie),
+                ("real_composition", self.c_comp),
+                ("real_pixel_spectrum", self.c_spec)]
+        if getattr(r, "calibrated", False) and r.conc is not None:
+            figs.append(("real_concentration_maps", self.c_conc))
+        n = _save_figs(figs, d)
         self.status.setText(f"exported 2 CSV + {n} PNG → {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
