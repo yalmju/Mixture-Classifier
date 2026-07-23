@@ -158,29 +158,28 @@ class RealDataPage(QWidget):
         lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(260)
         body.addWidget(card_maps)
 
-        # 2) per-pixel composition pie map | overall composition
-        self.c_pie = Canvas(); self.c_comp = Canvas()
-        prow = QHBoxLayout(); prow.setSpacing(12)
-        for cv, title in [
-            (self.c_pie, "Per-pixel composition — pie per pixel (click a pixel)"),
-            (self.c_comp, "Composition (overall)"),
-        ]:
-            card, lay = _card(title); lay.addWidget(cv); cv.setMinimumHeight(300)
-            prow.addWidget(card, 1)
-        proww = QWidget(); proww.setLayout(prow); body.addWidget(proww)
-
-        # 3) per-substance absolute concentration maps (only with a calibration)
-        self.c_conc = Canvas()
+        # 2) per-substance concentration (µM) maps + overall composition, side by side
+        self.c_conc = Canvas(); self.c_comp = Canvas()
         self.card_conc, lay_conc = _card(
             "Per-substance concentration (µM) — load a calibration to enable")
-        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(320)
-        body.addWidget(self.card_conc); self.card_conc.setVisible(False)
+        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(300)
+        ccard, clay = _card("Composition (overall)")
+        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(300)
+        crow = QHBoxLayout(); crow.setSpacing(12)
+        crow.addWidget(self.card_conc, 3); crow.addWidget(ccard, 2)
+        crow_w = QWidget(); crow_w.setLayout(crow); body.addWidget(crow_w)
+        self.card_conc.setVisible(False)
 
-        # 4) selected-pixel spectrum (large)
-        self.c_spec = Canvas()
-        card_spec, lay_spec = _card("Selected pixel spectrum — measured vs reconstructed")
-        lay_spec.addWidget(self.c_spec); self.c_spec.setMinimumHeight(360)
-        body.addWidget(card_spec)
+        # 3) per-pixel composition pie | selected-pixel spectrum, side by side — so a
+        #    clicked pixel's spectrum shows right next to the map, not far below
+        self.c_pie = Canvas(); self.c_spec = Canvas()
+        pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
+        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(340)
+        scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
+        slay.addWidget(self.c_spec); self.c_spec.setMinimumHeight(340)
+        srow = QHBoxLayout(); srow.setSpacing(12)
+        srow.addWidget(pcard, 1); srow.addWidget(scard, 1)
+        srow_w = QWidget(); srow_w.setLayout(srow); body.addWidget(srow_w)
 
         bodyw = QWidget(); bodyw.setLayout(body)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
