@@ -6,6 +6,7 @@ shared UI foundation (palette, stylesheet, Canvas, KPI tile) in ui_common.py:
     Samples    group raw maps into substance classes (batches / train-test role)
     Model      train a classifier on the reference maps (learning curve, F1, …)
     Quantify   ratio -> M calibration + Langmuir competition
+    Validate   known-ratio mixtures -> response factors (surface vs solution)
     Real data  map analysis: composition / mixtures / per-pixel µM / calibration
 
     python unmixr.py
@@ -26,6 +27,7 @@ from ui_common import APP_NAME, VERSION, ICON_PATH, QSS
 from page_samples import SamplingPage
 from page_model import ModelPage
 from page_quantify import QuantifyPage
+from page_validate import ValidatePage
 from page_real import RealDataPage
 
 
@@ -38,6 +40,7 @@ class MainWindow(QMainWindow):
         ("Samples",   "samples", "Group your maps into substance classes (batches)"),
         ("Model",     "model", "Train a classifier on your reference maps"),
         ("Quantify",  "quant", "Ratio → concentration + adsorption competition"),
+        ("Validate",  "valid", "Known-ratio mixtures → response factors (surface vs solution)"),
         ("Real data", "real",  "Analyze real maps: composition · mixtures · µM · calibration"),
     ]
 
@@ -83,9 +86,10 @@ class MainWindow(QMainWindow):
             "samples": SamplingPage(),
             "model": ModelPage(),
             "quant": QuantifyPage(),
+            "valid": ValidatePage(),
             "real": RealDataPage(),
         }
-        for key in ("samples", "model", "quant", "real"):
+        for key in ("samples", "model", "quant", "valid", "real"):
             self.stack.addWidget(self.pages[key])
 
         self.select("samples")
