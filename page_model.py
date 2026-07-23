@@ -79,14 +79,20 @@ class ModelPage(QWidget):
         self.src = QLabel(self._short(self.pest_dir)); self.src.setObjectName("field")
         ctl.addWidget(self.src, 1)
         save_b = QPushButton("Save model"); save_b.setObjectName("ghost")
-        save_b.setToolTip("save the trained model into the dataset folder so Real "
-                          "data / Predict reuse it — no need to retrain each time")
+        save_b.setToolTip("save the trained model + results into the dataset folder, "
+                          "so you can reload them (here) or reuse them (Real data / "
+                          "Predict) — no need to retrain each time")
         save_b.clicked.connect(self._save_model_to_dataset)
+        load_b = QPushButton("Load model"); load_b.setObjectName("ghost")
+        load_b.setToolTip("load a saved model bundle and redisplay its results — "
+                          "no retraining")
+        load_b.clicked.connect(self._load_model)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Train + evaluate"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._train)
-        ctl.addWidget(save_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
+        ctl.addWidget(save_b); ctl.addWidget(load_b); ctl.addWidget(exp_b)
+        ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
         # ---- controls: row 2 = split only (preprocessing comes from Samples) ----
@@ -261,6 +267,27 @@ class ModelPage(QWidget):
         tail = f" + {saved}" if saved else ""
         self.src.setText(f"exported CSV + {n} PNG{tail} → {os.path.basename(d)}")
 
+    def _load_model(self):
+        """Load a saved model bundle and redisplay its results — no retraining."""
+        start = self.pest_dir if os.path.isdir(self.pest_dir) else ""
+        p, _ = QFileDialog.getOpenFileName(self, "Saved model bundle (unmixr_model.joblib)",
+                                           start, "model (*.joblib);;all (*)")
+        if not p:
+            return
+        try:
+            import joblib
+            bundle = joblib.load(p)
+            res = bundle.get("result")
+            if res is None:
+                self.src.setText("this file has no saved results (model only) — "
+                                 "re-save from a newer version"); return
+            self._res = res
+            self._train_params = bundle.get("preprocessing")
+            self._apply(res)
+            self.src.setText(f"loaded results from {os.path.basename(p)}")
+        except Exception as exc:
+            self.src.setText(f"load failed — {exc}"); print(exc, file=sys.stderr)
+
     def _save_model_to_dataset(self):
         """One-click: write the trained model into the dataset folder, where Real
         data and Predict auto-find it (train once, then just change the test map)."""
@@ -278,7 +305,8 @@ class ModelPage(QWidget):
             return ""
         bundle = dict(model=model, backend=r.backend, classes=list(r.classes),
                       comps=list(r.comps), wn=r.wn,
-                      preprocessing=self._train_params)
+                      preprocessing=self._train_params,
+                      result=r)                             # full results → redisplay later
         try:
             import joblib
             joblib.dump(bundle, os.path.join(d, "unmixr_model.joblib"))
