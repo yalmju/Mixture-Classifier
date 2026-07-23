@@ -140,13 +140,36 @@ def _lod_loq(C, B):
     return 3.3 * sigma / m, 10.0 * sigma / m
 
 
-def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True):
+def _lod_from_blank(C, B, blank_vals):
+    """Blank-based LOD/LOQ (the SERS-appropriate form): slope from the low-range
+    linear calibration, σ from the ACTUAL blank replicates measured the same way as B
+    (the paper/substrate BLK). LOD = 3.3·σ_blank/slope, LOQ = 10·σ_blank/slope."""
+    C = np.asarray(C, float); B = np.asarray(B, float)
+    blank_vals = np.asarray(blank_vals, float)
+    uc = np.unique(C)
+    lin_uc = uc[:max(3, min(len(uc), 5))]
+    mask = np.isin(C, lin_uc); Cl, Bl = C[mask], B[mask]
+    if len(np.unique(Cl)) < 2 or len(blank_vals) < 2:
+        return float("nan"), float("nan")
+    m, b = np.polyfit(Cl, Bl, 1)
+    if m <= 0:
+        return float("nan"), float("nan")
+    sigma = float(np.std(blank_vals, ddof=1))
+    if sigma <= 0:
+        return float("nan"), float("nan")
+    return 3.3 * sigma / m, 10.0 * sigma / m
+
+
+def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=None):
     """Calibration from a marker band: B = baseline-removed intensity summed over
     peak ± window, Langmuir-fit per compound. ``peak`` is one wavenumber (same band
     for every compound) or a {compound: wavenumber} map (each compound at its own
     band). Curve only (no competition)."""
     from calibration import _langmuir_B
     axis, names, dilutions = cal
+    blk = (_prep_specs(blank[1], baseline)                  # aligned BLK spectra, or None
+           if blank is not None and len(blank[0]) == len(axis) else None)
+    lod_method = "blank" if blk is not None else "residual"
     iso, r2, K_fit, gA_fit, peaks_used, lods, loqs = [], [], [], [], [], [], []
     for name, (C, specs) in zip(names, dilutions):
         pk = peak.get(name) if isinstance(peak, dict) else peak
@@ -168,11 +191,15 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True):
             iso.append((C, B, dense, _langmuir_B(dense, gA, K)))
             r2.append(_r2_on_means(C, B, gA, K))
             K_fit.append(K); gA_fit.append(gA)
-        lod, loq = _lod_loq(C, B); lods.append(lod); loqs.append(loq)
+        if blk is not None:                            # blank-based on the same band
+            lod, loq = _lod_from_blank(C, B, blk[:, m].sum(axis=1))
+        else:
+            lod, loq = _lod_loq(C, B)
+        lods.append(lod); loqs.append(loq)
     per_cmpd = isinstance(peak, dict)
     return {"names": names, "K_true": None, "K_fit": np.array(K_fit),
             "gA_fit": np.array(gA_fit), "iso": iso, "r2": r2, "model": model,
-            "lod": lods, "loq": loqs,
+            "lod": lods, "loq": loqs, "lod_method": lod_method,
             "parity": (np.array([]), np.array([]), np.array([], int)),
             "log_err": float("nan"), "example": None, "example_true": None,
             "selectivity": float("nan"),
@@ -180,15 +207,23 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True):
 
 
 def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None,
-               model="langmuir", baseline=True):
+               model="langmuir", baseline=True, blank=None):
     from calibration import _langmuir_B
     if cal is not None and peak_map:
-        return _peak_quant(cal, peak_map, model=model, baseline=baseline)
+        return _peak_quant(cal, peak_map, model=model, baseline=baseline, blank=blank)
     if cal is not None and peak_wn and peak_wn > 0:
-        return _peak_quant(cal, peak_wn, model=model, baseline=baseline)
+        return _peak_quant(cal, peak_wn, model=model, baseline=baseline, blank=blank)
     lab = (_real_lab(cal, seed, baseline=baseline) if cal is not None
            else build_synthetic_lab(n_components=n_components, seed=seed))
     calib = calibrate(lab["dilutions"], lab["P"], lab["names"])
+
+    # blank projected onto the same templates (whole-spectrum B), for blank-based LOD
+    blank_B = None
+    if blank is not None and len(blank[0]) == len(lab["axis"]):
+        from competitive import fit_B
+        blk = _prep_specs(blank[1], baseline)
+        blank_B = np.array([fit_B(y, lab["P"])[0] for y in blk])   # (n_blank, n_comp)
+    lod_method = "blank" if blank_B is not None else "residual"
 
     iso, r2, K_out, gA_out, lods, loqs = [], [], [], [], [], []
     for i in range(calib.n):
@@ -203,14 +238,18 @@ def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None,
             iso.append((C, B, dense, _langmuir_B(dense, calib.gA[i], calib.K[i])))
             r2.append(_r2_on_means(C, B, calib.gA[i], calib.K[i]))
             K_out.append(calib.K[i]); gA_out.append(calib.gA[i])
-        lod, loq = _lod_loq(C, B); lods.append(lod); loqs.append(loq)
+        if blank_B is not None:
+            lod, loq = _lod_from_blank(C, B, blank_B[:, i])
+        else:
+            lod, loq = _lod_loq(C, B)
+        lods.append(lod); loqs.append(loq)
     K_out = np.array(K_out); gA_out = np.array(gA_out)
 
     # single-compound calibration → fit the curve only (no competition / recovery)
     if len(lab["val_specs"]) == 0 or calib.n < 2:
         return {"names": calib.names, "K_true": lab["K_true"], "K_fit": K_out,
                 "gA_fit": gA_out, "iso": iso, "r2": r2, "model": model,
-                "lod": lods, "loq": loqs,
+                "lod": lods, "loq": loqs, "lod_method": lod_method,
                 "parity": (np.array([]), np.array([]), np.array([], int)),
                 "log_err": float("nan"), "example": None,
                 "example_true": None, "selectivity": float("nan")}
@@ -229,7 +268,7 @@ def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None,
     return {
         "names": calib.names, "K_true": lab["K_true"], "K_fit": K_out,
         "gA_fit": gA_out, "iso": iso, "r2": r2, "model": model,
-        "lod": lods, "loq": loqs,
+        "lod": lods, "loq": loqs, "lod_method": lod_method,
         "parity": (np.array(true_flat), np.array(est_flat), np.array(col_flat, int)),
         "log_err": log_err, "example": quants[ex],
         "example_true": lab["val_true"][ex],
@@ -263,6 +302,7 @@ class QuantifyPage(QWidget):
         self._acc = {}         # accumulated per-compound folders {name: (concs, specs)}
         self._axis = None      # shared wavenumber axis of the accumulated folders
         self._res = None
+        self.data_dir = None   # Samples folder (for the BLK class → blank-based LOD)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
 
@@ -500,6 +540,35 @@ class QuantifyPage(QWidget):
         self._cal = None; self._acc = {}; self._axis = None
         self.src.setText("source: synthetic"); self.src.setStyleSheet("")
 
+    def set_data_dir(self, path):
+        self.data_dir = path       # so LOD can use the Samples BLK class as the blank
+
+    def _load_blank(self):
+        """BLK spectra from the Samples dataset (the paper/substrate blank) for a
+        blank-based LOD: (axis, spectra) or None if there is no blank class or its
+        axis doesn't match the loaded calibration."""
+        if not self.data_dir or self._cal is None:
+            return None
+        try:
+            from dataset import discover_dataset, is_blank
+            from real_data import load_map
+            groups = discover_dataset(self.data_dir)
+            cubes, wn = [], None
+            for c, maps in groups:
+                if not is_blank(c):
+                    continue
+                for _b, p, _r in maps:
+                    wn, cube, _m, _c = load_map(p); cubes.append(cube)
+            if not cubes:
+                return None
+            specs = np.vstack(cubes)
+            if len(wn) != len(self._cal[0]):     # must share the calibration axis
+                return None
+            return (np.asarray(wn, float), specs)
+        except Exception as exc:
+            print("load blank:", exc, file=sys.stderr)
+            return None
+
     def _export(self):
         if self._res is None:
             self.src.setText("run first, then export"); return
@@ -548,13 +617,15 @@ class QuantifyPage(QWidget):
         gA = r.get("gA_fit"); lod = r.get("lod", []); loq = r.get("loq", [])
         model = r.get("model", "langmuir")
         p1, p2 = ("slope", "intercept") if model == "linear" else ("K_fit", "gA_fit")
+        lmeth = r.get("lod_method", "residual")
         write_csv(os.path.join(d, "calibration_fit.csv"),
-                  ["compound", "model", p1, p2, "R2", "LOD_M", "LOQ_M"],
+                  ["compound", "model", p1, p2, "R2", "LOD_M", "LOQ_M", "LOD_basis"],
                   [[nm, model, f"{r['K_fit'][i]:.4e}",
                     f"{gA[i]:.4e}" if gA is not None else "",
                     f"{r['r2'][i]:.4f}" if r.get('r2') else "",
                     f"{lod[i]:.4e}" if i < len(lod) and np.isfinite(lod[i]) else "",
-                    f"{loq[i]:.4e}" if i < len(loq) and np.isfinite(loq[i]) else ""]
+                    f"{loq[i]:.4e}" if i < len(loq) and np.isfinite(loq[i]) else "",
+                    lmeth]
                    for i, nm in enumerate(r["names"])])
         # per-mixture quantification (only when a ≥2-compound example exists)
         if r["example"] is not None:
@@ -578,7 +649,8 @@ class QuantifyPage(QWidget):
                       peak_wn=float(self.sp_peak.itemAt(1).widget().value()),
                       peak_map=peak_map,
                       model="linear" if self.chk_linear.isChecked() else "langmuir",
-                      baseline=not self.chk_baselined.isChecked())
+                      baseline=not self.chk_baselined.isChecked(),
+                      blank=self._load_blank())     # Samples BLK → blank-based LOD
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self._thread = QThread(); self._worker = QuantWorker(params)
         self._worker.moveToThread(self._thread)
@@ -670,10 +742,13 @@ class QuantifyPage(QWidget):
                 f"{_fmt_conc(loq[i] if i < len(loq) else None)}</td></tr>")
         title = ("<b>Linear fit</b>  (B = m·C + b)" if linear
                  else "<b>Langmuir fit</b>  (B = gA·K·C / (1+K·C))")
+        note = ("σ = the Samples BLK (paper blank) noise" if res.get("lod_method") == "blank"
+                else "σ = calibration residual — load a BLK class in Samples for a "
+                     "blank-based limit")
         html = (f"<div style='color:{INK};font-size:13px'>{title}"
                 f"<table style='font-size:13px;margin-top:6px'>{''.join(rows)}</table>"
                 f"<p style='color:{FAINT};margin-top:4px'>LOD = 3.3σ/slope, "
-                "LOQ = 10σ/slope (low-range linear fit).</p>")
+                f"LOQ = 10σ/slope · {note}.</p>")
         if res["example"] is not None:                    # ≥2 compounds → competition
             comp = res["example"]["competition"]
             html += (f"<p style='margin-top:10px'><b style='color:{CORAL}'>"
