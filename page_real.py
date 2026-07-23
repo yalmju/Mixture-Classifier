@@ -84,7 +84,7 @@ class RealDataPage(QWidget):
         test_b.clicked.connect(self._browse_test)
         self.test_lbl = QLabel("no test map"); self.test_lbl.setObjectName("field")
         self.test_x = QPushButton("✕"); self.test_x.setObjectName("ghost")
-        self.test_x.setFixedWidth(30); self.test_x.setToolTip("clear")
+        self._compact_x(self.test_x, "clear")
         self.test_x.clicked.connect(self._clear_test); self.test_x.setVisible(False)
         self.cmb_method = self._combo("method", self.METHODS)
         model_b = QPushButton("Load model…"); model_b.setObjectName("ghost")
@@ -97,7 +97,7 @@ class RealDataPage(QWidget):
         cal_b.clicked.connect(self._browse_calib)
         self.cal_lbl = QLabel(""); self.cal_lbl.setObjectName("field")
         self.cal_x = QPushButton("✕"); self.cal_x.setObjectName("ghost")
-        self.cal_x.setFixedWidth(30); self.cal_x.setToolTip("clear calibration")
+        self._compact_x(self.cal_x, "clear calibration")
         self.cal_x.clicked.connect(self._clear_calib); self.cal_x.setVisible(False)
         self.chk_auto = QCheckBox("auto (BLK)")
         self.chk_auto.setToolTip("threshold-free: a pixel is a substance when its "
@@ -173,7 +173,18 @@ class RealDataPage(QWidget):
         lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(260)
         body.addWidget(card_maps)
 
-        # 2) per-substance concentration (µM) maps + overall composition, side by side
+        # 2) per-pixel composition pie | selected-pixel spectrum, side by side — right
+        #    under the maps so a clicked pixel's spectrum shows without scrolling down
+        self.c_pie = Canvas(); self.c_spec = Canvas()
+        pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
+        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(340)
+        scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
+        slay.addWidget(self.c_spec); self.c_spec.setMinimumHeight(340)
+        srow = QHBoxLayout(); srow.setSpacing(12)
+        srow.addWidget(pcard, 1); srow.addWidget(scard, 1)
+        srow_w = QWidget(); srow_w.setLayout(srow); body.addWidget(srow_w)
+
+        # 3) per-substance concentration (µM) maps + overall composition, side by side
         self.c_conc = Canvas(); self.c_comp = Canvas()
         self.card_conc, lay_conc = _card(
             "Per-substance concentration (µM) — load a calibration to enable")
@@ -184,17 +195,6 @@ class RealDataPage(QWidget):
         crow.addWidget(self.card_conc, 3); crow.addWidget(ccard, 2)
         crow_w = QWidget(); crow_w.setLayout(crow); body.addWidget(crow_w)
         self.card_conc.setVisible(False)
-
-        # 3) per-pixel composition pie | selected-pixel spectrum, side by side — so a
-        #    clicked pixel's spectrum shows right next to the map, not far below
-        self.c_pie = Canvas(); self.c_spec = Canvas()
-        pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
-        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(340)
-        scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
-        slay.addWidget(self.c_spec); self.c_spec.setMinimumHeight(340)
-        srow = QHBoxLayout(); srow.setSpacing(12)
-        srow.addWidget(pcard, 1); srow.addWidget(scard, 1)
-        srow_w = QWidget(); srow_w.setLayout(srow); body.addWidget(srow_w)
 
         bodyw = QWidget(); bodyw.setLayout(body)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
@@ -216,6 +216,12 @@ class RealDataPage(QWidget):
         root.addWidget(self.readout)
 
     # ---- small builders ----
+    def _compact_x(self, b, tip):
+        """A small square ✕ clear button (overrides the tall ghost padding)."""
+        b.setFixedSize(24, 24); b.setToolTip(tip)
+        b.setStyleSheet("QPushButton{padding:0px; border:1px solid %s; border-radius:6px;"
+                        "color:%s; font-size:12px;}" % (LINE, MUTE))
+
     def _combo(self, label, items):
         col = QVBoxLayout(); col.setSpacing(2)
         lb = QLabel(label); lb.setObjectName("field")

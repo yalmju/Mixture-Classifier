@@ -13,7 +13,7 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QFileDialog, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView,
+    QHeaderView, QAbstractItemView, QLineEdit,
 )
 
 from ui_common import *
@@ -73,6 +73,20 @@ class ValidatePage(QWidget):
         ctl.addWidget(self.ref_lbl); ctl.addStretch(1)
         ctl.addWidget(add_b); ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
+
+        # fixed-component base ratio — auto-added to files that don't name them
+        brow = QHBoxLayout(); brow.setSpacing(8)
+        bl = QLabel("fixed components:"); bl.setObjectName("field")
+        self.base_txt = QLineEdit()
+        self.base_txt.setPlaceholderText("e.g. TBZ:1, DQ:1  — added to files that only "
+                                         "name the varied substance (THI001 → +TBZ:1, DQ:1)")
+        self.base_txt.setToolTip("the components held constant across your mixtures; "
+                                 "filenames only need to encode what changes")
+        repar_b = QPushButton("Re-parse names"); repar_b.setObjectName("ghost")
+        repar_b.setToolTip("re-read every filename's true ratio using the fixed-components base")
+        repar_b.clicked.connect(self._reparse)
+        brow.addWidget(bl); brow.addWidget(self.base_txt, 1); brow.addWidget(repar_b)
+        root.addLayout(brow)
 
         self.status = QLabel(""); self.status.setObjectName("sub")
         root.addWidget(self.status)
@@ -143,7 +157,7 @@ class ValidatePage(QWidget):
                                                 "maps (*.csv *.txt);;all files (*)")
         if not paths:
             return
-        refs = self._ref_names()
+        refs = self._ref_names(); base = self._base()
         for p in paths:
             if p in self._files:
                 continue
@@ -152,10 +166,23 @@ class ValidatePage(QWidget):
             f_item = QTableWidgetItem(os.path.basename(p))
             f_item.setFlags(f_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 0, f_item)
-            guess = parse_mixture_label(os.path.splitext(os.path.basename(p))[0], refs)
-            txt = ", ".join(f"{k}:{v:.2g}" for k, v in guess.items()) if guess else ""
-            self.table.setItem(row, 1, QTableWidgetItem(txt))
+            self.table.setItem(row, 1, QTableWidgetItem(self._guess(p, refs, base)))
         self.status.setText(f"{len(self._files)} mixtures — edit any true ratio, then Validate")
+        self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _base(self):
+        return self._parse_true(self.base_txt.text()) or None
+
+    def _guess(self, path, refs, base):
+        g = parse_mixture_label(os.path.splitext(os.path.basename(path))[0], refs, base)
+        return ", ".join(f"{k}:{v:.3g}" for k, v in g.items()) if g else ""
+
+    def _reparse(self):
+        """Re-fill every row's true ratio from its filename + the fixed-components base."""
+        refs = self._ref_names(); base = self._base()
+        for row in range(self.table.rowCount()):
+            self.table.setItem(row, 1, QTableWidgetItem(self._guess(self._files[row], refs, base)))
+        self.status.setText("re-parsed filenames with the fixed-components base")
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _clear(self):
