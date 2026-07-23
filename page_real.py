@@ -464,6 +464,9 @@ class RealDataPage(QWidget):
         allcols = self._all_colors(r)
         Anb = r.A[:, r.nonbg]
         mscale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
+        # shared intensity axis across the substance panels (BLK keeps its own)
+        sub_vmax = float(np.quantile(Anb, 0.99)) if Anb.size else 1.0
+        sub_vmax = sub_vmax or 1.0
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
 
@@ -479,7 +482,8 @@ class RealDataPage(QWidget):
                           interpolation="nearest")
                 ax.set_title("merged", fontsize=8, color=INK)
             else:                                          # single component + colour-bar
-                sc = float(np.quantile(r.A[:, k], 0.99)) or 1.0
+                sc = (sub_vmax if not r.bg_mask[k]         # substances share one axis
+                      else float(np.quantile(r.A[:, k], 0.99)) or 1.0)
                 grid = np.zeros((ny, nx)); grid[rows, cc] = r.A[:, k]
                 cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", allcols[k]])
                 im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
@@ -488,7 +492,8 @@ class RealDataPage(QWidget):
                 cb.ax.tick_params(labelsize=5, colors=MUTE)
                 bg = " (bkg)" if r.bg_mask[k] else ""
                 ax.set_title(title + bg, fontsize=8, color=allcols[k])
-            self._mark_sel(ax, r)
+            # no selection ring on the intensity maps — it clutters them; the pie map
+            # (beside the spectrum) carries the highlight instead
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
         self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
@@ -504,18 +509,24 @@ class RealDataPage(QWidget):
         nb = [r.comps[i] for i in r.nonbg]; nbcols = self._nb_colors(r)
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
-        n = len(nb) or 1; ncol = min(3, n); nrow = int(np.ceil(n / ncol))
+        n = len(nb) or 1
+        # SHARED µM colour axis across substances, so the maps are directly comparable
+        um_all = r.conc * 1e6
+        vmask = r.hit[:, None] & np.isfinite(um_all) & (um_all > 0)
+        vals = um_all[vmask]
+        vmax = float(np.quantile(vals, 0.98)) if vals.size else 1.0
+        vmax = vmax or 1.0
+        from matplotlib.colors import LinearSegmentedColormap
         for i, nm in enumerate(nb):
-            ax = self.c_conc.style(self.c_conc.fig.add_subplot(nrow, ncol, i + 1))
-            um = r.conc[:, i] * 1e6
-            um = np.where(r.hit & np.isfinite(um) & (um > 0), um, np.nan)
+            ax = self.c_conc.style(self.c_conc.fig.add_subplot(1, n, i + 1))
+            um = np.where(r.hit & np.isfinite(um_all[:, i]) & (um_all[:, i] > 0),
+                          um_all[:, i], np.nan)
             grid = np.full((ny, nx), np.nan); grid[rows, cc] = um
-            vmax = float(np.nanquantile(um, 0.98)) if np.isfinite(um).any() else 1.0
+            cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", nbcols[i]])
             im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                           interpolation="nearest", cmap="viridis",
-                           vmin=0.0, vmax=vmax or 1.0)
+                           interpolation="nearest", cmap=cmap, vmin=0.0, vmax=vmax)
             cb = self.c_conc.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            cb.ax.tick_params(labelsize=6, colors=MUTE)
+            cb.ax.tick_params(labelsize=6, colors=MUTE)       # same 0..vmax on every panel
             r2 = (f"  R²={r.calib_r2[i]:.2f}" if getattr(r, "calib_r2", None) is not None
                   else "")
             ax.set_title(f"{nm} (µM){r2}", fontsize=8, color=nbcols[i])
@@ -618,7 +629,7 @@ class RealDataPage(QWidget):
              + (r.coords[:, 1] - event.ydata) ** 2)
         self._sel = int(d.argmin())
         self._plot_spec(r, self._sel)
-        self._plot_maps(r); self._plot_pies(r)          # redraw with the highlight ring
+        self._plot_pies(r)                              # redraw the pie's highlight ring
 
     # ---- export ----
     def _export(self):

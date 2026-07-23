@@ -179,7 +179,8 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
             m = np.abs(axis - pk).argmin() == np.arange(len(axis))
         C = np.asarray(C, float)
         bl = _prep_specs(specs, baseline)
-        B = bl[:, m].sum(axis=1)
+        B = bl[:, m].max(axis=1)                        # peak HEIGHT (matches the
+        #  measured intensity), not the integrated band area
         dense = np.geomspace(C.min(), C.max(), 200)
         if model == "linear":
             slope, b0 = _linear_fit(C, B)
@@ -192,7 +193,7 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
             r2.append(_r2_on_means(C, B, gA, K))
             K_fit.append(K); gA_fit.append(gA)
         if blk is not None:                            # blank-based on the same band
-            lod, loq = _lod_from_blank(C, B, blk[:, m].sum(axis=1))
+            lod, loq = _lod_from_blank(C, B, blk[:, m].max(axis=1))
         else:
             lod, loq = _lod_loq(C, B)
         lods.append(lod); loqs.append(loq)
@@ -800,8 +801,8 @@ class QuantifyPage(QWidget):
             ax.plot(dc, db, color=col, lw=1.6, label=lab)
         ax.set_xscale("log"); ax.set_xlabel("concentration (M)")
         pk = res.get("peak_wn")
-        ax.set_ylabel(f"peak @ {pk:.0f} cm⁻¹  (mean ± SE)" if pk
-                      else ("marker-peak intensity (mean ± SE)" if pks
+        ax.set_ylabel(f"peak height @ {pk:.0f} cm⁻¹  (mean ± SE)" if pk
+                      else ("marker-peak height (mean ± SE)" if pks
                             else "signal  B  (mean ± SE)"))
         ax.legend(fontsize=8, framealpha=0.0, labelcolor=MUTE)
         self.c_iso.fig.tight_layout(); self.c_iso.draw_idle()
