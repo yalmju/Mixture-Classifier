@@ -59,6 +59,7 @@ class TrainResult:
     box_wn: np.ndarray = None        # (k,) wavenumbers of the top discriminative bands
     box_vals: np.ndarray = None      # (n_sub, k) intensity at those bands (subsampled)
     box_lab: np.ndarray = None       # (n_sub,) class index for each box row
+    class_means: np.ndarray = None   # (K, n_feat) mean featurised spectrum per class
 
 
 # --------------------------------------------------------------------------
@@ -497,6 +498,7 @@ def _train_batch_cv(data_dir, backend, epochs, n_estimators, seed,
     pca_emb = _pca.transform(Xall[sel]); pca_lab = yall[sel]
     box_wn, box_vals, box_lab = _top_band_box(
         Xall, yall, vip if vip is not None else band_f, wn, K, seed)
+    class_means = _class_means(Xall, yall, K)
     comps = [c for c in classes if not is_blank(c)]
     return TrainResult(
         backend=backend, classes=classes, comps=comps, confusion=cm, acc=acc,
@@ -506,7 +508,7 @@ def _train_batch_cv(data_dir, backend, epochs, n_estimators, seed,
         pca_emb=pca_emb, pca_lab=pca_lab, n_train=len(yall), n_test=int(cm.sum()),
         wn=wn, split="batch-cv", band_f=band_f, acc_std=acc_std, vip=vip,
         pca_var=_pca.explained_variance_ratio_,
-        box_wn=box_wn, box_vals=box_vals, box_lab=box_lab)
+        box_wn=box_wn, box_vals=box_vals, box_lab=box_lab, class_means=class_means)
 
 
 def top_bands(importance, wn, k=6, min_sep=30.0):
@@ -520,6 +522,13 @@ def top_bands(importance, wn, k=6, min_sep=30.0):
         if len(picked) >= k:
             break
     return np.array(picked, int)
+
+
+def _class_means(Xall, yall, K):
+    """Mean featurised spectrum per class — for reading each substance's own bands."""
+    n = Xall.shape[1]
+    return np.array([Xall[yall == i].mean(axis=0) if (yall == i).any()
+                     else np.zeros(n) for i in range(K)])
 
 
 def _top_band_box(Xall, yall, importance, wn, K, seed, k=6, per_class=150):
@@ -616,6 +625,7 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
     pca_emb = _pca.transform(Xall[sel]); pca_lab = yall[sel]
     box_wn, box_vals, box_lab = _top_band_box(
         Xall, yall, vip if vip is not None else band_f, wn, K, seed)
+    class_means = _class_means(Xall, yall, K)
 
     comps = [c for c in classes if not is_blank(c)]
     return TrainResult(
@@ -623,7 +633,7 @@ def train_model(pest_dir=PEST_DEFAULT, backend="rf", epochs=25,
         confusion=cm, acc=acc, macro_f1=macro_f1, per_component=per,
         curve_x=cx, curve_y=cy, curve_label=ylab, curve_xlabel=xlab,
         pca_emb=pca_emb, pca_lab=pca_lab, pca_var=_pca.explained_variance_ratio_,
-        box_wn=box_wn, box_vals=box_vals, box_lab=box_lab,
+        box_wn=box_wn, box_vals=box_vals, box_lab=box_lab, class_means=class_means,
         n_train=len(ytr), n_test=len(yte), wn=wn, split=split, band_f=band_f,
         vip=vip, model=model)
 

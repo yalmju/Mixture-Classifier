@@ -130,7 +130,7 @@ class ModelPage(QWidget):
         grid = QGridLayout(); grid.setSpacing(12)
         self.c_curve = Canvas(); self.c_cm = Canvas()
         self.c_pca = Canvas(); self.c_bar = Canvas(); self.c_bands = Canvas()
-        self.c_box = Canvas()
+        self.c_box = Canvas(); self.c_marker = Canvas()
         for (cv, title, r, c) in [
             (self.c_curve, "Learning curve", 0, 0),
             (self.c_cm, "Confusion matrix (held-out test)", 0, 1),
@@ -146,12 +146,16 @@ class ModelPage(QWidget):
         xcard, xlay = _card("Top bands — intensity by class (box plot: which "
                             "substance is high at each discriminative peak)")
         xlay.addWidget(self.c_box); grid.addWidget(xcard, 3, 0, 1, 2)
+        mcard, mlay = _card("Marker bands per substance — each substance's mean "
+                            "spectrum with the 3 peaks where it stands out most")
+        mlay.addWidget(self.c_marker); grid.addWidget(mcard, 4, 0, 1, 2)
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
         # give each plot a readable minimum height and let the page scroll, so the
         # panels are never squashed flat when the window is short
         for cv in (self.c_curve, self.c_cm, self.c_pca, self.c_bar):
             cv.setMinimumHeight(260)
         self.c_bands.setMinimumHeight(200); self.c_box.setMinimumHeight(200)
+        self.c_marker.setMinimumHeight(220)
         gridw = QWidget(); gridw.setLayout(grid)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(gridw)
@@ -163,7 +167,8 @@ class ModelPage(QWidget):
                         (self.c_pca, "Train to compute PCA"),
                         (self.c_bar, "Train to compute per-class F1"),
                         (self.c_bands, "Train to rank discriminative bands (ANOVA F)"),
-                        (self.c_box, "Train to see intensity-by-class at the top bands")]:
+                        (self.c_box, "Train to see intensity-by-class at the top bands"),
+                        (self.c_marker, "Train to see each substance's marker bands")]:
             cv.placeholder(msg)
 
     def _short(self, p):
@@ -249,7 +254,8 @@ class ModelPage(QWidget):
         n = _save_figs([("model_learning_curve", self.c_curve),
                         ("model_confusion", self.c_cm),
                         ("model_pca", self.c_pca), ("model_prf", self.c_bar),
-                        ("model_bands", self.c_bands), ("model_top_bands_box", self.c_box)], d)
+                        ("model_bands", self.c_bands), ("model_top_bands_box", self.c_box),
+                        ("model_marker_bands", self.c_marker)], d)
         # --- the fitted model itself, so it can be reused later ---
         saved = self._save_model(d, r)
         tail = f" + {saved}" if saved else ""
@@ -353,7 +359,7 @@ class ModelPage(QWidget):
         self.k_te.set(f"{res.n_test:,}", PURPLE)
         self._plot_curve(res); self._plot_cm(res)
         self._plot_pca(res); self._plot_bar(res); self._plot_bands(res)
-        self._plot_box(res)
+        self._plot_box(res); self._plot_markers(res)
 
     # ---- plots ----
     def _plot_curve(self, res):
@@ -479,3 +485,37 @@ class ModelPage(QWidget):
                            for c in range(nC)],
                   fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=min(nC, 4))
         self.c_box.fig.tight_layout(); self.c_box.draw_idle()
+
+    def _plot_markers(self, res):
+        """One small panel per substance: its mean spectrum, with the 3 bands where
+        that substance most exceeds every other class (its characteristic peaks)."""
+        from model_training import top_bands
+        cm = getattr(res, "class_means", None); wn = res.wn
+        if cm is None or wn is None or len(cm) != len(res.classes):
+            self.c_marker.placeholder("no per-class spectra"); return
+        nonbg = [res.classes.index(c) for c in res.comps]      # substances only
+        if not nonbg:
+            self.c_marker.placeholder("no substances"); return
+        self.c_marker.fig.clear()
+        for pos, ci in enumerate(nonbg):
+            ax = self.c_marker.style(
+                self.c_marker.fig.add_subplot(1, len(nonbg), pos + 1))
+            mean_c = cm[ci]
+            others = np.delete(cm, ci, axis=0)
+            score = mean_c - (others.max(axis=0) if len(others) else 0.0)  # uniquely high
+            col = SERIES[pos % len(SERIES)]
+            ax.plot(wn, mean_c, lw=1.0, color=col)
+            ax.fill_between(wn, mean_c, color=col, alpha=0.12)
+            for idx in top_bands(score, wn, k=3, min_sep=40):
+                if score[idx] <= 0:
+                    continue
+                ax.axvline(wn[idx], color=CORAL, lw=0.7, ls="--", alpha=0.7)
+                ax.annotate(f"{wn[idx]:.0f}", (wn[idx], mean_c[idx]), fontsize=7,
+                            color=INK, ha="center", va="bottom",
+                            xytext=(0, 2), textcoords="offset points")
+            ax.set_title(res.classes[ci], fontsize=8, color=col)
+            ax.set_yticks([]); ax.tick_params(labelsize=7)
+            if pos == 0:
+                ax.set_ylabel("intensity", fontsize=8)
+            ax.set_xlabel("cm⁻¹", fontsize=8)
+        self.c_marker.fig.tight_layout(); self.c_marker.draw_idle()
