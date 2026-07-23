@@ -53,6 +53,20 @@ def _real_lab(cal, seed=0, n_validation=6):
             "K_true": None}
 
 
+def _r2_on_means(C, B, gA, K):
+    """R² of the Langmuir fit against the MEAN response per concentration — the
+    calibration-curve quality, kept separate from replicate scatter (which is the
+    precision, reported as CV%). Computing R² on every noisy replicate instead
+    would just measure spot-to-spot variability, not whether the model fits."""
+    from calibration import _langmuir_B
+    C = np.asarray(C, float); B = np.asarray(B, float)
+    uc = np.unique(C)
+    mean_B = np.array([B[C == c].mean() for c in uc])
+    pred = _langmuir_B(uc, gA, K)
+    sst = float(np.sum((mean_B - mean_B.mean()) ** 2))
+    return 1.0 - float(np.sum((mean_B - pred) ** 2)) / sst if sst > 0 else 0.0
+
+
 def _langmuir_fit(C, B):
     """Fit B = gA·K·C/(1+K·C) to (C, B); returns (gA, K) with a safe fallback."""
     from scipy.optimize import curve_fit
@@ -88,8 +102,7 @@ def _peak_quant(cal, peak, window=10.0):
         gA, K = _langmuir_fit(C, B)
         dense = np.geomspace(C.min(), C.max(), 60)
         iso.append((C, B, dense, _langmuir_B(dense, gA, K)))
-        pred = _langmuir_B(C, gA, K); sst = float(np.sum((B - B.mean()) ** 2))
-        r2.append(1.0 - float(np.sum((B - pred) ** 2)) / sst if sst > 0 else 0.0)
+        r2.append(_r2_on_means(C, B, gA, K))
         K_fit.append(K); gA_fit.append(gA)
     per_cmpd = isinstance(peak, dict)
     return {"names": names, "K_true": None, "K_fit": np.array(K_fit),
@@ -116,10 +129,7 @@ def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None):
         dense = np.geomspace(C.min(), C.max(), 60)
         fit = _langmuir_B(dense, calib.gA[i], calib.K[i])
         iso.append((C, calib.B_series[i], dense, fit))
-        B = np.asarray(calib.B_series[i], float)
-        pred = _langmuir_B(C, calib.gA[i], calib.K[i])
-        sst = float(np.sum((B - B.mean()) ** 2))
-        r2.append(1.0 - float(np.sum((B - pred) ** 2)) / sst if sst > 0 else 0.0)
+        r2.append(_r2_on_means(C, calib.B_series[i], calib.gA[i], calib.K[i]))
 
     # single-compound calibration → fit the curve only (no competition / recovery)
     if len(lab["val_specs"]) == 0 or calib.n < 2:
