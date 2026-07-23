@@ -5,9 +5,8 @@ shared UI foundation (palette, stylesheet, Canvas, KPI tile) in ui_common.py:
 
     Samples    group raw maps into substance classes (batches / train-test role)
     Model      train a classifier on the reference maps (learning curve, F1, …)
-    Predict    load one unknown sample -> its component ratio (per-pixel NNLS)
     Quantify   ratio -> M calibration + Langmuir competition
-    Real data  map analysis: single-component / mixture / composition / calib
+    Real data  map analysis: composition / mixtures / per-pixel µM / calibration
 
     python unmixr.py
 """
@@ -26,7 +25,6 @@ from PyQt6.QtWidgets import (
 from ui_common import APP_NAME, VERSION, ICON_PATH, QSS
 from page_samples import SamplingPage
 from page_model import ModelPage
-from page_predict import PredictPage
 from page_quantify import QuantifyPage
 from page_real import RealDataPage
 
@@ -40,8 +38,7 @@ class MainWindow(QMainWindow):
         ("Samples",   "samples", "Group your maps into substance classes (batches)"),
         ("Model",     "model", "Train a classifier on your reference maps"),
         ("Quantify",  "quant", "Ratio → concentration + adsorption competition"),
-        ("Predict",   "predict", "Load an unknown sample → read its component ratio"),
-        ("Real data", "real",  "Analyze real maps: identify · mixtures · calibration"),
+        ("Real data", "real",  "Analyze real maps: composition · mixtures · µM · calibration"),
     ]
 
     def __init__(self):
@@ -85,11 +82,10 @@ class MainWindow(QMainWindow):
         self.pages = {
             "samples": SamplingPage(),
             "model": ModelPage(),
-            "predict": PredictPage(),
             "quant": QuantifyPage(),
             "real": RealDataPage(),
         }
-        for key in ("samples", "model", "quant", "predict", "real"):
+        for key in ("samples", "model", "quant", "real"):
             self.stack.addWidget(self.pages[key])
 
         self.select("samples")
