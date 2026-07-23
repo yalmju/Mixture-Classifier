@@ -277,11 +277,33 @@ class QuantifyPage(QWidget):
         if added:
             self._rebuild_cal()
             pts = "  ·  ".join(f"{n} ({len(c)})" for n, (c, _s) in self._acc.items())
-            self.src.setText(f"source: {pts}"); self.src.setStyleSheet("")
+            note = ""
+            pk = self._suggest_peak()                      # recommend the marker band
+            if pk is not None:
+                self.sp_peak.itemAt(1).widget().setValue(int(round(pk)))
+                note = f"   ·   suggested peak {pk:.0f} cm⁻¹ (set to 0 for whole spectrum)"
+            self.src.setText(f"source: {pts}{note}"); self.src.setStyleSheet("")
         else:
             self.src.setText("folder load failed — " + (errs[-1] if errs else "no data"))
             self.src.setStyleSheet(f"color:{RED};")
             print("load cal folder:", exc, file=sys.stderr)
+
+    def _suggest_peak(self):
+        """The strongest baseline-removed band of the loaded compound (from its
+        highest-concentration spectrum) — the best band to calibrate on. Only when a
+        single compound is loaded (a single wavenumber can't suit several)."""
+        if len(self._acc) != 1 or self._axis is None:
+            return None
+        from sers_mixture import als_baseline
+        (concs, specs), = self._acc.values()
+        concs = np.asarray(concs, float); specs = np.asarray(specs, float)
+        top = specs[concs == concs.max()].mean(axis=0)
+        bl = np.clip(top - als_baseline(top), 0.0, None)
+        band = (self._axis >= 400) & (self._axis <= 1800)      # fingerprint region
+        if band.sum() < 5:
+            band = np.ones(len(self._axis), bool)
+        idx = np.where(band)[0][int(np.argmax(bl[band]))]
+        return float(self._axis[idx])
 
     def _rebuild_cal(self):
         names = list(self._acc)
