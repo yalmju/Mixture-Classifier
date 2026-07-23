@@ -311,7 +311,7 @@ class QuantifyPage(QWidget):
         else:
             self.src.setText("folder load failed — " + (errs[-1] if errs else "no data"))
             self.src.setStyleSheet(f"color:{RED};")
-            print("load cal folder:", exc, file=sys.stderr)
+            print("load cal folder:", errs, file=sys.stderr)
 
     def _suggest_peak(self):
         """The strongest baseline-removed band of the loaded compound (from its
@@ -391,6 +391,19 @@ class QuantifyPage(QWidget):
                               f"{100 * sd / mu:.1f}" if mu else ""])
         write_csv(os.path.join(d, "calibration_stats.csv"),
                   ["compound", "concentration_M", "n", "B_mean", "B_std", "CV_%"], srows)
+        # calibration SPECTRA (mean spectrum per concentration) in the format Real
+        # data / Predict 'Load calibration…' reads — bridges the folder calibration
+        # to per-pixel µM quantification
+        if self._cal is not None:
+            axis, names, dils = self._cal
+            head = ["compound", "concentration_M"] + [f"{v:.2f}" for v in axis]
+            srows2 = []
+            for nm, (C, specs) in zip(names, dils):
+                C = np.asarray(C, float); specs = np.asarray(specs, float)
+                for c in np.unique(C):
+                    mean_sp = specs[C == c].mean(axis=0)
+                    srows2.append([nm, f"{c:.4e}"] + [f"{v:.4f}" for v in mean_sp])
+            write_csv(os.path.join(d, "calibration_spectra.csv"), head, srows2)
         # fitted isotherm parameters (Langmuir K and gA) per compound
         gA = r.get("gA_fit")
         write_csv(os.path.join(d, "calibration_fit.csv"),
