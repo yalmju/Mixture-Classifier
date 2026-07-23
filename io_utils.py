@@ -76,7 +76,9 @@ def load_calibration_folder(folder):
     columns — each column kept as a replicate). Returns (axis, compound_name,
     concentrations (k,), spectra (k, n_feat)); raises if fewer than 2 usable files."""
     from real_data import load_map                       # local: avoid import cycle
-    files = sorted(glob.glob(os.path.join(folder, "*_corrected.csv")))
+    # prefer baseline-corrected exports — match any '…corrected….csv' so map exports
+    # like 'DQ_1mM_10 points_corrected_map.csv' are included, not only '…_corrected.csv'
+    files = sorted(glob.glob(os.path.join(folder, "*corrected*.csv")))
     if not files:
         files = (sorted(glob.glob(os.path.join(folder, "*.csv")))
                  + sorted(glob.glob(os.path.join(folder, "*.txt"))))
