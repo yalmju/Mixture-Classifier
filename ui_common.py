@@ -89,7 +89,7 @@ def _save_figs(named_canvases, folder):
     """Save each (name, Canvas) to folder/<name>.png. Returns count."""
     n = 0
     for name, cv in named_canvases:
-        cv.fig.savefig(os.path.join(folder, name + ".png"), dpi=150,
+        cv.fig.savefig(os.path.join(folder, name + ".png"), dpi=300,
                        facecolor=CARD, bbox_inches="tight")
         n += 1
     return n

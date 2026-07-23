@@ -157,7 +157,7 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True):
         C = np.asarray(C, float)
         bl = _prep_specs(specs, baseline)
         B = bl[:, m].sum(axis=1)
-        dense = np.geomspace(C.min(), C.max(), 60)
+        dense = np.geomspace(C.min(), C.max(), 200)
         if model == "linear":
             slope, b0 = _linear_fit(C, B)
             iso.append((C, B, dense, slope * dense + b0))
@@ -193,7 +193,7 @@ def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None,
     iso, r2, K_out, gA_out, lods, loqs = [], [], [], [], [], []
     for i in range(calib.n):
         C = np.asarray(calib.C_series[i], float); B = np.asarray(calib.B_series[i], float)
-        dense = np.geomspace(C.min(), C.max(), 60)
+        dense = np.geomspace(C.min(), C.max(), 200)
         if model == "linear":
             slope, b0 = _linear_fit(C, B)
             iso.append((C, B, dense, slope * dense + b0))

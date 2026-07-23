@@ -155,7 +155,7 @@ class RealDataPage(QWidget):
         card_maps, lay_maps = _card(
             "Intensity maps — merged composite + each component in its colour "
             "(background included; click a pixel)")
-        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(440)
+        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(260)
         body.addWidget(card_maps)
 
         # 2) per-pixel composition pie map | overall composition
@@ -198,6 +198,7 @@ class RealDataPage(QWidget):
 
         self.readout = QLabel(""); self.readout.setObjectName("sub")
         self.readout.setWordWrap(True); self.readout.setTextFormat(Qt.TextFormat.RichText)
+        self.readout.setStyleSheet(f"font-size:15px; color:{INK};")   # readable summary
         root.addWidget(self.readout)
 
     # ---- small builders ----
@@ -236,11 +237,20 @@ class RealDataPage(QWidget):
         return out
 
     def _all_colors(self, r):
-        """Colour per component (index in r.comps): its hue if a substance, grey if
-        background — so the background component gets its own panel too."""
+        """Colour per component (index in r.comps): its hue if a substance, else the
+        chosen background colour (saved override or grey) — so the background
+        component gets its own recolourable panel too."""
         nb = self._nb_colors(r)
         nbmap = {j: nb[i] for i, j in enumerate(r.nonbg)}
-        return [nbmap.get(k, BG_GREY) for k in range(len(r.comps))]
+        return [nbmap.get(k, self._colors.get(r.comps[k], BG_GREY))
+                for k in range(len(r.comps))]
+
+    def _bg_color(self, r):
+        """Chosen background colour (first background component's override, or grey)."""
+        for k in range(len(r.comps)):
+            if r.bg_mask[k]:
+                return self._colors.get(r.comps[k], BG_GREY)
+        return BG_GREY
 
     def _rebuild_swatches(self, r):
         while self.swatches.count():
@@ -249,14 +259,20 @@ class RealDataPage(QWidget):
                 it.widget().deleteLater()
         self.swatches.addWidget(self._mk_lbl("colours:"))
         cols = self._nb_colors(r)
-        for i, j in enumerate(r.nonbg):
-            name = r.comps[j]
-            b = QPushButton(name); b.setObjectName("ghost"); b.setFixedHeight(24)
-            b.setStyleSheet(f"QPushButton{{border:2px solid {cols[i]};"
-                            f"border-radius:6px;padding:2px 10px;color:{INK};}}")
-            b.clicked.connect(lambda _=False, nm=name: self._pick_color(nm))
-            self.swatches.addWidget(b)
+        for i, j in enumerate(r.nonbg):                    # substances
+            self.swatches.addWidget(self._swatch(r.comps[j], cols[i]))
+        for k in range(len(r.comps)):                      # background (recolourable too)
+            if r.bg_mask[k]:
+                self.swatches.addWidget(
+                    self._swatch(r.comps[k], self._colors.get(r.comps[k], BG_GREY)))
         self.swatches.addStretch(1)
+
+    def _swatch(self, name, color):
+        b = QPushButton(name); b.setObjectName("ghost"); b.setFixedHeight(24)
+        b.setStyleSheet(f"QPushButton{{border:2px solid {color};"
+                        f"border-radius:6px;padding:2px 10px;color:{INK};}}")
+        b.clicked.connect(lambda _=False, nm=name: self._pick_color(nm))
+        return b
 
     def _pick_color(self, name):
         cur = QColor(self._colors.get(name, "#1a73e8"))
@@ -440,8 +456,10 @@ class RealDataPage(QWidget):
 
     def _plot_maps(self, r):
         """Merged false-colour composite PLUS one panel per component (background
-        included). The merge sums every substance's abundance painted in its colour;
-        each single-component panel is that component alone in its own colour."""
+        included), all in a SINGLE row. The merge sums every substance's abundance
+        painted in its colour; each single-component panel is that component's
+        abundance on a black→colour scale with its own intensity colour-bar."""
+        from matplotlib.colors import LinearSegmentedColormap
         self.c_maps.fig.clear(); self._click_axes = []
         nbcols = self._nb_colors(r)
         allcols = self._all_colors(r)
@@ -451,22 +469,26 @@ class RealDataPage(QWidget):
         origin, extent = self._extent_origin(ux, uy)
 
         panels = [("merged", None)] + [(r.comps[k], k) for k in range(len(r.comps))]
-        n = len(panels); ncol = min(3, n); nrow = int(np.ceil(n / ncol))
+        n = len(panels)                                    # all panels on one row
         for idx, (title, k) in enumerate(panels):
-            ax = self.c_maps.style(self.c_maps.fig.add_subplot(nrow, ncol, idx + 1))
-            img = np.zeros((ny, nx, 3))
-            if k is None:                                          # merged composite
+            ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, n, idx + 1))
+            if k is None:                                  # merged composite (RGB)
                 cols = np.array([to_rgb(c) for c in nbcols])
+                img = np.zeros((ny, nx, 3))
                 img[rows, cc] = np.clip((Anb / mscale) @ cols, 0.0, 1.0)
+                ax.imshow(img, extent=extent, origin=origin, aspect="equal",
+                          interpolation="nearest")
                 ax.set_title("merged", fontsize=8, color=INK)
-            else:                                                  # single component
+            else:                                          # single component + colour-bar
                 sc = float(np.quantile(r.A[:, k], 0.99)) or 1.0
-                v = np.clip(r.A[:, k] / sc, 0.0, 1.0)
-                img[rows, cc] = v[:, None] * np.array(to_rgb(allcols[k]))
-                bg = " (background)" if r.bg_mask[k] else ""
+                grid = np.zeros((ny, nx)); grid[rows, cc] = r.A[:, k]
+                cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", allcols[k]])
+                im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                               interpolation="nearest", cmap=cmap, vmin=0.0, vmax=sc)
+                cb = self.c_maps.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
+                cb.ax.tick_params(labelsize=5, colors=MUTE)
+                bg = " (bkg)" if r.bg_mask[k] else ""
                 ax.set_title(title + bg, fontsize=8, color=allcols[k])
-            ax.imshow(img, extent=extent, origin=origin, aspect="equal",
-                      interpolation="nearest")
             self._mark_sel(ax, r)
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
@@ -503,13 +525,13 @@ class RealDataPage(QWidget):
 
     def _plot_pies(self, r):
         ax = self.c_pie.new_ax(); self._click_axes.append(ax)
-        cols = self._nb_colors(r)
+        cols = self._nb_colors(r); bg_col = self._bg_color(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux = np.unique(x); rad = (np.median(np.diff(ux)) * 0.46) if len(ux) > 1 else 0.46
         hit = r.hit
         # background / non-hit pixels: one fast scatter (not one patch each)
         if (~hit).any():
-            ax.scatter(x[~hit], y[~hit], c=BG_GREY, marker="s", s=16, edgecolors="none")
+            ax.scatter(x[~hit], y[~hit], c=bg_col, marker="s", s=16, edgecolors="none")
         if r.method == "model":                           # classifier → one class/pixel
             dom = r.ratio_nb.argmax(axis=1)
             if hit.any():
@@ -538,7 +560,7 @@ class RealDataPage(QWidget):
         # legend OUTSIDE the map (below), so it never covers the pixels
         handles = [Patch(facecolor=cols[i], label=r.comps[j])
                    for i, j in enumerate(r.nonbg)] + \
-                  [Patch(facecolor=BG_GREY, label="background")]
+                  [Patch(facecolor=bg_col, label="background")]
         ax.legend(handles=handles, fontsize=7, framealpha=0.0, labelcolor=MUTE,
                   loc="upper center", bbox_to_anchor=(0.5, -0.02),
                   ncol=len(handles), frameon=False)
