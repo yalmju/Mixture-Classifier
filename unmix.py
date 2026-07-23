@@ -94,12 +94,15 @@ def _templates(data_dir, baseline, progress):
 
 
 def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
-              min_frac=0.05, calib_path=None, progress=None) -> UnmixResult:
+              min_frac=0.05, hit_mode="threshold", calib_path=None,
+              progress=None) -> UnmixResult:
     """Unmix ``test_path`` against the substances in ``data_dir`` (background
-    included) by ``method`` ('nnls' or 'mcr'). ``min_frac`` is how much non-bg
-    abundance a pixel needs to count as a hit rather than background. If
-    ``calib_path`` (a dilution-series CSV) is given, also recover per-pixel absolute
-    concentration (M) via Langmuir calibration of the non-background substances."""
+    included) by ``method`` ('nnls' or 'mcr'). ``hit_mode`` decides which pixels
+    count as a substance rather than background: 'auto' uses the learned background
+    directly (a pixel is a hit when its strongest component is a substance, not the
+    blank — threshold-free), 'threshold' uses ``min_frac`` (the substances must make
+    up at least that fraction of the pixel). If ``calib_path`` (a dilution-series
+    CSV) is given, also recover per-pixel absolute concentration (M)."""
     names, wn, means = _templates(data_dir, baseline, progress)
     wn_u, cube_u, _mean_u, coord = load_map(test_path)
 
@@ -141,7 +144,10 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     Anb = A[:, nonbg]
     nb_tot = Anb.sum(axis=1, keepdims=True)
     ratio_nb = np.divide(Anb, nb_tot, out=np.zeros_like(Anb), where=nb_tot > 0)
-    hit = frac[:, nonbg].sum(axis=1) >= min_frac      # substance share above threshold
+    if hit_mode == "auto":                            # BLK-based: strongest wins
+        hit = ~bg_mask[A.argmax(axis=1)]
+    else:                                             # substance share above threshold
+        hit = frac[:, nonbg].sum(axis=1) >= min_frac
     hit_frac = float(hit.mean())
     mean_ratio = ratio_nb[hit].mean(axis=0) if hit.any() else ratio_nb.mean(axis=0)
     dominant = [names[i] for i in nonbg][int(mean_ratio.argmax())] if nonbg else names[0]

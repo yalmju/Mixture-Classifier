@@ -98,6 +98,14 @@ class RealDataPage(QWidget):
         self.cal_x = QPushButton("✕"); self.cal_x.setObjectName("ghost")
         self.cal_x.setFixedWidth(30); self.cal_x.setToolTip("clear calibration")
         self.cal_x.clicked.connect(self._clear_calib); self.cal_x.setVisible(False)
+        self.chk_auto = QCheckBox("auto (BLK)")
+        self.chk_auto.setToolTip("threshold-free: a pixel is a substance when its "
+                                 "strongest component is a substance (not the learned "
+                                 "blank). Unchecked = use the fraction threshold.")
+        self.chk_auto.toggled.connect(self._on_auto)
+        hitcol = QVBoxLayout(); hitcol.setSpacing(2)
+        _hl = QLabel("hit mode"); _hl.setObjectName("field")
+        hitcol.addWidget(_hl); hitcol.addWidget(self.chk_auto)
         self.thr = self._spin_col("min substance fraction", QDoubleSpinBox())
         sp = self.thr.itemAt(1).widget()
         sp.setDecimals(2); sp.setSingleStep(0.05); sp.setRange(0.01, 0.9); sp.setValue(0.15)
@@ -118,7 +126,7 @@ class RealDataPage(QWidget):
         ctl.addLayout(self.cmb_method)
         ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.cal_x)
-        ctl.addLayout(self.thr); ctl.addLayout(flipcol)
+        ctl.addLayout(hitcol); ctl.addLayout(self.thr); ctl.addLayout(flipcol)
         ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
@@ -291,6 +299,7 @@ class RealDataPage(QWidget):
             params = dict(data_dir=self.data_dir, test_path=self.test,
                           method=self._method(), baseline=cfg["baseline"],
                           trim=cfg["trim"], min_frac=self.thr_value(),
+                          hit_mode="auto" if self.chk_auto.isChecked() else "threshold",
                           calib_path=self.calib_path)
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
@@ -306,6 +315,9 @@ class RealDataPage(QWidget):
 
     def thr_value(self):
         return float(self.thr.itemAt(1).widget().value())
+
+    def _on_auto(self, checked):
+        self.thr.itemAt(1).widget().setEnabled(not checked)   # threshold unused in auto
 
     def _progress(self, msg):
         self.btn.setText("Unmixing…"); self.status.setText("● " + msg)
