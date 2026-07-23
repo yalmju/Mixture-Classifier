@@ -53,8 +53,51 @@ def _real_lab(cal, seed=0, n_validation=6):
             "K_true": None}
 
 
-def _run_quant(n_components=3, seed=0, cal=None):
+def _langmuir_fit(C, B):
+    """Fit B = gA·K·C/(1+K·C) to (C, B); returns (gA, K) with a safe fallback."""
+    from scipy.optimize import curve_fit
     from calibration import _langmuir_B
+    C = np.asarray(C, float); B = np.asarray(B, float)
+    try:
+        p0 = [max(B.max(), 1e-9), 1.0 / max(np.median(C), 1e-12)]
+        (gA, K), _ = curve_fit(lambda c, gA, K: _langmuir_B(c, gA, K), C, B,
+                               p0=p0, maxfev=10000, bounds=(0, np.inf))
+    except Exception:
+        gA, K = float(B.max()), 1.0 / max(float(np.median(C)), 1e-12)
+    return float(gA), float(K)
+
+
+def _peak_quant(cal, peak_wn, window=10.0):
+    """Calibration from a SINGLE marker band: B = baseline-removed intensity summed
+    over peak_wn ± window, Langmuir-fit per compound. Curve only (no competition)."""
+    from sers_mixture import als_baseline
+    from calibration import _langmuir_B
+    axis, names, dilutions = cal
+    m = (axis >= peak_wn - window) & (axis <= peak_wn + window)
+    if m.sum() < 1:
+        m = np.abs(axis - peak_wn).argmin() == np.arange(len(axis))
+    iso, r2, K_fit, gA_fit = [], [], [], []
+    for name, (C, specs) in zip(names, dilutions):
+        C = np.asarray(C, float); specs = np.asarray(specs, float)
+        bl = np.clip(np.stack([y - als_baseline(y) for y in specs]), 0.0, None)
+        B = bl[:, m].sum(axis=1)
+        gA, K = _langmuir_fit(C, B)
+        dense = np.geomspace(C.min(), C.max(), 60)
+        iso.append((C, B, dense, _langmuir_B(dense, gA, K)))
+        pred = _langmuir_B(C, gA, K); sst = float(np.sum((B - B.mean()) ** 2))
+        r2.append(1.0 - float(np.sum((B - pred) ** 2)) / sst if sst > 0 else 0.0)
+        K_fit.append(K); gA_fit.append(gA)
+    return {"names": names, "K_true": None, "K_fit": np.array(K_fit),
+            "gA_fit": np.array(gA_fit), "iso": iso, "r2": r2,
+            "parity": (np.array([]), np.array([]), np.array([], int)),
+            "log_err": float("nan"), "example": None, "example_true": None,
+            "selectivity": float("nan"), "peak_wn": peak_wn}
+
+
+def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0):
+    from calibration import _langmuir_B
+    if cal is not None and peak_wn and peak_wn > 0:
+        return _peak_quant(cal, peak_wn)
     lab = (_real_lab(cal, seed) if cal is not None
            else build_synthetic_lab(n_components=n_components, seed=seed))
     calib = calibrate(lab["dilutions"], lab["P"], lab["names"])
@@ -141,7 +184,12 @@ class QuantifyPage(QWidget):
         ctl = QHBoxLayout(); ctl.setSpacing(10)
         self.sp_k = self._spin(QSpinBox(), 2, 5, 3, "compounds")
         self.sp_seed = self._spin(QSpinBox(), 0, 999, 1, "seed")
-        for w in (self.sp_k, self.sp_seed):
+        self.sp_peak = self._spin(QSpinBox(), 0, 4000, 0, "peak cm⁻¹ (0=whole)")
+        self.sp_peak.itemAt(1).widget().setSingleStep(10)
+        self.sp_peak.itemAt(1).widget().setToolTip(
+            "0 = signal is the whole-fingerprint projection (robust). Set a "
+            "wavenumber to calibrate on that single marker band's intensity instead.")
+        for w in (self.sp_k, self.sp_seed, self.sp_peak):
             ctl.addLayout(w)
         self.src = QLabel("source: synthetic"); self.src.setObjectName("field")
         ctl.addWidget(self.src); ctl.addStretch(1)
@@ -292,7 +340,8 @@ class QuantifyPage(QWidget):
 
     def _run(self):
         params = dict(n_components=self.sp_k.itemAt(1).widget().value(),
-                      seed=self.sp_seed.itemAt(1).widget().value(), cal=self._cal)
+                      seed=self.sp_seed.itemAt(1).widget().value(), cal=self._cal,
+                      peak_wn=float(self.sp_peak.itemAt(1).widget().value()))
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self._thread = QThread(); self._worker = QuantWorker(params)
         self._worker.moveToThread(self._thread)
@@ -341,7 +390,9 @@ class QuantifyPage(QWidget):
             lab = nm if r2[i] is None else f"{nm}  (R²={r2[i]:.2f})"
             ax.plot(dc, db, color=col, lw=1.6, label=lab)
         ax.set_xscale("log"); ax.set_xlabel("concentration (M)")
-        ax.set_ylabel("signal  B  (mean ± SD)")
+        pk = res.get("peak_wn")
+        ax.set_ylabel(f"peak @ {pk:.0f} cm⁻¹  (mean ± SD)" if pk
+                      else "signal  B  (mean ± SD)")
         ax.legend(fontsize=8, framealpha=0.0, labelcolor=MUTE)
         self.c_iso.fig.tight_layout(); self.c_iso.draw_idle()
 
