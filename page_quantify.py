@@ -10,7 +10,7 @@ import numpy as np
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QSpinBox, QFileDialog,
+    QSpinBox, QCheckBox, QFileDialog,
 )
 
 from ui_common import *
@@ -67,17 +67,21 @@ def _langmuir_fit(C, B):
     return float(gA), float(K)
 
 
-def _peak_quant(cal, peak_wn, window=10.0):
-    """Calibration from a SINGLE marker band: B = baseline-removed intensity summed
-    over peak_wn ± window, Langmuir-fit per compound. Curve only (no competition)."""
+def _peak_quant(cal, peak, window=10.0):
+    """Calibration from a marker band: B = baseline-removed intensity summed over
+    peak ± window, Langmuir-fit per compound. ``peak`` is one wavenumber (same band
+    for every compound) or a {compound: wavenumber} map (each compound at its own
+    band). Curve only (no competition)."""
     from sers_mixture import als_baseline
     from calibration import _langmuir_B
     axis, names, dilutions = cal
-    m = (axis >= peak_wn - window) & (axis <= peak_wn + window)
-    if m.sum() < 1:
-        m = np.abs(axis - peak_wn).argmin() == np.arange(len(axis))
-    iso, r2, K_fit, gA_fit = [], [], [], []
+    iso, r2, K_fit, gA_fit, peaks_used = [], [], [], [], []
     for name, (C, specs) in zip(names, dilutions):
+        pk = peak.get(name) if isinstance(peak, dict) else peak
+        peaks_used.append(pk)
+        m = (axis >= pk - window) & (axis <= pk + window)
+        if m.sum() < 1:
+            m = np.abs(axis - pk).argmin() == np.arange(len(axis))
         C = np.asarray(C, float); specs = np.asarray(specs, float)
         bl = np.clip(np.stack([y - als_baseline(y) for y in specs]), 0.0, None)
         B = bl[:, m].sum(axis=1)
@@ -87,15 +91,19 @@ def _peak_quant(cal, peak_wn, window=10.0):
         pred = _langmuir_B(C, gA, K); sst = float(np.sum((B - B.mean()) ** 2))
         r2.append(1.0 - float(np.sum((B - pred) ** 2)) / sst if sst > 0 else 0.0)
         K_fit.append(K); gA_fit.append(gA)
+    per_cmpd = isinstance(peak, dict)
     return {"names": names, "K_true": None, "K_fit": np.array(K_fit),
             "gA_fit": np.array(gA_fit), "iso": iso, "r2": r2,
             "parity": (np.array([]), np.array([]), np.array([], int)),
             "log_err": float("nan"), "example": None, "example_true": None,
-            "selectivity": float("nan"), "peak_wn": peak_wn}
+            "selectivity": float("nan"),
+            "peak_wn": None if per_cmpd else peak, "peaks_used": peaks_used}
 
 
-def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0):
+def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None):
     from calibration import _langmuir_B
+    if cal is not None and peak_map:
+        return _peak_quant(cal, peak_map)
     if cal is not None and peak_wn and peak_wn > 0:
         return _peak_quant(cal, peak_wn)
     lab = (_real_lab(cal, seed) if cal is not None
@@ -191,6 +199,13 @@ class QuantifyPage(QWidget):
             "wavenumber to calibrate on that single marker band's intensity instead.")
         for w in (self.sp_k, self.sp_seed, self.sp_peak):
             ctl.addLayout(w)
+        acol = QVBoxLayout(); acol.setSpacing(2)
+        _al = QLabel("per-cmpd marker"); _al.setObjectName("field"); acol.addWidget(_al)
+        self.chk_autopeak = QCheckBox("auto peak")
+        self.chk_autopeak.setToolTip("calibrate each compound on ITS OWN marker band "
+                                     "(the wavenumber where it most exceeds the others) "
+                                     "— overrides the single peak box")
+        acol.addWidget(self.chk_autopeak); ctl.addLayout(acol)
         self.src = QLabel("source: synthetic"); self.src.setObjectName("field")
         ctl.addWidget(self.src); ctl.addStretch(1)
         fold_b = QPushButton("Load conc. folder…"); fold_b.setObjectName("ghost")
@@ -305,6 +320,31 @@ class QuantifyPage(QWidget):
         idx = np.where(band)[0][int(np.argmax(bl[band]))]
         return float(self._axis[idx])
 
+    def _marker_peaks(self):
+        """Per-compound discriminative band: for each loaded compound, the wavenumber
+        where its (top-concentration, baseline-removed) spectrum most exceeds every
+        other loaded compound — its VIP-style marker band. {compound: wavenumber}."""
+        if self._cal is None or len(self._acc) < 1:
+            return None
+        from sers_mixture import als_baseline
+        axis, names, dils = self._cal
+        means = []
+        for C, specs in dils:
+            C = np.asarray(C, float); specs = np.asarray(specs, float)
+            top = specs[C == C.max()].mean(axis=0)
+            means.append(np.clip(top - als_baseline(top), 0.0, None))
+        means = np.array(means)
+        band = (axis >= 400) & (axis <= 1800)
+        if band.sum() < 5:
+            band = np.ones(len(axis), bool)
+        peaks = {}
+        for i, nm in enumerate(names):
+            others = np.delete(means, i, axis=0)
+            score = means[i] - (others.max(axis=0) if len(others) else 0.0)
+            score = np.where(band, score, -np.inf)
+            peaks[nm] = float(axis[int(np.argmax(score))])
+        return peaks
+
     def _rebuild_cal(self):
         names = list(self._acc)
         dilutions = [self._acc[n] for n in names]
@@ -361,9 +401,11 @@ class QuantifyPage(QWidget):
         self.src.setStyleSheet("")
 
     def _run(self):
+        peak_map = self._marker_peaks() if self.chk_autopeak.isChecked() else None
         params = dict(n_components=self.sp_k.itemAt(1).widget().value(),
                       seed=self.sp_seed.itemAt(1).widget().value(), cal=self._cal,
-                      peak_wn=float(self.sp_peak.itemAt(1).widget().value()))
+                      peak_wn=float(self.sp_peak.itemAt(1).widget().value()),
+                      peak_map=peak_map)
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self._thread = QThread(); self._worker = QuantWorker(params)
         self._worker.moveToThread(self._thread)
@@ -394,6 +436,7 @@ class QuantifyPage(QWidget):
     def _plot_iso(self, res):
         ax = self.c_iso.new_ax()
         r2 = res.get("r2", [None] * len(res["names"]))
+        pks = res.get("peaks_used")
         for i, nm in enumerate(res["names"]):
             C, B, dc, db = res["iso"][i]
             col = SERIES[i % len(SERIES)]
@@ -410,11 +453,14 @@ class QuantifyPage(QWidget):
                 ax.scatter(C, B, s=26, color=col, zorder=3,
                            edgecolors="white", linewidths=0.5)
             lab = nm if r2[i] is None else f"{nm}  (R²={r2[i]:.2f})"
+            if pks is not None and i < len(pks) and pks[i]:
+                lab += f"  @{pks[i]:.0f}"                   # per-compound marker band
             ax.plot(dc, db, color=col, lw=1.6, label=lab)
         ax.set_xscale("log"); ax.set_xlabel("concentration (M)")
         pk = res.get("peak_wn")
         ax.set_ylabel(f"peak @ {pk:.0f} cm⁻¹  (mean ± SD)" if pk
-                      else "signal  B  (mean ± SD)")
+                      else ("marker-peak intensity (mean ± SD)" if pks
+                            else "signal  B  (mean ± SD)"))
         ax.legend(fontsize=8, framealpha=0.0, labelcolor=MUTE)
         self.c_iso.fig.tight_layout(); self.c_iso.draw_idle()
 
