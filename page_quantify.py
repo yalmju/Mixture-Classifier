@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui_common import *
-from calibration import build_synthetic_lab, calibrate, quantify
+from calibration import calibrate, quantify
 from io_utils import load_calibration_csv, load_calibration_folder, write_csv
 
 
@@ -161,10 +161,10 @@ def _lod_from_blank(C, B, blank_vals):
 
 
 def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=None):
-    """Calibration from a marker band: B = baseline-removed intensity summed over
-    peak ± window, Langmuir-fit per compound. ``peak`` is one wavenumber (same band
-    for every compound) or a {compound: wavenumber} map (each compound at its own
-    band). Curve only (no competition)."""
+    """Calibration from a marker band: B = baseline-removed PEAK HEIGHT (max within
+    peak ± window), Langmuir- or linear-fit per compound. ``peak`` is one wavenumber
+    (same band for every compound) or a {compound: wavenumber} map (each compound at
+    its own band). Curve only (no competition)."""
     from calibration import _langmuir_B
     axis, names, dilutions = cal
     blk = (_prep_specs(blank[1], baseline)                  # aligned BLK spectra, or None
@@ -207,15 +207,16 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
             "peak_wn": None if per_cmpd else peak, "peaks_used": peaks_used}
 
 
-def _run_quant(n_components=3, seed=0, cal=None, peak_wn=0.0, peak_map=None,
+def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
                model="langmuir", baseline=True, blank=None):
     from calibration import _langmuir_B
-    if cal is not None and peak_map:
+    if cal is None:
+        raise ValueError("load a calibration (a dilution-series folder or CSV) first.")
+    if peak_map:
         return _peak_quant(cal, peak_map, model=model, baseline=baseline, blank=blank)
-    if cal is not None and peak_wn and peak_wn > 0:
+    if peak_wn and peak_wn > 0:
         return _peak_quant(cal, peak_wn, model=model, baseline=baseline, blank=blank)
-    lab = (_real_lab(cal, seed, baseline=baseline) if cal is not None
-           else build_synthetic_lab(n_components=n_components, seed=seed))
+    lab = _real_lab(cal, baseline=baseline)
     calib = calibrate(lab["dilutions"], lab["P"], lab["names"])
 
     # blank projected onto the same templates (whole-spectrum B), for blank-based LOD
@@ -391,15 +392,12 @@ class QuantifyPage(QWidget):
         root.addLayout(head)
 
         ctl = QHBoxLayout(); ctl.setSpacing(10)
-        self.sp_k = self._spin(QSpinBox(), 2, 5, 3, "compounds")
-        self.sp_seed = self._spin(QSpinBox(), 0, 999, 1, "seed")
         self.sp_peak = self._spin(QSpinBox(), 0, 4000, 0, "peak cm⁻¹ (0=whole)")
         self.sp_peak.itemAt(1).widget().setSingleStep(10)
         self.sp_peak.itemAt(1).widget().setToolTip(
             "0 = signal is the whole-fingerprint projection (robust). Set a "
             "wavenumber to calibrate on that single marker band's intensity instead.")
-        for w in (self.sp_k, self.sp_seed, self.sp_peak):
-            ctl.addLayout(w)
+        ctl.addLayout(self.sp_peak)
         acol = QVBoxLayout(); acol.setSpacing(2)
         _al = QLabel("per-cmpd marker"); _al.setObjectName("field"); acol.addWidget(_al)
         self.chk_autopeak = QCheckBox("auto peak")
@@ -422,7 +420,7 @@ class QuantifyPage(QWidget):
                                       "the app's internal ALS baseline so it isn't "
                                       "applied twice")
         bcol.addWidget(self.chk_baselined); ctl.addLayout(bcol)
-        self.src = QLabel("source: synthetic"); self.src.setObjectName("field")
+        self.src = QLabel("no calibration loaded"); self.src.setObjectName("field")
         ctl.addWidget(self.src); ctl.addStretch(1)
         fold_b = QPushButton("Load conc. folder…"); fold_b.setObjectName("ghost")
         fold_b.clicked.connect(self._load_cal_folder)
@@ -681,7 +679,7 @@ class QuantifyPage(QWidget):
 
     def _clear_cal(self):
         self._cal = None; self._acc = {}; self._axis = None
-        self.src.setText("source: synthetic"); self.src.setStyleSheet("")
+        self.src.setText("no calibration loaded"); self.src.setStyleSheet("")
 
     def set_data_dir(self, path):
         self.data_dir = path       # so LOD can use the Samples BLK class as the blank
@@ -787,8 +785,7 @@ class QuantifyPage(QWidget):
         peak_map = self._peaks_from_text()
         if peak_map is None and self.chk_autopeak.isChecked():
             peak_map = self._marker_peaks()
-        params = dict(n_components=self.sp_k.itemAt(1).widget().value(),
-                      seed=self.sp_seed.itemAt(1).widget().value(), cal=self._cal,
+        params = dict(cal=self._cal,
                       peak_wn=float(self.sp_peak.itemAt(1).widget().value()),
                       peak_map=peak_map,
                       model="linear" if self.chk_linear.isChecked() else "langmuir",
