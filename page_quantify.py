@@ -398,14 +398,6 @@ class QuantifyPage(QWidget):
             "0 = signal is the whole-fingerprint projection (robust). Set a "
             "wavenumber to calibrate on that single marker band's intensity instead.")
         ctl.addLayout(self.sp_peak)
-        acol = QVBoxLayout(); acol.setSpacing(2)
-        _al = QLabel("per-cmpd marker"); _al.setObjectName("field"); acol.addWidget(_al)
-        self.chk_autopeak = QCheckBox("auto peak")
-        self.chk_autopeak.setToolTip("calibrate each compound on ITS OWN marker band "
-                                     "(the wavenumber where it most exceeds the others) "
-                                     "— fills the per-compound peaks box, which you can edit")
-        self.chk_autopeak.toggled.connect(self._on_autopeak)
-        acol.addWidget(self.chk_autopeak); ctl.addLayout(acol)
         lcol = QVBoxLayout(); lcol.setSpacing(2)
         _ll = QLabel("fit"); _ll.setObjectName("field"); lcol.addWidget(_ll)
         self.chk_linear = QCheckBox("linear")
@@ -447,6 +439,11 @@ class QuantifyPage(QWidget):
         self.peaks_txt.setToolTip("one band per compound as name:wavenumber, "
                                   "comma-separated. Overrides the single peak box. "
                                   "'auto peak' fills this in for you to correct.")
+        vip_b = QPushButton("VIP bands"); vip_b.setObjectName("ghost")
+        vip_b.setToolTip("recommend each compound's least-cross-talk discriminative "
+                         "band (VIP-style: the real peak where it most exceeds every "
+                         "other loaded compound) — the clean marker for quantification")
+        vip_b.clicked.connect(self._auto_vip)
         best_b = QPushButton("Best R² band"); best_b.setObjectName("ghost")
         best_b.setToolTip("for each compound, scan its real peaks and pick the band "
                           "whose calibration fits best (highest R²) — fixes a compound "
@@ -457,7 +454,7 @@ class QuantifyPage(QWidget):
                           "compound's peak instead of typing it")
         pick_b.clicked.connect(self._pick_peaks)
         ctl2.addWidget(pl); ctl2.addWidget(self.peaks_txt, 1)
-        ctl2.addWidget(best_b); ctl2.addWidget(pick_b)
+        ctl2.addWidget(vip_b); ctl2.addWidget(best_b); ctl2.addWidget(pick_b)
         root.addLayout(ctl2)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
@@ -556,30 +553,54 @@ class QuantifyPage(QWidget):
         idx = np.where(band)[0][int(np.argmax(bl[band]))]
         return float(self._axis[idx])
 
-    def _marker_peaks(self):
-        """Per-compound discriminative band: for each loaded compound, the wavenumber
-        where its (top-concentration, baseline-removed) spectrum most exceeds every
-        other loaded compound — its VIP-style marker band. {compound: wavenumber}."""
+    def _vip_peaks(self):
+        """Per-compound VIP-style marker band: among the compound's REAL peaks, the one
+        where its (top-conc, baseline-removed, L2-normalised) spectrum most exceeds every
+        OTHER loaded compound — the least-cross-talk discriminative band. L2-normalising
+        first removes the response-factor bias so a strong emitter (e.g. Thiram) doesn't
+        win every band. Returns ({name: wavenumber}, {name: purity 0..1})."""
         if self._cal is None:
-            return None
-        from sers_mixture import als_baseline
+            return None, None
+        from scipy.signal import find_peaks
         axis, names, dils = self._cal
-        means = []
-        for C, specs in dils:
-            C = np.asarray(C, float); specs = np.asarray(specs, float)
-            top = specs[C == C.max()].mean(axis=0)
-            means.append(np.clip(top - als_baseline(top), 0.0, None))
-        means = np.array(means)
+        baseline = not self.chk_baselined.isChecked()
         band = (axis >= 400) & (axis <= 1800)
         if band.sum() < 5:
             band = np.ones(len(axis), bool)
-        peaks = {}
+        means = []
+        for C, specs in dils:
+            C = np.asarray(C, float)
+            top = _prep_specs(specs, baseline)[C == C.max()].mean(axis=0)
+            means.append(top / (np.linalg.norm(top) + 1e-12))     # shape, not magnitude
+        means = np.array(means)
+        peaks, purity = {}, {}
         for i, nm in enumerate(names):
             others = np.delete(means, i, axis=0)
-            score = means[i] - (others.max(axis=0) if len(others) else 0.0)
-            score = np.where(band, score, -np.inf)
-            peaks[nm] = float(axis[int(np.argmax(score))])
-        return peaks
+            omax = others.max(axis=0) if len(others) else np.zeros(means.shape[1])
+            score = means[i] - omax                               # one-vs-rest separation
+            idx, _ = find_peaks(means[i], prominence=(means[i].max() or 1.0) * 0.05)
+            idx = [j for j in idx if band[j]]
+            if not idx:
+                idx = [int(np.argmax(np.where(band, score, -np.inf)))]
+            best = max(idx, key=lambda j: score[j])
+            peaks[nm] = float(axis[best])
+            purity[nm] = float(np.clip(score[best] / (means[i][best] + 1e-12), 0.0, 1.0))
+        return peaks, purity
+
+    def _marker_peaks(self):
+        return self._vip_peaks()[0] if self._cal is not None else None
+
+    def _auto_vip(self):
+        """Fill the peaks box with the VIP-recommended (least cross-talk) marker band per
+        compound and report each band with how 'clean' it is (others' share)."""
+        peaks, purity = self._vip_peaks()
+        if not peaks:
+            self.src.setText("load a calibration first"); self.src.setStyleSheet(f"color:{RED};")
+            return
+        self.peaks_txt.setText(", ".join(f"{n}:{v:.0f}" for n, v in peaks.items()))
+        note = "  ·  ".join(f"{n} {v:.0f} ({purity[n] * 100:.0f}% clean)"
+                            for n, v in peaks.items())
+        self.src.setText("VIP marker bands → " + note); self.src.setStyleSheet("")
 
     def _best_r2_peaks(self, window=10.0):
         """Per compound, the band whose CALIBRATION FITS BEST — scan the compound's
@@ -627,17 +648,6 @@ class QuantifyPage(QWidget):
         note = "  ·  ".join(f"{n} {v:.0f} (R²={r2s[n]:.2f})" for n, v in peaks.items())
         self.src.setText("best-R² bands → " + note); self.src.setStyleSheet("")
 
-    def _on_autopeak(self, checked):
-        """Fill the editable per-compound peaks box from the auto marker bands, so the
-        user sees them and can correct any that landed on the wrong band."""
-        if not checked:
-            return
-        peaks = self._marker_peaks()
-        if not peaks:
-            self.src.setText("load a calibration first to auto-fill peaks")
-            self.src.setStyleSheet(f"color:{RED};")
-            self.chk_autopeak.setChecked(False); return
-        self.peaks_txt.setText(", ".join(f"{n}:{v:.0f}" for n, v in peaks.items()))
 
     def _pick_peaks(self):
         """Open the peak-picker on the learned calibration spectra; the chosen bands
@@ -781,10 +791,8 @@ class QuantifyPage(QWidget):
         self.src.setStyleSheet("")
 
     def _run(self):
-        # priority: an edited/auto per-compound peaks box wins over the single peak
+        # the per-compound peaks box (filled by VIP / Best R² / Pick) drives the fit
         peak_map = self._peaks_from_text()
-        if peak_map is None and self.chk_autopeak.isChecked():
-            peak_map = self._marker_peaks()
         params = dict(cal=self._cal,
                       peak_wn=float(self.sp_peak.itemAt(1).widget().value()),
                       peak_map=peak_map,
