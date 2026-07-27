@@ -187,17 +187,27 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
     blk = (_prep_specs(blank[1], baseline)                  # aligned BLK spectra, or None
            if blank is not None and len(blank[0]) == len(axis) else None)
     lod_method = "blank" if blk is not None else "residual"
+    def _band_masks(pk):
+        """List of boolean masks, one per band (pk is a scalar or list of wavenumbers)."""
+        bands = pk if isinstance(pk, (list, tuple)) else [pk]
+        ms = []
+        for b in bands:
+            m = (axis >= b - window) & (axis <= b + window)
+            if m.sum() < 1:
+                m = np.abs(axis - b).argmin() == np.arange(len(axis))
+            ms.append(m)
+        return bands, ms
+
     iso, r2, K_fit, gA_fit, peaks_used, lods, loqs, lods_e = [], [], [], [], [], [], [], []
     for name, (C, specs) in zip(names, dilutions):
         pk = peak.get(name) if isinstance(peak, dict) else peak
-        peaks_used.append(pk)
-        m = (axis >= pk - window) & (axis <= pk + window)
-        if m.sum() < 1:
-            m = np.abs(axis - pk).argmin() == np.arange(len(axis))
+        bands, masks = _band_masks(pk)
+        peaks_used.append("+".join(f"{b:.0f}" for b in bands))
         C = np.asarray(C, float)
         bl = _prep_specs(specs, baseline)
-        B = bl[:, m].max(axis=1)                        # peak HEIGHT (matches the
-        #  measured intensity), not the integrated band area
+        # signal = SUM of peak HEIGHTS over the compound's bands (THI 1 band; a
+        # compound with overlap-prone bands can use two, e.g. DQ 1177+1566)
+        B = sum(bl[:, m].max(axis=1) for m in masks)
         dense = np.geomspace(C.min(), C.max(), 200)
         if model == "linear":
             slope, b0 = _linear_fit(C, B)
@@ -209,8 +219,8 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
             iso.append((C, B, dense, _langmuir_B(dense, gA, K)))
             r2.append(_r2_on_means(C, B, gA, K))
             K_fit.append(K); gA_fit.append(gA)
-        bv = blk[:, m].max(axis=1) if blk is not None else None
-        if bv is not None:                             # blank-based on the same band
+        bv = sum(blk[:, m].max(axis=1) for m in masks) if blk is not None else None
+        if bv is not None:                             # blank-based on the same band(s)
             lod, loq = _lod_from_blank(C, B, bv)
         else:
             lod, loq = _lod_loq(C, B)
@@ -574,8 +584,8 @@ class QuantifyPage(QWidget):
         idx = np.where(band)[0][int(np.argmax(bl[band]))]
         return float(self._axis[idx])
 
-    def _vip_peaks(self):
-        """Per-compound VIP-style marker band: among the compound's REAL peaks, the one
+    def _vip_peaks(self, k=2, min_purity=0.5):
+        """Per-compound VIP-style marker band(s): among the compound's REAL peaks, the
         where its (top-conc, baseline-removed, L2-normalised) spectrum most exceeds every
         OTHER loaded compound — the least-cross-talk discriminative band. L2-normalising
         first removes the response-factor bias so a strong emitter (e.g. Thiram) doesn't
@@ -603,25 +613,36 @@ class QuantifyPage(QWidget):
             idx = [j for j in idx if band[j]]
             if not idx:
                 idx = [int(np.argmax(np.where(band, score, -np.inf)))]
-            best = max(idx, key=lambda j: score[j])
-            peaks[nm] = float(axis[best])
-            purity[nm] = float(np.clip(score[best] / (means[i][best] + 1e-12), 0.0, 1.0))
+            ordered = sorted(idx, key=lambda j: score[j], reverse=True)
+            chosen = []
+            for j in ordered:                                     # up to k CLEAN bands
+                pur = float(np.clip(score[j] / (means[i][j] + 1e-12), 0.0, 1.0))
+                if not chosen or (pur >= min_purity and len(chosen) < k):
+                    chosen.append((float(axis[j]), pur))
+                if len(chosen) >= k:
+                    break
+            peaks[nm] = [c[0] for c in chosen]; purity[nm] = [c[1] for c in chosen]
         return peaks, purity
 
     def _marker_peaks(self):
-        return self._vip_peaks()[0] if self._cal is not None else None
+        if self._cal is None:
+            return None
+        return {n: v[0] for n, v in self._vip_peaks()[0].items()}   # primary band only
 
     def _auto_vip(self):
-        """Fill the peaks box with the VIP-recommended (least cross-talk) marker band per
-        compound and report each band with how 'clean' it is (others' share)."""
+        """Fill the peaks box with the VIP-recommended marker BAND(S) per compound —
+        one band for a cleanly-unique compound, up to two (joined by '+') for one whose
+        bands overlap others — and report each band's purity."""
         peaks, purity = self._vip_peaks()
         if not peaks:
             self.src.setText("load a calibration first"); self.src.setStyleSheet(f"color:{RED};")
             return
-        self.peaks_txt.setText(", ".join(f"{n}:{v:.0f}" for n, v in peaks.items()))
-        note = "  ·  ".join(f"{n} {v:.0f} ({purity[n] * 100:.0f}% clean)"
-                            for n, v in peaks.items())
-        self.src.setText("VIP marker bands → " + note); self.src.setStyleSheet("")
+        self.peaks_txt.setText(", ".join(
+            f"{n}:{'+'.join(f'{b:.0f}' for b in bands)}" for n, bands in peaks.items()))
+        note = "  ·  ".join(
+            f"{n} " + "+".join(f"{b:.0f}({p*100:.0f}%)" for b, p in zip(peaks[n], purity[n]))
+            for n in peaks)
+        self.src.setText("VIP bands → " + note); self.src.setStyleSheet("")
 
     def _best_r2_peaks(self, window=10.0):
         """Per compound, the band whose CALIBRATION FITS BEST — scan the compound's
@@ -677,6 +698,9 @@ class QuantifyPage(QWidget):
             self.src.setText("load a calibration first, then pick peaks")
             self.src.setStyleSheet(f"color:{RED};"); return
         initial = self._peaks_from_text() or self._marker_peaks()
+        if initial:                                        # dialog picks one band/compound
+            initial = {k: (v[0] if isinstance(v, (list, tuple)) else v)
+                       for k, v in initial.items()}
         dlg = PeakPickerDialog(self._cal, initial=initial,
                                baseline=not self.chk_baselined.isChecked(), parent=self)
         if dlg.exec():
@@ -684,8 +708,9 @@ class QuantifyPage(QWidget):
             self.peaks_txt.setText(", ".join(f"{n}:{v:.0f}" for n, v in peaks.items()))
 
     def _peaks_from_text(self):
-        """Parse the per-compound peaks box → {name: wavenumber}. Only names that are
-        actually in the loaded calibration are kept; empty/blank → None."""
+        """Parse the per-compound peaks box → {name: [wavenumbers]}. A compound may
+        list several bands joined by '+' (e.g. DQ:1177+1566) — the signal is summed
+        over them. Only names in the loaded calibration are kept; empty → None."""
         txt = self.peaks_txt.text().strip()
         if not txt:
             return None
@@ -695,12 +720,14 @@ class QuantifyPage(QWidget):
             if ":" not in tok:
                 continue
             k, v = tok.split(":", 1); k = k.strip()
-            try:
-                wn = float(v)
-            except ValueError:
-                continue
-            if valid is None or k in valid:
-                out[k] = wn
+            bands = []
+            for p in v.split("+"):
+                try:
+                    bands.append(float(p))
+                except ValueError:
+                    pass
+            if bands and (valid is None or k in valid):
+                out[k] = bands
         return out or None
 
     def _rebuild_cal(self):
@@ -875,7 +902,7 @@ class QuantifyPage(QWidget):
                            edgecolors="white", linewidths=0.5)
             lab = nm if r2[i] is None else f"{nm}  (R²={r2[i]:.2f})"
             if pks is not None and i < len(pks) and pks[i]:
-                lab += f"  @{pks[i]:.0f}"                   # per-compound marker band
+                lab += f"  @{pks[i]}"                       # per-compound marker band(s)
             if lod is not None and i < len(lod) and np.isfinite(lod[i]):
                 lab += f"  LOD {_fmt_conc(lod[i])}"
                 ax.axvline(lod[i], color=col, ls=":", lw=1.0, alpha=0.45, zorder=1)
