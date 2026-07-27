@@ -134,6 +134,16 @@ class RealDataPage(QWidget):
         relrow = QHBoxLayout(); relrow.setSpacing(4)
         relrow.addWidget(self.chk_rel); relrow.addWidget(self.rel_thr)
         relcol.addWidget(_rl); relcol.addLayout(relrow)
+        self.pres_thr = QDoubleSpinBox(); self.pres_thr.setDecimals(2)
+        self.pres_thr.setSingleStep(0.01); self.pres_thr.setRange(0.0, 0.5)
+        self.pres_thr.setValue(0.05)
+        self.pres_thr.setToolTip("a substance present at less than this overall fraction "
+                                 "is treated as ABSENT (a spectral-leakage phantom) and "
+                                 "removed from the composition — set 0 to keep all")
+        self.pres_thr.valueChanged.connect(lambda _=0: self._on_corr())
+        prescol = QVBoxLayout(); prescol.setSpacing(2)
+        _pl = QLabel("min substance %"); _pl.setObjectName("field")
+        prescol.addWidget(_pl); prescol.addWidget(self.pres_thr)
         corr_b = QPushButton("Load correction…"); corr_b.setObjectName("ghost")
         corr_b.setToolTip("response_factors.csv from the Validate tab → convert the "
                           "surface ratio to the solution ratio")
@@ -156,7 +166,7 @@ class RealDataPage(QWidget):
         ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.cal_x)
         ctl.addLayout(hitcol); ctl.addLayout(self.thr); ctl.addLayout(flipcol)
-        ctl.addLayout(relcol)
+        ctl.addLayout(relcol); ctl.addLayout(prescol)
         ctl.addWidget(corr_b); ctl.addLayout(corrcol)
         ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
@@ -427,15 +437,31 @@ class RealDataPage(QWidget):
             return None
         return np.array([self.rf.get(r.comps[j], 1.0) for j in r.nonbg], float)
 
+    def _present_mask(self, r):
+        """Which substances are really present: those whose RAW overall fraction (over
+        reliable hit pixels) is at least 'min substance %'. Substances below it are
+        spectral-leakage phantoms (e.g. a trace TBZ when only DQ+THI were loaded) and
+        get dropped from the composition. Always keeps at least the strongest."""
+        thr = float(self.pres_thr.value())
+        hit = self._hit(r)
+        raw = r.ratio_nb[hit].mean(axis=0) if hit.any() else r.ratio_nb.mean(axis=0)
+        keep = raw >= thr
+        if not keep.any():
+            keep = raw == raw.max()
+        return keep
+
     def _ratio_nb(self, r):
-        """Per-pixel non-bg composition — corrected to the solution ratio when the
-        response-factor correction is active, otherwise the raw surface ratio."""
+        """Per-pixel non-bg composition — response-corrected to the solution ratio when
+        that toggle is on (else raw surface), with leakage-phantom substances (below
+        'min substance %') dropped and the rest renormalised."""
         rf = self._rf_vec(r)
         if rf is None:
-            return r.ratio_nb
-        Anb = r.A[:, r.nonbg] / np.where(rf > 0, rf, 1.0)
-        s = Anb.sum(axis=1, keepdims=True)
-        return np.divide(Anb, s, out=np.zeros_like(Anb), where=s > 0)
+            rn = r.ratio_nb.astype(float).copy()
+        else:
+            rn = r.A[:, r.nonbg] / np.where(rf > 0, rf, 1.0)
+        rn = rn * self._present_mask(r)                    # drop phantom substances
+        s = rn.sum(axis=1, keepdims=True)
+        return np.divide(rn, s, out=np.zeros_like(rn), where=s > 0)
 
     def _reliable(self, r):
         """Pixels trustworthy enough to compose — reconstruction R² above the threshold.
