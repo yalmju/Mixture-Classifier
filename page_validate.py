@@ -20,7 +20,7 @@ from ui_common import *
 from real_data import PEST_DEFAULT
 from dataset import load_preprocess
 from io_utils import write_csv
-from validate import validate_mixtures, parse_mixture_label
+from validate import validate_mixtures, parse_mixture_label, parse_amount
 
 
 class ValidateWorker(QObject):
@@ -46,6 +46,7 @@ class ValidatePage(QWidget):
         self._res = None
         self._files = []                 # full paths, aligned with table rows
         self.data_dir = PEST_DEFAULT
+        self.calib_path = None           # dilution-series CSV → recovery (measured µM)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(12)
 
@@ -66,11 +67,17 @@ class ValidatePage(QWidget):
         add_b = QPushButton("Add mixtures…"); add_b.setObjectName("ghost")
         add_b.setToolTip("load one or more known-ratio mixture maps")
         add_b.clicked.connect(self._add)
+        cal_b = QPushButton("Load calibration…"); cal_b.setObjectName("ghost")
+        cal_b.setToolTip("dilution-series CSV (calibration_spectra.csv). Enables RECOVERY "
+                         "when you enter true concentrations (e.g. DQ:100uM) in the table")
+        cal_b.clicked.connect(self._browse_calib)
+        self.cal_lbl = QLabel("no calib (ratio only)"); self.cal_lbl.setObjectName("field")
         clr_b = QPushButton("Clear"); clr_b.setObjectName("ghost"); clr_b.clicked.connect(self._clear)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost"); exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Validate"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(self.ref_lbl); ctl.addStretch(1)
+        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl)
         ctl.addWidget(add_b); ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
@@ -170,6 +177,15 @@ class ValidatePage(QWidget):
         self.status.setText(f"{len(self._files)} mixtures — edit any true ratio, then Validate")
         self.status.setStyleSheet(f"color:{MUTE};")
 
+    def _browse_calib(self):
+        p, _ = QFileDialog.getOpenFileName(
+            self, "Calibration spectra CSV (compound, concentration_M, wavenumbers…)",
+            "", "CSV (*.csv)")
+        if not p:
+            return
+        self.calib_path = p
+        self.cal_lbl.setText("calib: " + os.path.basename(p)); self.cal_lbl.setStyleSheet("")
+
     def _base(self):
         return self._parse_true(self.base_txt.text()) or None
 
@@ -196,19 +212,35 @@ class ValidatePage(QWidget):
             if ":" not in tok:
                 continue
             k, v = tok.split(":", 1)
-            try:
-                out[k.strip()] = float(v)
-            except ValueError:
-                pass
+            val, _ = parse_amount(v)
+            if val is not None:
+                out[k.strip()] = val
         return out
 
     def _items(self):
+        """Build (path, ratio_dict, true_conc_or_None). Values with units (100uM, 1e-4M)
+        give absolute concentrations → recovery; bare numbers are ratios only."""
         items = []
         for row in range(self.table.rowCount()):
             cell = self.table.item(row, 1)
-            true = self._parse_true(cell.text()) if cell else {}
-            if len(true) >= 2:
-                items.append((self._files[row], true))
+            if not cell:
+                continue
+            ratio, conc, all_abs = {}, {}, True
+            for tok in cell.text().replace(";", ",").split(","):
+                if ":" not in tok:
+                    continue
+                k, v = tok.split(":", 1); k = k.strip()
+                val, is_abs = parse_amount(v)
+                if val is None:
+                    continue
+                ratio[k] = val
+                if is_abs:
+                    conc[k] = val
+                else:
+                    all_abs = False
+            if len(ratio) >= 2:
+                tc = conc if (all_abs and len(conc) == len(ratio)) else None
+                items.append((self._files[row], ratio, tc))
         return items
 
     # ---- run ----
@@ -219,7 +251,8 @@ class ValidatePage(QWidget):
             self.status.setStyleSheet(f"color:{RED};"); return
         cfg = load_preprocess(self.data_dir)
         params = dict(data_dir=self.data_dir, items=items, method="nnls",
-                      baseline=cfg["baseline"], trim=cfg["trim"])
+                      baseline=cfg["baseline"], trim=cfg["trim"],
+                      calib_path=self.calib_path)
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
         self._thread = QThread(); self._worker = ValidateWorker(params)
@@ -255,8 +288,21 @@ class ValidatePage(QWidget):
         txt = (f"<b>response factors</b> (anchor {res.ref}): {rf}<br>"
                f"<b>{dom}</b> is over-reported on the surface by "
                f"{res.response[dom]:.1f}× — that is why it tends to dominate every map. "
-               f"Mean ratio error drops {e0:.0%} → {e1:.0%} after correction. "
-               "Export to apply the correction in Real data.")
+               f"Mean ratio error drops {e0:.0%} → {e1:.0%} after correction.")
+        if getattr(res, "calibrated", False) and res.mean_recovery:
+            rec = "  ·  ".join(f"{n} {res.mean_recovery[n]:.0f}%" for n in names
+                               if np.isfinite(res.mean_recovery.get(n, float('nan'))))
+            if rec:
+                good = all(80 <= res.mean_recovery[n] <= 120 for n in names
+                           if np.isfinite(res.mean_recovery.get(n, float('nan'))))
+                col = TEAL if good else CORAL
+                txt += (f"<br><b style='color:{col}'>recovery</b> (measured / true "
+                        f"concentration): {rec}"
+                        + ("  ✓ within 80–120%" if good
+                           else "  ⚠ off 80–120% — calibration/competition needs work"))
+        else:
+            txt += ("<br><span style='color:%s'>load a calibration + enter true "
+                    "concentrations (e.g. DQ:100uM) to get recovery %%.</span>" % FAINT)
         self.readout.setText(txt)
 
     @staticmethod
@@ -317,14 +363,24 @@ class ValidatePage(QWidget):
         write_csv(os.path.join(d, "response_factors.csv"),
                   ["substance", "response_factor", "anchor"],
                   [[n, f"{res.response[n]:.5f}", res.ref] for n in res.names])
+        cal = getattr(res, "calibrated", False)
         head = ["mixture"] + [f"true_{n}" for n in res.names] \
-            + [f"obs_{n}" for n in res.names] + [f"corr_{n}" for n in res.names]
+            + [f"obs_{n}" for n in res.names] + [f"corr_{n}" for n in res.names] \
+            + ([f"trueM_{n}" for n in res.names] + [f"measM_{n}" for n in res.names]
+               + [f"recovery%_{n}" for n in res.names] if cal else [])
         rows = []
-        for r, corr in zip(res.rows, res.corrected):
-            rows.append([os.path.basename(r["path"])]
-                        + [f"{r['true'].get(n, 0):.4f}" for n in res.names]
-                        + [f"{r['obs'].get(n, 0):.4f}" for n in res.names]
-                        + [f"{corr[n]:.4f}" for n in res.names])
+        rec_list = res.recovery or [{}] * len(res.rows)
+        for r, corr, rec in zip(res.rows, res.corrected, rec_list):
+            row = [os.path.basename(r["path"])] \
+                + [f"{r['true'].get(n, 0):.4f}" for n in res.names] \
+                + [f"{r['obs'].get(n, 0):.4f}" for n in res.names] \
+                + [f"{corr[n]:.4f}" for n in res.names]
+            if cal:
+                tc = r.get("true_conc") or {}; me = r.get("meas") or {}
+                row += [f"{tc.get(n, ''):.4e}" if tc.get(n) else "" for n in res.names] \
+                    + [f"{me.get(n, ''):.4e}" if me.get(n) is not None else "" for n in res.names] \
+                    + [f"{rec.get(n, ''):.1f}" if rec.get(n) is not None else "" for n in res.names]
+            rows.append(row)
         write_csv(os.path.join(d, "validation_table.csv"), head, rows)
         n = _save_figs([("validate_parity", self.c_parity),
                         ("validate_corrected", self.c_corr),

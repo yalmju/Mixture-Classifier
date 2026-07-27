@@ -26,10 +26,27 @@ from unmix import unmix_map
 @dataclass
 class ValidateResult:
     names: list                    # non-background substances (columns)
-    rows: list                     # per mixture: {path, label, true(dict), obs(dict)}
+    rows: list                     # per mixture: {path, true, obs, true_conc, meas}
     response: dict                 # name -> response factor (min normalised to 1)
     corrected: list                # per mixture: corrected (solution) fractions dict
     ref: str = ""                  # substance the factors are anchored to (r≈1)
+    recovery: list = None          # per mixture: {name: recovery %} (needs calib + true M)
+    mean_recovery: dict = None     # name -> mean recovery % over mixtures
+    calibrated: bool = False       # True if concentrations were quantified
+
+
+def parse_amount(s):
+    """Parse a true-value token → (value, is_absolute). '100uM' → (1e-4, True),
+    '1e-4M' → (1e-4, True), '10nM' → (1e-8, True); a bare number '1'/'3' → (n, False)
+    (a relative ratio, no absolute concentration)."""
+    import re
+    t = str(s).strip().lower().replace("µ", "u")
+    m = re.match(r"^([0-9.eE+\-]+)\s*(mm|um|nm|pm|m)?$", t)
+    if not m:
+        return None, False
+    val = float(m.group(1)); unit = m.group(2)
+    scale = {"mm": 1e-3, "um": 1e-6, "nm": 1e-9, "pm": 1e-12, "m": 1.0}
+    return (val * scale[unit], True) if unit else (val, False)
 
 
 def _decode_amount(s):
@@ -115,27 +132,48 @@ def correct_fractions(obs, response, names):
 
 
 def validate_mixtures(data_dir, items, method="nnls", baseline=True, trim=None,
-                      progress=None) -> ValidateResult:
-    """``items`` is a list of (map_path, true_dict) where true_dict maps substance →
-    true fraction (need not be normalised). Each map is unmixed against the pure
-    references; we collect the observed mean surface fraction, then fit the response
-    factors and the corrected (solution) fractions."""
+                      calib_path=None, progress=None) -> ValidateResult:
+    """``items`` is a list of (map_path, true_ratio[, true_conc]) — true_ratio maps
+    substance → true fraction, and the optional true_conc maps substance → true
+    concentration (M). Each map is unmixed against the pure references for the observed
+    surface fraction (→ response factors + corrected solution ratio). If ``calib_path``
+    (a dilution-series CSV) is given, the map is also quantified (competitive Langmuir)
+    so we can report RECOVERY = measured / true concentration where true_conc is known."""
     rows, names = [], None
-    for path, true in items:
+    for it in items:
+        path, true = it[0], it[1]
+        true_conc = it[2] if len(it) > 2 else None
         if progress:
             progress(f"unmixing {path}")
         r = unmix_map(data_dir, path, method=method, baseline=baseline, trim=trim,
-                      hit_mode="auto", progress=progress)
+                      hit_mode="auto", calib_path=calib_path, progress=progress)
         nb = [r.comps[i] for i in r.nonbg]
         names = nb
         obs = {nb[k]: float(r.mean_ratio[k]) for k in range(len(nb))}
         tot = sum(true.values()) or 1.0
         true_n = {k: v / tot for k, v in true.items()}
-        rows.append({"path": path, "true": true_n, "obs": obs})
+        meas = None
+        if calib_path and getattr(r, "conc_avg", None) is not None:
+            meas = {nb[k]: float(r.conc_avg[k]) for k in range(len(nb))}
+        rows.append({"path": path, "true": true_n, "obs": obs,
+                     "true_conc": true_conc, "meas": meas})
     if not names:
         raise ValueError("no mixtures to validate.")
     response, ref = _response_factors(rows, names)
     corrected = [dict(zip(names, correct_fractions(r["obs"], response, names)))
                  for r in rows]
+    # recovery = measured / true concentration (%), where both are known
+    recovery, acc = [], {n: [] for n in names}
+    for r in rows:
+        rec = {}
+        if r["meas"] and r["true_conc"]:
+            for n in names:
+                t = r["true_conc"].get(n); m = r["meas"].get(n)
+                if t and t > 0 and m is not None and np.isfinite(m) and m > 0:
+                    rec[n] = 100.0 * m / t; acc[n].append(rec[n])
+        recovery.append(rec)
+    mean_recovery = {n: (float(np.mean(acc[n])) if acc[n] else float("nan")) for n in names}
+    calibrated = any(r["meas"] for r in rows)
     return ValidateResult(names=names, rows=rows, response=response,
-                          corrected=corrected, ref=ref)
+                          corrected=corrected, ref=ref, recovery=recovery,
+                          mean_recovery=mean_recovery, calibrated=calibrated)
