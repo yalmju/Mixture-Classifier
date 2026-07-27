@@ -119,6 +119,21 @@ class RealDataPage(QWidget):
         flipcol = QVBoxLayout(); flipcol.setSpacing(2)
         _fl = QLabel("orientation"); _fl.setObjectName("field")
         flipcol.addWidget(_fl); flipcol.addWidget(self.chk_flip)
+        self.chk_rel = QCheckBox("hide low-R²"); self.chk_rel.setChecked(True)
+        self.chk_rel.setToolTip("gray out and exclude pixels whose reconstruction R² is "
+                                "below the threshold — usually SATURATED/clipped or "
+                                "artefact pixels that fit the pure spectra badly and get "
+                                "misassigned (e.g. a clipped THI peak read as DQ/TBZ)")
+        self.chk_rel.toggled.connect(lambda _=False: self._on_corr())
+        self.rel_thr = QDoubleSpinBox(); self.rel_thr.setDecimals(2)
+        self.rel_thr.setSingleStep(0.05); self.rel_thr.setRange(0.0, 0.95)
+        self.rel_thr.setValue(0.50); self.rel_thr.setToolTip("minimum reconstruction R²")
+        self.rel_thr.valueChanged.connect(lambda _=0: self._on_corr())
+        relcol = QVBoxLayout(); relcol.setSpacing(2)
+        _rl = QLabel("reliability (min R²)"); _rl.setObjectName("field")
+        relrow = QHBoxLayout(); relrow.setSpacing(4)
+        relrow.addWidget(self.chk_rel); relrow.addWidget(self.rel_thr)
+        relcol.addWidget(_rl); relcol.addLayout(relrow)
         corr_b = QPushButton("Load correction…"); corr_b.setObjectName("ghost")
         corr_b.setToolTip("response_factors.csv from the Validate tab → convert the "
                           "surface ratio to the solution ratio")
@@ -141,6 +156,7 @@ class RealDataPage(QWidget):
         ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.cal_x)
         ctl.addLayout(hitcol); ctl.addLayout(self.thr); ctl.addLayout(flipcol)
+        ctl.addLayout(relcol)
         ctl.addWidget(corr_b); ctl.addLayout(corrcol)
         ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
@@ -421,9 +437,20 @@ class RealDataPage(QWidget):
         s = Anb.sum(axis=1, keepdims=True)
         return np.divide(Anb, s, out=np.zeros_like(Anb), where=s > 0)
 
+    def _reliable(self, r):
+        """Pixels trustworthy enough to compose — reconstruction R² above the threshold.
+        Filters out saturated/clipped pixels that fit the pure spectra badly."""
+        if not self.chk_rel.isChecked() or getattr(r, "reliab", None) is None:
+            return np.ones(r.n_pixels, bool)
+        return r.reliab >= float(self.rel_thr.value())
+
+    def _hit(self, r):
+        """Effective hit = a substance pixel AND reliable (not saturated/artefact)."""
+        return r.hit & self._reliable(r)
+
     def _mean_ratio(self, r):
-        rn = self._ratio_nb(r)
-        return rn[r.hit].mean(axis=0) if r.hit.any() else rn.mean(axis=0)
+        rn = self._ratio_nb(r); hit = self._hit(r)
+        return rn[hit].mean(axis=0) if hit.any() else rn.mean(axis=0)
 
     # ---- run ----
     def _run(self):
@@ -480,18 +507,22 @@ class RealDataPage(QWidget):
         nb = [r.comps[i] for i in r.nonbg]
         mr = self._mean_ratio(r)                          # corrected when toggle on
         corrected = self._rf_vec(r) is not None
+        eff_hit = self._hit(r)
+        n_excl = int((r.hit & ~self._reliable(r)).sum())  # substance pixels dropped
         dom = nb[int(mr.argmax())] if len(nb) else r.dominant
         self.k_dom.set(dom, TEAL)
         self.k_n.set(str(int(np.sum(mr >= 0.05))), AMBER)
-        self.k_hit.set(f"{r.hit_frac:.0%}", BLUE)
+        self.k_hit.set(f"{eff_hit.mean():.0%}", BLUE)
         self.k_px.set(f"{r.n_pixels:,}", PURPLE)
         self._rebuild_swatches(r)
         self._plot_maps(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
         ratio = "  :  ".join(f"{nm} {mr[i] * 100:.0f}" for i, nm in enumerate(nb))
         rtag = "solution ratio" if corrected else "mean ratio"
-        txt = (f"<b>hit:</b> {r.hit_frac:.0%} of pixels are a substance &nbsp;·&nbsp; "
-               f"<b>{rtag}</b> (hit pixels): {ratio} &nbsp;·&nbsp; "
+        excl = (f" &nbsp;·&nbsp; <span style='color:{CORAL}'>{n_excl} saturated/"
+                f"low-R² px excluded</span>" if n_excl else "")
+        txt = (f"<b>hit:</b> {eff_hit.mean():.0%} of pixels are a substance{excl} "
+               f"&nbsp;·&nbsp; <b>{rtag}</b> (hit pixels): {ratio} &nbsp;·&nbsp; "
                f"<b>dominant:</b> {dom}"
                + ("  <span style='color:%s'>(response-corrected)</span>" % TEAL
                   if corrected else ""))
@@ -584,16 +615,17 @@ class RealDataPage(QWidget):
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
         n = len(nb) or 1
+        hit = self._hit(r)                                 # exclude saturated/low-R² px
         # SHARED µM colour axis across substances, so the maps are directly comparable
         um_all = r.conc * 1e6
-        vmask = r.hit[:, None] & np.isfinite(um_all) & (um_all > 0)
+        vmask = hit[:, None] & np.isfinite(um_all) & (um_all > 0)
         vals = um_all[vmask]
         vmax = float(np.quantile(vals, 0.98)) if vals.size else 1.0
         vmax = vmax or 1.0
         from matplotlib.colors import LinearSegmentedColormap
         for i, nm in enumerate(nb):
             ax = self.c_conc.style(self.c_conc.fig.add_subplot(1, n, i + 1))
-            um = np.where(r.hit & np.isfinite(um_all[:, i]) & (um_all[:, i] > 0),
+            um = np.where(hit & np.isfinite(um_all[:, i]) & (um_all[:, i] > 0),
                           um_all[:, i], np.nan)
             grid = np.full((ny, nx), np.nan); grid[rows, cc] = um
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", nbcols[i]])
@@ -612,10 +644,15 @@ class RealDataPage(QWidget):
         cols = self._nb_colors(r); bg_col = self._bg_color(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux = np.unique(x); rad = (np.median(np.diff(ux)) * 0.46) if len(ux) > 1 else 0.46
-        hit = r.hit
+        hit = self._hit(r)                                # reliable substance pixels
+        excl = r.hit & ~self._reliable(r)                 # saturated/low-R² (flagged)
         # background / non-hit pixels: one fast scatter (not one patch each)
-        if (~hit).any():
-            ax.scatter(x[~hit], y[~hit], c=bg_col, marker="s", s=16, edgecolors="none")
+        if (~hit & ~excl).any():
+            m = ~hit & ~excl
+            ax.scatter(x[m], y[m], c=bg_col, marker="s", s=16, edgecolors="none")
+        if excl.any():                                    # excluded pixels marked, not silently dropped
+            ax.scatter(x[excl], y[excl], c="none", marker="x", s=22,
+                       edgecolors=CORAL, linewidths=0.9)
         if r.method == "model":                           # classifier → one class/pixel
             dom = r.ratio_nb.argmax(axis=1)
             if hit.any():
@@ -684,6 +721,9 @@ class RealDataPage(QWidget):
         rat = "  ·  ".join(f"{r.comps[j]} {ratio_nb[i, k] * 100:.0f}%"
                            for k, j in enumerate(r.nonbg) if ratio_nb[i, k] > 0.02)
         tag = rat if r.hit[i] else "background"
+        if not self._reliable(r)[i]:                      # saturated/low-R² warning
+            r2 = float(r.reliab[i]) if getattr(r, "reliab", None) is not None else 0.0
+            tag += f"  ⚠ low R²={r2:.2f} (saturated? — excluded)"
         if getattr(r, "conc", None) is not None and r.hit[i]:   # absolute µM per pixel
             um = r.conc[i] * 1e6
             cs = "  ·  ".join(f"{r.comps[j]} {um[k]:.3g}µM" for k, j in enumerate(r.nonbg)
