@@ -52,6 +52,7 @@ class ModelPage(QWidget):
         super().__init__()
         self._thread = None
         self._res = None
+        COLOR_BUS.changed.connect(self._recolor)     # top-bar picker → recolour
         self._train_params = None
         self.pest_dir = PEST_DEFAULT
         root = QVBoxLayout(self)
@@ -389,13 +390,18 @@ class ModelPage(QWidget):
         self._plot_pca(res); self._plot_bar(res); self._plot_bands(res)
         self._plot_box(res); self._plot_markers(res)
 
+    def _recolor(self):
+        """Re-draw all plots when the shared substance colours change."""
+        if self._res is not None:
+            self._apply(self._res)
+
     # ---- plots ----
     def _plot_curve(self, res):
         ax = self.c_curve.new_ax()
         col = TEAL if res.backend == "resnet" else BLUE
-        ax.plot(res.curve_x, res.curve_y, marker="o", ms=4, lw=1.4, color=col)
+        ax.plot(res.curve_x, res.curve_y, marker="o", ms=5, lw=1.8, color=col)
         ax.set_xlabel(res.curve_xlabel); ax.set_ylabel(res.curve_label)
-        ax.set_ylim(bottom=0)
+        ax.margins(y=0.25)          # autoscale y so a near-zero curve is still readable
         self.c_curve.fig.tight_layout(); self.c_curve.draw_idle()
 
     def _plot_cm(self, res):
@@ -408,7 +414,7 @@ class ModelPage(QWidget):
         frac = np.divide(cm, row, out=np.zeros(cm.shape, float), where=row > 0)
         ax.imshow(frac, cmap=CM_CMAP, aspect="equal", vmin=0, vmax=1)
         ax.set_xticks(range(len(names))); ax.set_yticks(range(len(names)))
-        ax.set_xticklabels(names, fontsize=7); ax.set_yticklabels(names, fontsize=7)
+        ax.set_xticklabels(names, fontsize=9); ax.set_yticklabels(names, fontsize=9)
         ax.set_xlabel("predicted"); ax.set_ylabel("true")
         ax.set_xticks(np.arange(-0.5, len(names)), minor=True)
         ax.set_yticks(np.arange(-0.5, len(names)), minor=True)
@@ -418,7 +424,7 @@ class ModelPage(QWidget):
             for j in range(cm.shape[1]):
                 if cm[i, j]:
                     ax.text(j, i, f"{frac[i, j] * 100:.0f}%\n({cm[i, j]})",
-                            ha="center", va="center", fontsize=7,
+                            ha="center", va="center", fontsize=9,
                             color="#ffffff" if frac[i, j] > 0.5 else INK)
         self.c_cm.fig.tight_layout(); self.c_cm.draw_idle()
 
@@ -428,7 +434,7 @@ class ModelPage(QWidget):
             m = res.pca_lab == i
             if m.any():
                 ax.scatter(res.pca_emb[m, 0], res.pca_emb[m, 1], s=12,
-                           color=SERIES[i % len(SERIES)], alpha=0.6,
+                           color=substance_color(nm, i), alpha=0.6,
                            edgecolors="none", label=nm)
         var = getattr(res, "pca_var", None)
         if var is not None and len(var) >= 2:
@@ -436,7 +442,7 @@ class ModelPage(QWidget):
             ax.set_ylabel(f"PC2 ({var[1] * 100:.1f}%)")
         else:
             ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
-        ax.legend(fontsize=7, loc="best", framealpha=0.0, labelcolor=MUTE)
+        ax.legend(fontsize=9, loc="best", framealpha=0.0, labelcolor="black")
         self.c_pca.fig.tight_layout(); self.c_pca.draw_idle()
 
     def _plot_bar(self, res):
@@ -449,9 +455,10 @@ class ModelPage(QWidget):
         ax.bar(x - w, P, w, color=BLUE, label="precision")
         ax.bar(x, R, w, color=AMBER, label="recall")
         ax.bar(x + w, F, w, color=TEAL, label="F1")
-        ax.set_xticks(x); ax.set_xticklabels(names, fontsize=7)
+        ax.set_xticks(x); ax.set_xticklabels(names, fontsize=9)
         ax.set_ylim(0, 1.05); ax.set_ylabel("score")
-        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=3)
+        ax.legend(fontsize=9, framealpha=0.0, labelcolor="black", ncol=3,
+                  loc="lower center", bbox_to_anchor=(0.5, 1.005))
         self.c_bar.fig.tight_layout(); self.c_bar.draw_idle()
 
     def _plot_bands(self, res):
@@ -471,11 +478,11 @@ class ModelPage(QWidget):
         # label the strongest discriminative bands — distinct peaks, not adjacent points
         from model_training import top_bands
         for idx in top_bands(f, wn, k=min(6, len(f))):
-            ax.annotate(f"{wn[idx]:.0f}", (wn[idx], f[idx]), fontsize=7, color=INK,
+            ax.annotate(f"{wn[idx]:.0f}", (wn[idx], f[idx]), fontsize=9, color=INK,
                         ha="center", va="bottom",
                         xytext=(0, 2), textcoords="offset points")
             ax.plot([wn[idx]], [f[idx]], "o", ms=3, color=CORAL)
-        ax.set_xlabel("wavenumber (cm⁻¹)")
+        ax.set_xlabel("Raman shift (cm$^{-1}$)")
         ax.set_ylabel("PLS-DA VIP" if use_vip else "ANOVA F")
         ax.margins(y=0.15)
         self.c_bands.fig.tight_layout(); self.c_bands.draw_idle()
@@ -496,7 +503,7 @@ class ModelPage(QWidget):
             data = [vals[lab == c, j] for j in range(k)]
             data = [d if len(d) else [0.0] for d in data]
             pos = np.arange(k) + (c - (nC - 1) / 2) * width
-            col = SERIES[c % len(SERIES)]
+            col = substance_color(classes[c], c)
             bp = ax.boxplot(data, positions=pos, widths=width * 0.9,
                             patch_artist=True, showfliers=False,
                             medianprops=dict(color=INK, linewidth=0.8))
@@ -506,12 +513,13 @@ class ModelPage(QWidget):
                 for ln in bp[w]:
                     ln.set(color=col, linewidth=0.8)
         ax.set_xticks(np.arange(k))
-        ax.set_xticklabels([f"{w:.0f}" for w in wn], fontsize=8)
-        ax.set_xlabel("top discriminative band (cm⁻¹)")
-        ax.set_ylabel("intensity")
-        ax.legend(handles=[Patch(facecolor=SERIES[c % len(SERIES)], label=classes[c])
+        ax.set_xticklabels([f"{w:.0f}" for w in wn], fontsize=10)
+        ax.set_xlabel("top discriminative band (cm$^{-1}$)")
+        ax.set_ylabel("Intensity (a.u.)")
+        ax.legend(handles=[Patch(facecolor=substance_color(classes[c], c), label=classes[c])
                            for c in range(nC)],
-                  fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=min(nC, 4))
+                  fontsize=9, framealpha=0.0, labelcolor="black", ncol=min(nC, 4),
+                  loc="lower center", bbox_to_anchor=(0.5, 1.005))
         self.c_box.fig.tight_layout(); self.c_box.draw_idle()
 
     def _plot_markers(self, res):
@@ -525,25 +533,32 @@ class ModelPage(QWidget):
         if not nonbg:
             self.c_marker.placeholder("no substances"); return
         self.c_marker.fig.clear()
+        # stack the spectra vertically so each is full-width and long (not squeezed
+        # into a narrow column); export as a tall strip of wide panels.
+        self.c_marker.export_panel = (6.5, 1.6)
+        N = len(nonbg)
         for pos, ci in enumerate(nonbg):
             ax = self.c_marker.style(
-                self.c_marker.fig.add_subplot(1, len(nonbg), pos + 1))
+                self.c_marker.fig.add_subplot(N, 1, pos + 1))
             mean_c = cm[ci]
             others = np.delete(cm, ci, axis=0)
             score = mean_c - (others.max(axis=0) if len(others) else 0.0)  # uniquely high
-            col = SERIES[pos % len(SERIES)]
+            col = substance_color(res.classes[ci], pos)
             ax.plot(wn, mean_c, lw=1.0, color=col)
             ax.fill_between(wn, mean_c, color=col, alpha=0.12)
             for idx in top_bands(score, wn, k=3, min_sep=40):
                 if score[idx] <= 0:
                     continue
                 ax.axvline(wn[idx], color=CORAL, lw=0.7, ls="--", alpha=0.7)
-                ax.annotate(f"{wn[idx]:.0f}", (wn[idx], mean_c[idx]), fontsize=7,
+                ax.annotate(f"{wn[idx]:.0f}", (wn[idx], mean_c[idx]), fontsize=9,
                             color=INK, ha="center", va="bottom",
                             xytext=(0, 2), textcoords="offset points")
-            ax.set_title(res.classes[ci], fontsize=8, color=col)
-            ax.set_yticks([]); ax.tick_params(labelsize=7)
-            if pos == 0:
-                ax.set_ylabel("intensity", fontsize=8)
-            ax.set_xlabel("cm⁻¹", fontsize=8)
+            # per-trace substance label (a data label, not a plot title)
+            ax.text(0.008, 0.88, res.classes[ci], transform=ax.transAxes, color=col,
+                    fontsize=10, fontweight="bold", va="top", ha="left")
+            ax.set_yticks([]); ax.set_ylabel("Intensity (a.u.)", fontsize=10)
+            if pos == N - 1:
+                ax.set_xlabel("Raman shift (cm$^{-1}$)", fontsize=10)
+            else:
+                ax.set_xticklabels([])
         self.c_marker.fig.tight_layout(); self.c_marker.draw_idle()

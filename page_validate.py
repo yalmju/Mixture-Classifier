@@ -44,6 +44,7 @@ class ValidatePage(QWidget):
         super().__init__()
         self._thread = None
         self._res = None
+        COLOR_BUS.changed.connect(self._recolor)     # top-bar picker → recolour
         self._files = []                 # full paths, aligned with table rows
         self.data_dir = PEST_DEFAULT
         self.calib_path = None           # dilution-series CSV → recovery (measured µM)
@@ -316,13 +317,18 @@ class ValidatePage(QWidget):
         return float(np.mean(errs)) if errs else 0.0
 
     # ---- plots ----
+    def _recolor(self):
+        """Re-draw all plots when the shared substance colours change."""
+        if self._res is not None:
+            self._apply(self._res)
+
     def _plot_parity(self, res, corrected=False, canvas=None, title_obs="observed"):
         cv = canvas or self.c_parity
         ax = cv.new_ax()
         names = res.names
         fracs = res.corrected if corrected else [r["obs"] for r in res.rows]
         for i, n in enumerate(names):
-            col = SERIES[i % len(SERIES)]
+            col = substance_color(n, i)
             xs = [r["true"].get(n, 0.0) for r in res.rows]
             ys = [f[n] if isinstance(f, dict) else f[i] for f in fracs]
             ax.scatter(xs, ys, color=col, s=42, edgecolors="white", linewidths=0.6,
@@ -330,7 +336,7 @@ class ValidatePage(QWidget):
         ax.plot([0, 1], [0, 1], color=MUTE, ls="--", lw=1.0, zorder=1)
         ax.set_xlim(-0.02, 1.02); ax.set_ylim(-0.02, 1.02); ax.set_aspect("equal")
         ax.set_xlabel("true fraction"); ax.set_ylabel(f"{title_obs} fraction")
-        ax.legend(fontsize=8, framealpha=0.0, labelcolor=MUTE)
+        ax.legend(fontsize=10, framealpha=0.0, labelcolor="black")
         cv.fig.tight_layout(); cv.draw_idle()
 
     def _plot_corr(self, res):
@@ -341,7 +347,7 @@ class ValidatePage(QWidget):
         ax = self.c_resp.new_ax()
         names = res.names
         vals = [res.response[n] for n in names]
-        cols = [SERIES[i % len(SERIES)] for i in range(len(names))]
+        cols = [substance_color(names[i], i) for i in range(len(names))]
         x = np.arange(len(names))
         ax.bar(x, vals, color=cols)
         ax.axhline(1.0, color=MUTE, ls="--", lw=1.0)

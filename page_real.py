@@ -60,6 +60,7 @@ class RealDataPage(QWidget):
         self._sel = None
         self._click_axes = []       # axes that accept a pixel click
         self._colors = {}           # per-substance colour override {name: '#hex'}
+        COLOR_BUS.changed.connect(self._on_colors_changed)   # top-bar picker sync
         self.data_dir = PEST_DEFAULT
         self.test = None
         self.model_path = None      # trained model (unmixr_model.joblib) for classify
@@ -266,6 +267,13 @@ class RealDataPage(QWidget):
     def set_data_dir(self, path):
         self.data_dir = path                              # references come from Samples
         self._colors = load_colors(path)                  # remembered colour choices
+        set_substance_colors(self._colors)                # seed the shared colour state
+        if self._res is not None:
+            self._rebuild_swatches(self._res); self._redraw()
+
+    def _on_colors_changed(self):
+        """Shared colours changed (e.g. from the top-bar picker) — resync + redraw."""
+        self._colors = substance_colors()
         if self._res is not None:
             self._rebuild_swatches(self._res); self._redraw()
 
@@ -330,7 +338,8 @@ class RealDataPage(QWidget):
             save_colors(self.data_dir, self._colors)
         except Exception as exc:
             print("save colors:", exc, file=sys.stderr)
-        self._rebuild_swatches(self._res); self._redraw()
+        set_substance_colors(self._colors)                # broadcast to every page
+        COLOR_BUS.changed.emit()
 
     def _redraw(self):
         r = self._res
@@ -611,7 +620,6 @@ class RealDataPage(QWidget):
                 img[rows, cc] = np.clip((Anb / mscale) @ cols, 0.0, 1.0)
                 ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest")
-                ax.set_title("merged", fontsize=8, color=INK)
             else:                                          # single component + colour-bar
                 sc = (sub_vmax if not r.bg_mask[k]         # substances share one axis
                       else float(np.quantile(r.A[:, k], 0.99)) or 1.0)
@@ -620,9 +628,8 @@ class RealDataPage(QWidget):
                 im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                                interpolation="nearest", cmap=cmap, vmin=0.0, vmax=sc)
                 cb = self.c_maps.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
-                cb.ax.tick_params(labelsize=5, colors=MUTE)
+                cb.ax.tick_params(labelsize=7, colors="black")
                 bg = " (bkg)" if r.bg_mask[k] else ""
-                ax.set_title(title + bg, fontsize=8, color=allcols[k])
             # no selection ring on the intensity maps — it clutters them; the pie map
             # (beside the spectrum) carries the highlight instead
             ax.set_xticks([]); ax.set_yticks([])
@@ -658,10 +665,7 @@ class RealDataPage(QWidget):
             im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                            interpolation="nearest", cmap=cmap, vmin=0.0, vmax=vmax)
             cb = self.c_conc.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            cb.ax.tick_params(labelsize=6, colors=MUTE)       # same 0..vmax on every panel
-            r2 = (f"  R²={r.calib_r2[i]:.2f}" if getattr(r, "calib_r2", None) is not None
-                  else "")
-            ax.set_title(f"{nm} (µM){r2}", fontsize=8, color=nbcols[i])
+            cb.ax.tick_params(labelsize=8, colors="black")       # same 0..vmax on every panel
             ax.set_xticks([]); ax.set_yticks([])
         self.c_conc.fig.tight_layout(); self.c_conc.draw_idle()
 
@@ -684,8 +688,6 @@ class RealDataPage(QWidget):
             if hit.any():
                 ax.scatter(x[hit], y[hit], c=[cols[dom[i]] for i in np.where(hit)[0]],
                            marker="s", s=16, edgecolors="none")
-            ax.set_title("predicted class per pixel (not a mixture ratio)",
-                         fontsize=8, color=INK)
         else:                                             # per-pixel pie for hit pixels
             ratio_nb = self._ratio_nb(r)                  # corrected when toggle on
             wedges, wcols = [], []
@@ -709,7 +711,7 @@ class RealDataPage(QWidget):
         handles = [Patch(facecolor=cols[i], label=r.comps[j])
                    for i, j in enumerate(r.nonbg)] + \
                   [Patch(facecolor=bg_col, label="background")]
-        ax.legend(handles=handles, fontsize=7, framealpha=0.0, labelcolor=MUTE,
+        ax.legend(handles=handles, fontsize=9, framealpha=0.0, labelcolor="black",
                   loc="upper center", bbox_to_anchor=(0.5, -0.02),
                   ncol=len(handles), frameon=False)
         self.c_pie.fig.tight_layout(); self.c_pie.draw_idle()
@@ -726,10 +728,8 @@ class RealDataPage(QWidget):
         keep = [i for i in range(len(nb)) if mr[i] >= 0.01] or [int(mr.argmax())]
         ax.pie([mr[i] for i in keep], labels=[nb[i] for i in keep],
                colors=[cols[i] for i in keep], autopct="%1.0f%%",
-               textprops={"fontsize": 8, "color": INK})
+               textprops={"fontsize": 10, "color": INK})
         ax.set_aspect("equal")
-        tag = " · solution" if self._rf_vec(r) is not None else ""
-        ax.set_title(f"hit {r.hit_frac:.0%}{tag}", fontsize=8, color=INK)
         self.c_comp.fig.tight_layout(); self.c_comp.draw_idle()
 
     def _plot_spec(self, r, i):
@@ -757,9 +757,8 @@ class RealDataPage(QWidget):
             sat = ("  ⚠sat" if r.pp_theta is not None and r.pp_theta[i] > 0.85 else "")
             if cs:
                 tag += f"  |  {cs}{sat}"
-        ax.set_title(f"pixel ({xp:.0f}, {yp:.0f}) — {tag}", fontsize=8, color=INK)
-        ax.set_xlabel("wavenumber (cm⁻¹)"); ax.set_yticks([])
-        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE,
+        ax.set_xlabel("Raman shift (cm$^{-1}$)"); ax.set_yticks([])
+        ax.legend(fontsize=9, framealpha=0.0, labelcolor="black",
                   loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, frameon=False)
         self.c_spec.fig.tight_layout(); self.c_spec.draw_idle()
 

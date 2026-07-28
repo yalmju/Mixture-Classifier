@@ -369,15 +369,15 @@ class PeakPickerDialog(QDialog):
         for i, nm in enumerate(self.names):
             ax = self.canvas.style(self.canvas.fig.add_subplot(n, 1, i + 1))
             y = self.means[i]; ym = y.max() or 1.0
-            ax.plot(self.axis, y / ym, lw=1.1, color=SERIES[i % len(SERIES)])
+            ax.plot(self.axis, y / ym, lw=1.1, color=substance_color(nm, i))
             ax.axvline(self.peaks[nm], color=INK, ls="--", lw=1.1)
-            ax.annotate(f"{nm} @ {self.peaks[nm]:.0f} cm⁻¹", xy=(0.99, 0.8),
+            ax.annotate(f"{nm} @ {self.peaks[nm]:.0f} cm$^{{-1}}$", xy=(0.99, 0.8),
                         xycoords="axes fraction", ha="right", fontsize=9, color=INK)
             ax.set_yticks([])
             if i < n - 1:
                 ax.set_xticklabels([])
             else:
-                ax.set_xlabel("wavenumber (cm⁻¹)")
+                ax.set_xlabel("Raman shift (cm$^{-1}$)")
             self._axmap[ax] = i
         self.canvas.fig.tight_layout(); self.canvas.draw_idle()
 
@@ -408,6 +408,7 @@ class QuantifyPage(QWidget):
         self._acc = {}         # accumulated per-compound folders {name: (concs, specs)}
         self._axis = None      # shared wavenumber axis of the accumulated folders
         self._res = None
+        COLOR_BUS.changed.connect(self._recolor)     # top-bar picker → recolour
         self.data_dir = None   # Samples folder (for the BLK class → blank-based LOD)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
@@ -864,6 +865,11 @@ class QuantifyPage(QWidget):
         self.btn.setEnabled(True); self.btn.setText("Calibrate + quantify")
         print(tb, file=sys.stderr)
 
+    def _recolor(self):
+        """Re-draw the calibration plot when shared substance colours change."""
+        if self._res is not None:
+            self._plot_iso(self._res)
+
     def _apply(self, res):
         self._res = res
         self.btn.setEnabled(True); self.btn.setText("Calibrate + quantify")
@@ -883,7 +889,7 @@ class QuantifyPage(QWidget):
         pks = res.get("peaks_used"); lod = res.get("lod"); loq = res.get("loq")
         for i, nm in enumerate(res["names"]):
             C, B, dc, db = res["iso"][i]
-            col = SERIES[i % len(SERIES)]
+            col = substance_color(nm, i)
             C = np.asarray(C, float); B = np.asarray(B, float)
             uc = np.unique(C)
             means = np.array([B[C == c].mean() for c in uc])
@@ -909,10 +915,10 @@ class QuantifyPage(QWidget):
             ax.plot(dc, db, color=col, lw=1.6, label=lab)
         ax.set_xscale("log"); ax.set_xlabel("concentration (M)")
         pk = res.get("peak_wn")
-        ax.set_ylabel(f"peak height @ {pk:.0f} cm⁻¹  (mean ± SE)" if pk
+        ax.set_ylabel(f"peak height @ {pk:.0f} cm$^{{-1}}$  (mean ± SE)" if pk
                       else ("marker-peak height (mean ± SE)" if pks
                             else "signal  B  (mean ± SE)"))
-        ax.legend(fontsize=8, framealpha=0.0, labelcolor=MUTE)
+        ax.legend(fontsize=10, framealpha=0.0, labelcolor="black")
         self.c_iso.fig.tight_layout(); self.c_iso.draw_idle()
 
     def _readout(self, res):
@@ -933,7 +939,7 @@ class QuantifyPage(QWidget):
                 p2 = (f"<td style='padding-right:12px'>gA="
                       f"{(gA[i] if gA is not None else float('nan')):.2e}</td>")
             rows.append(
-                f"<tr><td style='padding-right:12px;color:{SERIES[i%len(SERIES)]};"
+                f"<tr><td style='padding-right:12px;color:{substance_color(nm, i)};"
                 f"font-weight:600'>{nm}</td>{p1}{p2}"
                 f"<td style='padding-right:12px;color:{MUTE}'>R²={r2[i]:.2f}</td>"
                 f"<td style='padding-right:12px;color:{TEAL}'>LOD "

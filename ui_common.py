@@ -7,10 +7,12 @@ import os
 
 import matplotlib
 matplotlib.use("QtAgg")
+from cycler import cycler
 from matplotlib.figure import Figure
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
+from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout, QSizePolicy
 
 
@@ -43,6 +45,77 @@ SERIES = [TEAL, BLUE, AMBER, CORAL, PURPLE, PINK, GREEN, "#546170"]
 # near-white for empty cells → teal for the strong diagonal
 CM_CMAP = LinearSegmentedColormap.from_list(
     "unmixr_teal", ["#f1f7f4", "#a9ddc7", "#3fb488", TEAL, "#0a6b49"])
+
+# ---- shared per-substance colour state (global across every page) ---------
+# One source of truth for DQ/TBZ/THI/… colours: the top-bar picker writes here,
+# every plot reads via substance_color(), and COLOR_BUS.changed tells all pages
+# to recolour. Falls back to the legacy SERIES palette when no override is set.
+class _ColorBus(QObject):
+    changed = pyqtSignal()
+
+COLOR_BUS = _ColorBus()
+_SUB_COLORS = {}                       # substance name -> "#hex" override
+
+
+def set_substance_colors(mapping):
+    """Replace the global substance→colour overrides ({name: '#hex'})."""
+    _SUB_COLORS.clear()
+    _SUB_COLORS.update({str(k): str(v) for k, v in (mapping or {}).items()})
+
+
+def substance_colors():
+    """Current overrides as a plain dict (copy)."""
+    return dict(_SUB_COLORS)
+
+
+def substance_color(name, index=0):
+    """Chosen colour for a substance, else the legacy SERIES default by index."""
+    return _SUB_COLORS.get(name, SERIES[index % len(SERIES)])
+
+# ---- cnsplots-style figure form (colours stay legacy; only geometry/type) --
+# Ported from github.com/yalmju/cnsplots setup_matplotlib. Colours are left to
+# the legacy palette above (prop_cycle = SERIES); this only fixes the *form*:
+# thin despined axes, small Helvetica type, tight ticks — so every Canvas plot
+# comes out in one consistent, publication-ready style.
+matplotlib.rcParams.update({
+    # fonts
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Helvetica", "Helvetica Neue", "Arial", "DejaVu Sans"],
+    "font.size": 10,
+    # axes / titles
+    "axes.titlesize": 10,
+    "axes.titleweight": "bold",
+    "axes.titlelocation": "center",
+    "axes.titlepad": 4,
+    "axes.labelsize": 10,
+    "axes.labelpad": 2,
+    "axes.linewidth": 0.5,
+    "axes.edgecolor": "black",
+    "axes.labelcolor": "black",
+    "axes.grid": False,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.xmargin": 0.05,
+    "axes.ymargin": 0.05,
+    "axes.prop_cycle": cycler(color=SERIES),   # legacy discrete palette
+    # ticks
+    "xtick.color": "black", "ytick.color": "black",
+    "xtick.labelcolor": "black", "ytick.labelcolor": "black",
+    "xtick.labelsize": 9, "ytick.labelsize": 9,
+    "xtick.major.size": 2, "ytick.major.size": 2,
+    "xtick.major.width": 0.6, "ytick.major.width": 0.6,
+    "xtick.major.pad": 1, "ytick.major.pad": 1,
+    # legend
+    "legend.frameon": False,
+    "legend.fontsize": 9,
+    "legend.markerscale": 0.5,
+    "legend.handlelength": 0.7,
+    "legend.handleheight": 0.7,
+    "legend.handletextpad": 0.3,
+    # vector export stays editable in Illustrator
+    "svg.fonttype": "none",
+    "pdf.fonttype": 42,
+})
 
 QSS = f"""
 QMainWindow, QWidget {{ background: {PAGE}; color: {INK};
@@ -85,12 +158,45 @@ QProgressBar::chunk {{ background: {TEAL}; border-radius: 3px; }}
 """
 
 
+def _grid_shape(fig):
+    """(nrows, ncols) of the figure's subplot grid, ignoring colour-bar axes."""
+    nr = nc = 1
+    for ax in fig.axes:
+        ss = ax.get_subplotspec()
+        if ss is None:
+            continue
+        r, c = ss.get_gridspec().get_geometry()
+        nr, nc = max(nr, r), max(nc, c)
+    return nr, nc
+
+
+# per-panel export size (inches ≈ 170×145 px @72) — one panel per subplot cell,
+# so a 1×N grid exports N-times wider. Keeps the exported aspect deterministic.
+_PANEL_W, _PANEL_H = 3.4, 2.8   # roomy enough that 9–10pt text never crowds
+EXPORT_DPI = 600      # print-quality; every exported PNG is ≥300 dpi
+
+
 def _save_figs(named_canvases, folder):
-    """Save each (name, Canvas) to folder/<name>.png. Returns count."""
+    """Save each (name, Canvas) to folder/<name>.png at a *deterministic* size
+    derived from its subplot grid — not the arbitrary on-screen (stretched)
+    window size. Returns count."""
     n = 0
     for name, cv in named_canvases:
-        cv.fig.savefig(os.path.join(folder, name + ".png"), dpi=300,
-                       facecolor=CARD, bbox_inches="tight")
+        fig = cv.fig
+        prev = fig.get_size_inches().copy()
+        nr, nc = _grid_shape(fig)
+        pw, ph = getattr(cv, "export_panel", (_PANEL_W, _PANEL_H))
+        try:
+            fig.set_size_inches(nc * pw, nr * ph, forward=False)
+            try:
+                fig.tight_layout()
+            except Exception:
+                pass
+            fig.savefig(os.path.join(folder, name + ".png"), dpi=EXPORT_DPI,
+                        facecolor=CARD, bbox_inches="tight", pad_inches=0.02)
+        finally:
+            fig.set_size_inches(prev, forward=True)
+            cv.draw_idle()
         n += 1
     return n
 
@@ -105,14 +211,24 @@ class Canvas(FigureCanvasQTAgg):
         super().__init__(self.fig)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
+    def wheelEvent(self, event):
+        # don't eat the wheel — let the enclosing QScrollArea scroll the page
+        # (the app uses clicks, not matplotlib wheel-zoom, on these canvases)
+        event.ignore()
+
     def style(self, ax):
+        # cnsplots form: despine + thin (0.5pt) black spines + tight black ticks.
         ax.set_facecolor(CARD)
-        for s in ax.spines.values():
-            s.set_color(LINE)
-        ax.tick_params(colors=MUTE, labelsize=8)
-        ax.xaxis.label.set_color(MUTE)
-        ax.yaxis.label.set_color(MUTE)
-        ax.title.set_color(INK)
+        for name, s in ax.spines.items():
+            if name in ("top", "right"):
+                s.set_visible(False)
+            else:
+                s.set_color("black")
+                s.set_linewidth(0.5)
+        ax.tick_params(colors="black", labelsize=9, length=2, width=0.6, pad=1)
+        ax.xaxis.label.set_color("black")
+        ax.yaxis.label.set_color("black")
+        ax.title.set_color("black")
         return ax
 
     def new_ax(self):
@@ -158,4 +274,5 @@ __all__ = [
     "PAGE", "PANEL", "CARD", "LINE", "INK", "MUTE", "FAINT", "TEAL", "BLUE",
     "AMBER", "CORAL", "PURPLE", "PINK", "GREEN", "RED", "TNGRAY",
     "SERIES", "CM_CMAP", "Canvas", "Kpi", "_card", "_save_figs",
+    "COLOR_BUS", "set_substance_colors", "substance_colors", "substance_color",
 ]
