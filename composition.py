@@ -54,14 +54,15 @@ def _one_map(data_dir, path, baseline):
                 nominal=nominal_fraction(os.path.basename(path)))
 
 
-def compute_composition(data_dir, baseline=True, progress=None, use_cache=True):
-    """Unmix every map in ``map_files`` and return a list of per-map dicts:
-    name, frac (n_pix×3), coords, hit, reliab, mean (3,), nominal (3,) or None."""
-    files = map_files(data_dir)
+def compute_composition(data_dir, baseline=True, files=None, progress=None, use_cache=True):
+    """Unmix each map and return a list of per-map dicts: name, frac (n_pix×3),
+    coords, hit, reliab, mean (3,), nominal (3,) or None. ``files`` is an explicit
+    list of map CSVs; if None, the Reference/Ratio mixtures are auto-discovered."""
+    files = list(files) if files else map_files(data_dir)
     if not files:
         raise FileNotFoundError(
-            "no mixture maps found — need a Reference/Ratio/ folder with "
-            "known-ratio mixture CSVs (e.g. DQ1TH1_corrected.csv).")
+            "no maps to analyse — load map CSVs, or set a data folder with a "
+            "Reference/Ratio/ folder of known-ratio mixtures (e.g. DQ1TH1_corrected.csv).")
     cache_path = os.path.join(data_dir, _CACHE)
     cache = {}
     if use_cache and os.path.exists(cache_path):

@@ -46,6 +46,7 @@ class CompositionPage(QWidget):
         super().__init__()
         self._thread = None
         self._res = None
+        self._files = []                                   # explicitly loaded map CSVs
         COLOR_BUS.changed.connect(self._recolor)           # top-bar picker → recolour
         self.data_dir = PEST_DEFAULT
         root = QVBoxLayout(self)
@@ -62,12 +63,22 @@ class CompositionPage(QWidget):
         root.addLayout(head)
 
         ctl = QHBoxLayout(); ctl.setSpacing(8)
+        add_b = QPushButton("Add maps…"); add_b.setObjectName("ghost")
+        add_b.setToolTip("load one or more mixture maps (nominal ratio is read from "
+                         "the file name, e.g. DQ1TH3). Leave empty to use the "
+                         "Reference/Ratio mixtures from Samples.")
+        add_b.clicked.connect(self._add_maps)
+        self.maps_lbl = QLabel("auto (Reference/Ratio)"); self.maps_lbl.setObjectName("field")
+        self.clr_b = QPushButton("✕"); self.clr_b.setObjectName("ghost")
+        self.clr_b.setFixedWidth(28); self.clr_b.clicked.connect(self._clear_maps)
+        self.clr_b.setVisible(False)
         self.btn = QPushButton("Run"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         self.exp = QPushButton("Export…"); self.exp.setObjectName("ghost")
         self.exp.clicked.connect(self._export)
         self.status = QLabel(""); self.status.setObjectName("field")
-        ctl.addWidget(self.btn); ctl.addWidget(self.exp)
+        ctl.addWidget(add_b); ctl.addWidget(self.maps_lbl); ctl.addWidget(self.clr_b)
+        ctl.addSpacing(6); ctl.addWidget(self.btn); ctl.addWidget(self.exp)
         ctl.addSpacing(8); ctl.addWidget(self.status); ctl.addStretch(1)
         root.addLayout(ctl)
 
@@ -100,10 +111,25 @@ class CompositionPage(QWidget):
     def set_data_dir(self, path):
         self.data_dir = path
 
+    def _add_maps(self):
+        from PyQt6.QtWidgets import QFileDialog
+        ps, _ = QFileDialog.getOpenFileNames(
+            self, "Add mixture maps", self.data_dir, "maps (*.csv *.txt);;all files (*)")
+        if ps:
+            self._files = list(ps)
+            self.maps_lbl.setText(f"{len(self._files)} maps loaded")
+            self.clr_b.setVisible(True)
+
+    def _clear_maps(self):
+        self._files = []
+        self.maps_lbl.setText("auto (Reference/Ratio)")
+        self.clr_b.setVisible(False)
+
     # ---- run ----
     def _run(self):
         cfg = load_preprocess(self.data_dir)
-        params = dict(data_dir=self.data_dir, baseline=cfg["baseline"])
+        params = dict(data_dir=self.data_dir, baseline=cfg["baseline"],
+                      files=self._files or None)
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText(""); self.pbar.setVisible(True); self.pbar.setRange(0, 0)
         self.c_maps.placeholder("Unmixing…")
@@ -235,12 +261,11 @@ class CompositionPage(QWidget):
         recs = [r for r in res if r["nominal"] is not None]
         if not recs:
             self.c_rel.placeholder("no nominal ratios parsed"); return
-        dom = [int(np.argmax(r["nominal"])) for r in recs]     # group by TRUE (nominal) mix
-        comp = np.array([composition_distance(r["nominal"], r["mean"]) for r in recs])
-        ait = np.array([aitchison_distance(r["nominal"], r["mean"]) for r in recs])
-        comp_n = comp / (comp.max() or 1.0) * 100
-        ait_n = ait / (ait.max() or 1.0) * 100
-        DARK, LIGHT, h = "#3a4453", "#b7bfc9", 0.38            # neutral metric colours
+        dom = [int(np.argmax(r["nominal"])) for r in recs]     # group by REAL (nominal) mix
+        # how far the predicted composition sits from the real one (0 = perfect),
+        # scaled to the worst case; technical metric is documented in the .md.
+        gap = np.array([composition_distance(r["nominal"], r["mean"]) for r in recs])
+        gap_n = gap / (gap.max() or 1.0) * 100
 
         bars, ypos, ynames, ycols, spans = [], [], [], [], []
         cursor, first = 0.0, True
@@ -249,30 +274,27 @@ class CompositionPage(QWidget):
             if not members:
                 continue
             if not first:
-                cursor -= 1.0                                 # gap between groups
+                cursor -= 0.8                                 # gap between groups
             first = False
-            members.sort(key=lambda k: -comp_n[k])            # worst on top
+            members.sort(key=lambda k: -gap_n[k])             # worst on top
             start = cursor
             for k in members:
-                bars.append((cursor, k)); ypos.append(cursor)
+                bars.append((cursor, k, si)); ypos.append(cursor)
                 ynames.append(recs[k]["name"].replace("_corrected", ""))
                 ycols.append(substance_color(SUBSTANCES[si], si))
                 cursor -= 1.0
             spans.append((si, (start + cursor + 1.0) / 2))
-        for y, k in bars:
-            ax.barh(y + h / 2, comp_n[k], height=h, color=DARK)
-            ax.barh(y - h / 2, ait_n[k], height=h, color=LIGHT)
+        for y, k, si in bars:
+            ax.barh(y, gap_n[k], height=0.66, alpha=0.85,
+                    color=substance_color(SUBSTANCES[si], si))
         ax.set_yticks(ypos); ax.set_yticklabels(ynames, fontsize=8)
         for t, c in zip(ax.get_yticklabels(), ycols):
             t.set_color(c)
         for si, yc in spans:                                  # dominance group tag
-            ax.text(104, yc, f"{SUBSTANCES[si]}-dom", va="center", ha="left", fontsize=9,
+            ax.text(103, yc, f"{SUBSTANCES[si]}-dom", va="center", ha="left", fontsize=9,
                     fontweight="bold", color=substance_color(SUBSTANCES[si], si))
-        ax.set_xlim(0, 122)
-        ax.set_xlabel("relative drift (% of worst)")
-        ax.legend(handles=[Patch(color=DARK, label="composition"),
-                           Patch(color=LIGHT, label="Aitchison")],
-                  fontsize=8, framealpha=0.0, labelcolor="black", loc="lower right")
+        ax.set_xlim(0, 120)
+        ax.set_xlabel("predicted vs real  —  drift (% of worst)")
         self.c_rel.fig.tight_layout(); self.c_rel.draw_idle()
 
     def _plot_recovery(self, res):
