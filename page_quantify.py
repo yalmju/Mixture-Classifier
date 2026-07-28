@@ -237,7 +237,7 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
 
 
 def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
-               model="langmuir", baseline=True, blank=None):
+               model="langmuir", baseline=True, blank=None, use_dl_quant=False):
     from calibration import _langmuir_B
     if cal is None:
         raise ValueError("load a calibration (a dilution-series folder or CSV) first.")
@@ -287,7 +287,18 @@ def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
                 "log_err": float("nan"), "example": None,
                 "example_true": None, "selectivity": float("nan")}
 
-    quants = [quantify(y, lab["P"], calib) for y in lab["val_specs"]]
+    B_predictor = None                       # NNLS fit_B unless the DL toggle is on
+    if use_dl_quant:
+        try:
+            from unmix_net import quantifier_from_calibration
+        except ImportError as e:
+            raise RuntimeError("DL spectrum→B needs PyTorch — "
+                               "install it with `pip install torch`") from e
+        dl_quant = quantifier_from_calibration(calib, lab["P"], epochs=50,
+                                               n_train=6000, seed=0)
+        B_predictor = dl_quant.predict_B_one
+    quants = [quantify(y, lab["P"], calib, B_predictor=B_predictor)
+              for y in lab["val_specs"]]
     true_flat, est_flat, col_flat = [], [], []
     for q, Ct in zip(quants, lab["val_true"]):
         for i in range(calib.n):
@@ -443,6 +454,14 @@ class QuantifyPage(QWidget):
                                       "the app's internal ALS baseline so it isn't "
                                       "applied twice")
         bcol.addWidget(self.chk_baselined); ctl.addLayout(bcol)
+        qcol = QVBoxLayout(); qcol.setSpacing(2)
+        _ql = QLabel("spectrum→B"); _ql.setObjectName("field"); qcol.addWidget(_ql)
+        self.chk_dlq = QCheckBox("DL")
+        self.chk_dlq.setToolTip("recover the validation mixtures' B with the ResNet1D "
+                                "quantifier (spectrum→B) instead of NNLS fit_B — a "
+                                "drift-robust drop-in. The calibration fit and θ→M "
+                                "inversion stay NNLS. Needs PyTorch.")
+        qcol.addWidget(self.chk_dlq); ctl.addLayout(qcol)
         self.src = QLabel("no calibration loaded"); self.src.setObjectName("field")
         ctl.addWidget(self.src); ctl.addStretch(1)
         fold_b = QPushButton("Load conc. folder…"); fold_b.setObjectName("ghost")
@@ -849,6 +868,7 @@ class QuantifyPage(QWidget):
                       peak_map=peak_map,
                       model="linear" if self.chk_linear.isChecked() else "langmuir",
                       baseline=not self.chk_baselined.isChecked(),
+                      use_dl_quant=self.chk_dlq.isChecked(),
                       blank=self._load_blank())     # Samples BLK → blank-based LOD
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self._thread = QThread(); self._worker = QuantWorker(params)

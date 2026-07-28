@@ -68,12 +68,17 @@ def _match_ref(tok, ref_names):
 def parse_mixture_label(basename, ref_names, base=None):
     """Read a true ratio from a filename by scanning <letters><digits> tokens and
     pairing each recognised substance with the number that follows it, e.g.
-    'TBZ1DQ3' → {TBZ:1, DQ:3}, 'THI001' → {THI:0.01}, 'DQ1TH3' → {DQ:1, THI:3}. A
-    ``base`` dict (the fixed components, e.g. {TBZ:1, DQ:1}) is applied first and any
-    named substance overrides it — so 'THI01' → {TBZ:1, DQ:1, THI:0.1}. Also accepts
-    the older 'A_B_1to3' form. Returns None if nothing recognised."""
+    'TBZ1DQ3' → {TBZ:1, DQ:3}, 'THI001' → {THI:0.01}, 'DQ1TH3' → {DQ:1, THI:3}. Also
+    accepts the older 'A_B_1to3' form. Returns None if nothing recognised.
+
+    The ``base`` dict (fixed components held constant across a series, e.g.
+    {TBZ:1, DQ:1}) is merged in ONLY to complete a filename that names a single varied
+    substance — 'THI01' → {TBZ:1, DQ:1, THI:0.1}. A filename that already names two or
+    more substances is treated as self-complete and the base is NOT injected, so a
+    binary like 'DQ1TH3' stays {DQ:1, THI:3} instead of silently gaining a phantom
+    TBZ:1 (which would corrupt its true ratio, response factors and recovery)."""
     low = basename.lower()
-    out = dict(base) if base else {}
+    named = {}                        # substances THIS filename names on its own
     matched = False
     # older explicit 'DQ_TBZ_1to3' style first (compounds then a NtoM ratio group)
     present = [n for n in ref_names if n.lower() in low]
@@ -82,9 +87,7 @@ def parse_mixture_label(basename, ref_names, base=None):
         order = sorted(present, key=lambda n: low.find(n.lower()))
         nums = [_decode_amount(x) for x in re.findall(r"\d+", m.group(1))]
         if len(nums) == len(order):
-            for c, v in zip(order, nums):
-                out[c] = v
-            return out
+            return {c: v for c, v in zip(order, nums)}   # ≥2 named → self-complete
     # token style: pair each substance with the number immediately after it
     toks = re.findall(r"[a-z]+|\d+", low)
     i = 0
@@ -92,9 +95,15 @@ def parse_mixture_label(basename, ref_names, base=None):
         if toks[i].isalpha():
             c = _match_ref(toks[i], ref_names)
             if c and i + 1 < len(toks) and toks[i + 1].isdigit():
-                out[c] = _decode_amount(toks[i + 1]); matched = True; i += 2; continue
+                named[c] = _decode_amount(toks[i + 1]); matched = True; i += 2; continue
         i += 1
-    return out if matched else None
+    if not matched:
+        return None
+    # merge the fixed-components base only to complete a single-substance filename;
+    # a file naming ≥2 substances stands on its own (no phantom-component injection)
+    if base and len(named) < 2:
+        out = dict(base); out.update(named); return out
+    return named
 
 
 def _response_factors(rows, names):

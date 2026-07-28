@@ -123,13 +123,23 @@ def concentration_from_coverage(theta, K):
     return C
 
 
-def quantify(Y, P, calib: Calibration, present=None):
+def quantify(Y, P, calib: Calibration, present=None, B_predictor=None):
     """Full read-out for one mixture spectrum Y.
 
     present : optional index list of compounds detected in Y; others are
               forced to zero so absent compounds don't get phantom M.
+    B_predictor : optional callable ``Y -> B`` (n_comp,) that replaces the NNLS
+              ``fit_B`` for the single Y->B step — the drift-robust learned map
+              from ``unmix_net.ResNet1DQuantifier`` (drop-in). None keeps NNLS.
+              Everything downstream (θ → absolute M) is unchanged either way.
     Returns a dict (all arrays aligned to calib.names)."""
-    B, residual = fit_B(Y, P)
+    if B_predictor is None:
+        B, residual = fit_B(Y, P)
+    else:
+        Y = np.asarray(Y, float)
+        B = np.clip(np.asarray(B_predictor(Y), float).ravel(), 0.0, None)
+        recon = B @ np.asarray(P, float)                # residual for parity with NNLS
+        residual = float(np.linalg.norm(Y - recon) / (np.linalg.norm(Y) + 1e-12))
     if present is not None:
         mask = np.zeros(calib.n, bool); mask[list(present)] = True
         B = np.where(mask, B, 0.0)

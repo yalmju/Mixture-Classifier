@@ -95,9 +95,13 @@ def _templates(data_dir, baseline, progress):
 
 def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
               min_frac=0.05, hit_mode="threshold", calib_path=None,
-              progress=None) -> UnmixResult:
+              use_dl_quant=False, progress=None) -> UnmixResult:
     """Unmix ``test_path`` against the substances in ``data_dir`` (background
-    included) by ``method`` ('nnls' or 'mcr'). ``hit_mode`` decides which pixels
+    included) by ``method`` ('nnls', 'mcr' or 'dl' — the ResNet1D unmixer, which
+    trains once on the references and predicts each pixel's composition, robust to
+    the drift that smears fixed-template NNLS). ``use_dl_quant`` routes the optional
+    per-pixel µM step (when ``calib_path`` is set) through the DL spectrum->B map
+    instead of NNLS ``fit_B``. ``hit_mode`` decides which pixels
     count as a substance rather than background: 'auto' uses the learned background
     directly (a pixel is a hit when its strongest component is a substance, not the
     blank — threshold-free), 'threshold' uses ``min_frac`` (the substances must make
@@ -126,6 +130,19 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         if progress:
             progress("MCR-ALS refining component spectra")
         A, templates = _mcr_als(X, templates, progress=progress)
+    elif method == "dl":
+        if progress:
+            progress("training ResNet1D unmixer on the references")
+        try:
+            from unmix_net import unmixer_from_templates
+        except ImportError as e:                       # torch is an optional extra
+            raise RuntimeError("the ResNet1D (DL) method needs PyTorch — "
+                               "install it with `pip install torch`") from e
+        net = unmixer_from_templates(names, templates, epochs=40, n_train=6000,
+                                     seed=0)           # trained on ALL K (bg incl.)
+        if progress:
+            progress("DL unmixing — predicting composition")
+        A = net.predict_abundance(X)                   # softmax rows sum to 1
     else:
         A = np.zeros((len(X), K))
         for i, y in enumerate(X):
@@ -158,7 +175,8 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         nb_names = [names[i] for i in nonbg]
         pures = ref_templates[nonbg]                       # calibrate against the references
         conc, pp_theta, calib_r2 = _quantify_map(
-            calib_path, nb_names, pures, spectra, wn, trim, baseline, hit, progress)
+            calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
+            use_dl_quant=use_dl_quant, progress=progress)
         conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
         calibrated = True
 
@@ -172,9 +190,11 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
 
 
 def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
-                  progress=None):
+                  use_dl_quant=False, progress=None):
     """Absolute concentration (M) per pixel for the non-background substances, from
-    a dilution-series calibration. Returns (conc (n,Knb), theta (n,), r2 (Knb,))."""
+    a dilution-series calibration. Returns (conc (n,Knb), theta (n,), r2 (Knb,)).
+    ``use_dl_quant`` swaps the NNLS Y->B fit inside ``quantify`` for the drift-robust
+    ResNet1D spectrum->B map (the calibration itself stays NNLS)."""
     axis_c, names_c, dils = load_calibration_csv(calib_path)
     cidx = {n: k for k, n in enumerate(names_c)}
     missing = [c for c in nb_names if c not in cidx]
@@ -194,6 +214,20 @@ def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
         raise ValueError("calibration axis does not match the reference maps "
                          f"({aligned[0][1].shape[1]} vs {pures.shape[1]} points).")
     calib = calibrate(aligned, pures, nb_names)
+
+    B_predictor = None                                 # NNLS fit_B unless DL asked
+    if use_dl_quant:
+        if progress:
+            progress("training DL quantifier (spectrum→B)")
+        try:
+            from unmix_net import quantifier_from_calibration
+        except ImportError as e:
+            raise RuntimeError("DL spectrum->B needs PyTorch — "
+                               "install it with `pip install torch`") from e
+        dl_quant = quantifier_from_calibration(calib, pures, epochs=50,
+                                               n_train=6000, seed=0)
+        B_predictor = dl_quant.predict_B_one
+
     r2 = np.zeros(len(nb_names))
     for k in range(len(nb_names)):
         C, B = np.asarray(calib.C_series[k]), np.asarray(calib.B_series[k])
@@ -205,7 +239,7 @@ def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
     for n, i in enumerate(idx):
         if progress and n % 300 == 0:
             progress(f"quantifying — pixel {n}/{len(idx)}")
-        q = quantify(spectra[i], pures, calib)
+        q = quantify(spectra[i], pures, calib, B_predictor=B_predictor)
         conc[i] = q["C"]; theta[i] = q["theta_total"]
     return conc, theta, r2
 

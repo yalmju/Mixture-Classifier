@@ -115,19 +115,21 @@ class ValidatePage(QWidget):
         root.addLayout(kpis)
 
         body = QVBoxLayout(); body.setSpacing(12)
-        self.c_parity = Canvas(); self.c_resp = Canvas(); self.c_corr = Canvas()
+        # hero row: the two figures that matter most — Recovery and Relative drift
+        self.c_recov = Canvas(); self.c_drift = Canvas(); self.c_resp = Canvas()
         prow = QHBoxLayout(); prow.setSpacing(12)
         for cv, title in [
-            (self.c_parity, "Observed (surface) vs true ratio — points above the line "
-                            "are over-reported"),
-            (self.c_corr, "Corrected (solution) vs true ratio — should sit on the line"),
+            (self.c_recov, "Recovery — measured / true concentration (needs a "
+                           "calibration); ◇ = mean, band = 80–120%"),
+            (self.c_drift, "Relative drift — reported / true ratio; ● observed, "
+                           "○ corrected (should fall to 1×)"),
         ]:
-            card, lay = _card(title); lay.addWidget(cv); cv.setMinimumHeight(320)
+            card, lay = _card(title); lay.addWidget(cv); cv.setMinimumHeight(380)
             prow.addWidget(card, 1)
         prow_w = QWidget(); prow_w.setLayout(prow); body.addWidget(prow_w)
         rcard, rlay = _card("Response factor per substance (×, relative — higher = "
                             "dominates the surface signal)")
-        rlay.addWidget(self.c_resp); self.c_resp.setMinimumHeight(300)
+        rlay.addWidget(self.c_resp); self.c_resp.setMinimumHeight(240)
         body.addWidget(rcard)
 
         bodyw = QWidget(); bodyw.setLayout(body)
@@ -135,8 +137,8 @@ class ValidatePage(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(bodyw)
         scroll.setStyleSheet("QScrollArea{background:transparent;}")
         root.addWidget(scroll, 1)
-        for cv, m in [(self.c_parity, "Add mixtures, then Validate"),
-                      (self.c_corr, "Corrected ratio appears here"),
+        for cv, m in [(self.c_recov, "Recovery appears here (load a calibration)"),
+                      (self.c_drift, "Relative drift appears here — add mixtures, then Validate"),
                       (self.c_resp, "Response factors appear here")]:
             cv.placeholder(m)
 
@@ -282,7 +284,7 @@ class ValidatePage(QWidget):
         e0 = self._mean_err([r["obs"] for r in res.rows], res.rows, names)
         e1 = self._mean_err(res.corrected, res.rows, names)
         self.k_err.set(f"{e0:.0%} → {e1:.0%}", BLUE)
-        self._plot_parity(res); self._plot_corr(res); self._plot_resp(res)
+        self._plot_recovery(res); self._plot_drift(res); self._plot_resp(res)
         rf = "  ·  ".join(f"{n} {res.response[n]:.2f}×" for n in names)
         dom = max(res.response, key=res.response.get)
         txt = (f"<b>response factors</b> (anchor {res.ref}): {rf}<br>"
@@ -316,26 +318,73 @@ class ValidatePage(QWidget):
         return float(np.mean(errs)) if errs else 0.0
 
     # ---- plots ----
-    def _plot_parity(self, res, corrected=False, canvas=None, title_obs="observed"):
-        cv = canvas or self.c_parity
-        ax = cv.new_ax()
+    @staticmethod
+    def _jit(i, n, sp=0.14):
+        return (i + np.linspace(-sp, sp, n)) if n > 1 else np.array([float(i)])
+
+    def _plot_recovery(self, res):
+        """Hero #1 — apparent recovery (measured / true concentration) per substance,
+        a point per mixture on a log axis with the ◇ mean and the 80–120% band. Needs
+        a calibration; otherwise shows a hint."""
+        cv = self.c_recov; ax = cv.new_ax()
         names = res.names
-        fracs = res.corrected if corrected else [r["obs"] for r in res.rows]
+        rec = res.recovery or []
+        if not (getattr(res, "calibrated", False) and any(rec)):
+            ax.text(0.5, 0.5, "load a calibration + true concentrations\n"
+                    "(e.g. DQ:100uM) to see recovery",
+                    ha="center", va="center", color=MUTE, fontsize=11,
+                    transform=ax.transAxes)
+            ax.set_xticks([]); ax.set_yticks([])
+            cv.fig.tight_layout(); cv.draw_idle(); return
+        ax.axhspan(80, 120, color=TEAL, alpha=0.08, zorder=0)
+        ax.axhline(100, color=MUTE, ls="--", lw=1.1, zorder=1)
         for i, n in enumerate(names):
+            pts = [r[n] for r in rec if n in r and np.isfinite(r[n]) and r[n] > 0]
+            if not pts:
+                continue
             col = SERIES[i % len(SERIES)]
-            xs = [r["true"].get(n, 0.0) for r in res.rows]
-            ys = [f[n] if isinstance(f, dict) else f[i] for f in fracs]
-            ax.scatter(xs, ys, color=col, s=42, edgecolors="white", linewidths=0.6,
-                       label=n, zorder=3)
-        ax.plot([0, 1], [0, 1], color=MUTE, ls="--", lw=1.0, zorder=1)
-        ax.set_xlim(-0.02, 1.02); ax.set_ylim(-0.02, 1.02); ax.set_aspect("equal")
-        ax.set_xlabel("true fraction"); ax.set_ylabel(f"{title_obs} fraction")
-        ax.legend(fontsize=8, framealpha=0.0, labelcolor=MUTE)
+            ax.scatter(self._jit(i, len(pts)), pts, color=col, s=60,
+                       edgecolors="white", linewidths=1, zorder=3)
+            m = float(np.mean(pts))
+            ax.scatter([i], [m], marker="D", s=140, color=col, edgecolors=INK,
+                       linewidths=1.1, zorder=4)
+            ax.text(i, max(pts) * 1.15, f"{m:.0f}%", ha="center", fontweight="bold",
+                    color=col, fontsize=11)
+        ax.set_yscale("log")
+        ax.set_xticks(range(len(names))); ax.set_xticklabels(names, fontsize=11)
+        ax.set_ylabel("recovery (measured / true, %)")
+        ax.grid(axis="y", color="#eef1f4", lw=1); ax.set_axisbelow(True)
         cv.fig.tight_layout(); cv.draw_idle()
 
-    def _plot_corr(self, res):
-        self._plot_parity(res, corrected=True, canvas=self.c_corr,
-                          title_obs="corrected (solution)")
+    def _plot_drift(self, res):
+        """Hero #2 — relative drift = reported / true ratio as log2, a point per
+        mixture: ● observed (surface) vs ○ corrected (after response factors). A good
+        correction pulls the open markers onto the 1× line."""
+        cv = self.c_drift; ax = cv.new_ax()
+        names = res.names
+        ax.axhline(0, color=MUTE, ls="--", lw=1.1, zorder=1)
+        for i, n in enumerate(names):
+            col = SERIES[i % len(SERIES)]
+            ob = [np.log2(r["obs"][n] / r["true"][n]) for r in res.rows
+                  if r["true"].get(n, 0) > 0 and r["obs"].get(n, 0) > 0]
+            cr = [np.log2(c[n] / r["true"][n]) for c, r in zip(res.corrected, res.rows)
+                  if r["true"].get(n, 0) > 0 and c.get(n, 0) > 0]
+            if ob:
+                ax.scatter(self._jit(i - 0.19, len(ob), 0.10), ob, color=col, s=54,
+                           edgecolors="white", linewidths=0.9, zorder=3)
+                ax.scatter([i - 0.19], [np.mean(ob)], marker="D", s=120, color=col,
+                           edgecolors=INK, linewidths=1.0, zorder=4)
+            if cr:
+                ax.scatter(self._jit(i + 0.19, len(cr), 0.10), cr, facecolors="white",
+                           edgecolors=col, linewidths=1.5, s=54, zorder=3)
+                ax.scatter([i + 0.19], [np.mean(cr)], marker="D", s=120,
+                           facecolors="white", edgecolors=col, linewidths=1.5, zorder=4)
+        ax.set_yticks([-2, -1, 0, 1, 2, 3])
+        ax.set_yticklabels(["0.25×", "0.5×", "1×", "2×", "4×", "8×"])
+        ax.set_xticks(range(len(names))); ax.set_xticklabels(names, fontsize=11)
+        ax.set_ylabel("reported / true  (over-reported ↑)")
+        ax.grid(axis="y", color="#eef1f4", lw=1); ax.set_axisbelow(True)
+        cv.fig.tight_layout(); cv.draw_idle()
 
     def _plot_resp(self, res):
         ax = self.c_resp.new_ax()
@@ -382,8 +431,8 @@ class ValidatePage(QWidget):
                     + [f"{rec.get(n, ''):.1f}" if rec.get(n) is not None else "" for n in res.names]
             rows.append(row)
         write_csv(os.path.join(d, "validation_table.csv"), head, rows)
-        n = _save_figs([("validate_parity", self.c_parity),
-                        ("validate_corrected", self.c_corr),
+        n = _save_figs([("validate_recovery", self.c_recov),
+                        ("validate_drift", self.c_drift),
                         ("validate_response", self.c_resp)], d)
         self.status.setText(f"exported response_factors.csv + table + {n} PNG → {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")

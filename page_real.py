@@ -1,6 +1,8 @@
-"""page_real.py — Real data tab: unmix one test map (NNLS or MCR-ALS, selectable).
-A band-intensity image, a per-pixel composition pie map, the spectrum of a clicked
-pixel, and the overall composition. Background is unmixed as its own component."""
+"""page_real.py — Real data tab: unmix one test map (NNLS, MCR-ALS or the ResNet1D
+DL unmixer, selectable). A band-intensity image, a per-pixel composition pie map,
+the spectrum of a clicked pixel, and the overall composition. Background is unmixed
+as its own component. With a calibration loaded, the per-pixel spectrum→B step can
+also run through the DL quantifier (drift-robust drop-in for NNLS fit_B)."""
 from __future__ import annotations
 
 import os
@@ -51,7 +53,7 @@ class RealWorker(QObject):
 
 class RealDataPage(QWidget):
     METHODS = [("NNLS (fixed refs)", "nnls"), ("MCR-ALS (refine)", "mcr"),
-               ("Trained model", "model")]
+               ("ResNet1D (DL)", "dl"), ("Trained model", "model")]
 
     def __init__(self):
         super().__init__()
@@ -71,7 +73,8 @@ class RealDataPage(QWidget):
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Real-data analysis — unmix a test map"); h1.setObjectName("h1")
         sub = QLabel("Unmix one test map against your references (background "
-                     "included) by NNLS or MCR-ALS. A band-intensity image, a "
+                     "included) by NNLS, MCR-ALS or the ResNet1D DL unmixer. A "
+                     "band-intensity image, a "
                      "per-pixel composition pie map, and the overall composition — "
                      "click any pixel to see its spectrum. References + preprocessing "
                      "come from Samples.")
@@ -99,6 +102,15 @@ class RealDataPage(QWidget):
         self.cal_x = QPushButton("✕"); self.cal_x.setObjectName("ghost")
         self._compact_x(self.cal_x, "clear calibration")
         self.cal_x.clicked.connect(self._clear_calib); self.cal_x.setVisible(False)
+        self.chk_dlq = QCheckBox("DL spectrum→B")
+        self.chk_dlq.setToolTip("route the per-pixel spectrum→B step (the µM read-out, "
+                                "needs a calibration loaded) through the ResNet1D "
+                                "quantifier instead of NNLS fit_B — a drift-robust "
+                                "drop-in. The calibration + θ→M inversion stay NNLS. "
+                                "Needs PyTorch.")
+        dlqcol = QVBoxLayout(); dlqcol.setSpacing(2)
+        _dql = QLabel("concentration"); _dql.setObjectName("field")
+        dlqcol.addWidget(_dql); dlqcol.addWidget(self.chk_dlq)
         self.chk_auto = QCheckBox("auto (BLK)")
         self.chk_auto.setToolTip("threshold-free: a pixel is a substance when its "
                                  "strongest component is a substance (not the learned "
@@ -165,6 +177,7 @@ class RealDataPage(QWidget):
         ctl.addLayout(self.cmb_method)
         ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.cal_x)
+        ctl.addLayout(dlqcol)
         ctl.addLayout(hitcol); ctl.addLayout(self.thr); ctl.addLayout(flipcol)
         ctl.addLayout(relcol); ctl.addLayout(prescol)
         ctl.addWidget(corr_b); ctl.addLayout(corrcol)
@@ -358,7 +371,8 @@ class RealDataPage(QWidget):
                                            self.data_dir, "model (*.joblib);;all (*)")
         if p:
             self.model_path = p; self.model_lbl.setText(os.path.basename(p))
-            self.cmb_method.itemAt(1).widget().setCurrentIndex(2)   # switch to model
+            cb = self.cmb_method.itemAt(1).widget()                 # switch to model
+            cb.setCurrentIndex(cb.findData("model"))
 
     def _browse_calib(self):
         p, _ = QFileDialog.getOpenFileName(
@@ -497,7 +511,8 @@ class RealDataPage(QWidget):
                           method=self._method(), baseline=cfg["baseline"],
                           trim=cfg["trim"], min_frac=self.thr_value(),
                           hit_mode="auto" if self.chk_auto.isChecked() else "threshold",
-                          calib_path=self.calib_path)
+                          calib_path=self.calib_path,
+                          use_dl_quant=self.chk_dlq.isChecked())
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
         self._thread = QThread(); self._worker = RealWorker(params, use_model=use_model)
