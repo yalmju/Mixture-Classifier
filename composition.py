@@ -54,10 +54,21 @@ def _one_map(data_dir, path, baseline):
                 nominal=nominal_fraction(os.path.basename(path)))
 
 
-def compute_composition(data_dir, baseline=True, files=None, progress=None, use_cache=True):
+def ratio_to_frac(ratio):
+    """A {name: value} ratio dict → (DQ, TBZ, THI) fraction vector, or None."""
+    if not ratio:
+        return None
+    v = np.array([float(ratio.get(s, 0.0)) for s in SUBSTANCES])
+    return v / v.sum() if v.sum() > 0 else None
+
+
+def compute_composition(data_dir, baseline=True, files=None, nominals=None,
+                        progress=None, use_cache=True):
     """Unmix each map and return a list of per-map dicts: name, frac (n_pix×3),
     coords, hit, reliab, mean (3,), nominal (3,) or None. ``files`` is an explicit
-    list of map CSVs; if None, the Reference/Ratio mixtures are auto-discovered."""
+    list of map CSVs (else Reference/Ratio is auto-discovered). ``nominals`` is an
+    optional parallel list of true-ratio dicts (e.g. from the Validate table) that
+    overrides the file-name-parsed nominal."""
     files = list(files) if files else map_files(data_dir)
     if not files:
         raise FileNotFoundError(
@@ -80,6 +91,8 @@ def compute_composition(data_dir, baseline=True, files=None, progress=None, use_
         if rec is None:
             rec = _one_map(data_dir, p, baseline)
             cache[key] = rec
+        if nominals is not None:                          # true ratio from the caller
+            rec = dict(rec); rec["nominal"] = ratio_to_frac(nominals[i])
         out.append(rec)
     if use_cache:
         try:

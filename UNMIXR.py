@@ -31,7 +31,6 @@ from page_model import ModelPage
 from page_quantify import QuantifyPage
 from page_validate import ValidatePage
 from page_real import RealDataPage
-from page_composition import CompositionPage
 
 
 # --------------------------------------------------------------------------
@@ -43,9 +42,9 @@ class MainWindow(QMainWindow):
         ("Samples",   "samples", "Group your maps into substance classes (batches)"),
         ("Model",     "model", "Train a classifier on your reference maps"),
         ("Quantify",  "quant", "Ratio → concentration + adsorption competition"),
-        ("Validate",  "valid", "Known-ratio mixtures → response factors (surface vs solution)"),
+        ("Validate",  "valid", "Known-ratio mixtures → response factors + composition "
+                               "(colour blend · drift · recovery)"),
         ("Real data", "real",  "Analyze real maps: composition · mixtures · µM · calibration"),
-        ("Composition", "comp", "Composition colour blend · drift · apparent recovery"),
     ]
 
     def __init__(self):
@@ -100,9 +99,8 @@ class MainWindow(QMainWindow):
             "quant": QuantifyPage(),
             "valid": ValidatePage(),
             "real": RealDataPage(),
-            "comp": CompositionPage(),
         }
-        for key in ("samples", "model", "quant", "valid", "real", "comp"):
+        for key in ("samples", "model", "quant", "valid", "real"):
             self.stack.addWidget(self.pages[key])
 
         self.select("samples")

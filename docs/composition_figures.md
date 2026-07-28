@@ -1,6 +1,9 @@
-# Composition tab — figures & metrics
+# Composition figures & metrics (in the Validate tab)
 
-The **Composition** tab reuses the app's own NNLS unmixing
+These figures live in the **Validate** tab (below the response-factor plots) — the
+same known-ratio mixtures drive both the correction (response factors) and this
+composition view, so nothing is loaded or unmixed twice from the user's side.
+They reuse the app's own NNLS unmixing
 (`unmix.unmix_map`: L2-normalised template + non-negative least squares, with the
 `BLK` blank held out as a background class) to read out, per reference/mixture
 map, the **composition** (as a colour blend), the **predicted → real drift**, and

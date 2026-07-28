@@ -16,11 +16,15 @@ from PyQt6.QtWidgets import (
     QHeaderView, QAbstractItemView, QLineEdit,
 )
 
+from matplotlib.colors import to_rgb
+from matplotlib.patches import FancyArrowPatch
+
 from ui_common import *
 from real_data import PEST_DEFAULT
 from dataset import load_preprocess
 from io_utils import write_csv
 from validate import validate_mixtures, parse_mixture_label, parse_amount
+from composition import compute_composition, SUBSTANCES, bary, composition_distance
 
 
 class ValidateWorker(QObject):
@@ -34,7 +38,10 @@ class ValidateWorker(QObject):
 
     def run(self):
         try:
-            self.done.emit(validate_mixtures(progress=self.progress.emit, **self.params))
+            vres = validate_mixtures(progress=self.progress.emit, **self.params["validate"])
+            cp = self.params.get("composition")
+            cres = compute_composition(progress=self.progress.emit, **cp) if cp else None
+            self.done.emit((vres, cres))
         except Exception:
             self.fail.emit(traceback.format_exc())
 
@@ -44,6 +51,7 @@ class ValidatePage(QWidget):
         super().__init__()
         self._thread = None
         self._res = None
+        self._cres = None                # composition (per-pixel) result
         COLOR_BUS.changed.connect(self._recolor)     # top-bar picker → recolour
         self._files = []                 # full paths, aligned with table rows
         self.data_dir = PEST_DEFAULT
@@ -131,6 +139,24 @@ class ValidatePage(QWidget):
         rlay.addWidget(self.c_resp); self.c_resp.setMinimumHeight(300)
         body.addWidget(rcard)
 
+        # ---- composition view (colour blend · drift · recovery) ----
+        self.c_maps = Canvas(); self.c_tri = Canvas()
+        self.c_rel = Canvas(); self.c_rec = Canvas()
+        mcard, mlay = _card("Composition maps — per-pixel colour blend of each mixture")
+        mlay.addWidget(self.c_maps); self.c_maps.setMinimumHeight(320)
+        body.addWidget(mcard)
+        crow = QHBoxLayout(); crow.setSpacing(12)
+        for cv, title in [
+            (self.c_tri, "Drift — real → predicted composition (arrows), corners = recovery"),
+            (self.c_rec, "Apparent recovery (predicted / real, mean ± SE over mixtures)"),
+        ]:
+            card, lay = _card(title); lay.addWidget(cv); cv.setMinimumHeight(300)
+            crow.addWidget(card, 1)
+        crow_w = QWidget(); crow_w.setLayout(crow); body.addWidget(crow_w)
+        dcard, dlay = _card("Relative drift — predicted vs real, grouped by dominant substance")
+        dlay.addWidget(self.c_rel); self.c_rel.setMinimumHeight(300)
+        body.addWidget(dcard)
+
         bodyw = QWidget(); bodyw.setLayout(body)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(bodyw)
@@ -138,7 +164,11 @@ class ValidatePage(QWidget):
         root.addWidget(scroll, 1)
         for cv, m in [(self.c_parity, "Add mixtures, then Validate"),
                       (self.c_corr, "Corrected ratio appears here"),
-                      (self.c_resp, "Response factors appear here")]:
+                      (self.c_resp, "Response factors appear here"),
+                      (self.c_maps, "Composition colour maps appear here"),
+                      (self.c_tri, "Drift triangle appears here"),
+                      (self.c_rec, "Recovery appears here"),
+                      (self.c_rel, "Relative drift appears here")]:
             cv.placeholder(m)
 
         self.readout = QLabel(""); self.readout.setObjectName("sub")
@@ -251,9 +281,13 @@ class ValidatePage(QWidget):
             self.status.setText("add ≥1 mixture with a true ratio (e.g. DQ:1, TBZ:3)")
             self.status.setStyleSheet(f"color:{RED};"); return
         cfg = load_preprocess(self.data_dir)
-        params = dict(data_dir=self.data_dir, items=items, method="nnls",
-                      baseline=cfg["baseline"], trim=cfg["trim"],
-                      calib_path=self.calib_path)
+        params = dict(
+            validate=dict(data_dir=self.data_dir, items=items, method="nnls",
+                          baseline=cfg["baseline"], trim=cfg["trim"],
+                          calib_path=self.calib_path),
+            composition=dict(data_dir=self.data_dir, baseline=cfg["baseline"],
+                             files=[it[0] for it in items],
+                             nominals=[it[1] for it in items]))
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
         self._thread = QThread(); self._worker = ValidateWorker(params)
@@ -272,8 +306,9 @@ class ValidatePage(QWidget):
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
 
-    def _apply(self, res):
-        self._res = res
+    def _apply(self, pair):
+        res, cres = pair if isinstance(pair, tuple) else (pair, None)
+        self._res = res; self._cres = cres
         self.btn.setEnabled(True); self.btn.setText("Validate")
         self.status.setText("done"); self.status.setStyleSheet(f"color:{MUTE};")
         names = res.names
@@ -284,6 +319,9 @@ class ValidatePage(QWidget):
         e1 = self._mean_err(res.corrected, res.rows, names)
         self.k_err.set(f"{e0:.0%} → {e1:.0%}", BLUE)
         self._plot_parity(res); self._plot_corr(res); self._plot_resp(res)
+        if cres:                                          # composition view
+            self._plot_maps(cres); self._plot_triangle(cres)
+            self._plot_reldrift(cres); self._plot_recovery(cres)
         rf = "  ·  ".join(f"{n} {res.response[n]:.2f}×" for n in names)
         dom = max(res.response, key=res.response.get)
         txt = (f"<b>response factors</b> (anchor {res.ref}): {rf}<br>"
@@ -320,7 +358,7 @@ class ValidatePage(QWidget):
     def _recolor(self):
         """Re-draw all plots when the shared substance colours change."""
         if self._res is not None:
-            self._apply(self._res)
+            self._apply((self._res, self._cres))
 
     def _plot_parity(self, res, corrected=False, canvas=None, title_obs="observed"):
         cv = canvas or self.c_parity
@@ -358,6 +396,149 @@ class ValidatePage(QWidget):
         ax.set_ylim(0, max(vals) * 1.2 + 0.2)
         self.c_resp.fig.tight_layout(); self.c_resp.draw_idle()
 
+    # ---- composition view (colour blend · drift · recovery) ----
+    def _rgb(self):
+        return np.array([to_rgb(substance_color(s, i)) for i, s in enumerate(SUBSTANCES)])
+
+    def _plot_maps(self, res):
+        C = self._rgb()
+        n = len(res)
+        nc = int(np.ceil(np.sqrt(n))); nr = int(np.ceil(n / nc))
+        self.c_maps.fig.clear()
+        for k, rec in enumerate(res):
+            ax = self.c_maps.fig.add_subplot(nr, nc, k + 1)
+            x, y = rec["coords"][:, 0], rec["coords"][:, 1]
+            ux, uy = np.unique(x), np.unique(y)
+            xi = {v: i for i, v in enumerate(ux)}; yi = {v: i for i, v in enumerate(uy)}
+            rows = np.array([yi[v] for v in y]); cols = np.array([xi[v] for v in x])
+            img = np.ones((len(uy), len(ux), 3))
+            blend = np.clip(rec["frac"] @ C, 0.0, 1.0); hit = rec["hit"]
+            img[rows[hit], cols[hit]] = blend[hit]
+            ax.imshow(img, origin="lower", interpolation="nearest", aspect="equal")
+            ax.set_xticks([]); ax.set_yticks([])
+            for s in ax.spines.values():
+                s.set_visible(False)
+            m = rec["mean"] * 100
+            ax.set_xlabel(f"{rec['name']}\nDQ{m[0]:.0f} TBZ{m[1]:.0f} THI{m[2]:.0f}",
+                          fontsize=8, color=INK, labelpad=2)
+        self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
+
+    def _recovery(self, res):
+        """Per-substance apparent recovery (%) over true mixtures (≥2 nominal
+        components); pure/dilution maps excluded. {substance: [pct, ...]}."""
+        per = {s: [] for s in SUBSTANCES}
+        for r in res:
+            nom = r["nominal"]
+            if nom is None or int(np.count_nonzero(nom)) < 2:
+                continue
+            for i, s in enumerate(SUBSTANCES):
+                if nom[i] > 0:
+                    per[s].append(r["mean"][i] / nom[i] * 100)
+        return per
+
+    def _tri_frame(self, ax, rec=None):
+        A, B, C = bary([1, 0, 0]), bary([0, 0, 1]), bary([0, 1, 0])   # DQ, THI, TBZ
+        ax.plot([A[0], B[0], C[0], A[0]], [A[1], B[1], C[1], A[1]], color=INK, lw=0.8)
+        cen = (A + B + C) / 3
+        for P, Q in [(A, B), (B, C), (C, A)]:              # quarter ticks per edge
+            u = Q - P
+            n = np.array([-u[1], u[0]]); n = n / (np.hypot(*n) + 1e-9)
+            if np.dot(n, (P + Q) / 2 - cen) < 0:
+                n = -n
+            for t in (0.25, 0.5, 0.75):
+                pt = P + t * u
+                ax.plot([pt[0], pt[0] + 0.022 * n[0]], [pt[1], pt[1] + 0.022 * n[1]],
+                        color=MUTE, lw=0.7, zorder=1)
+        for f, s, ha, va, dx, dy in [([1, 0, 0], "DQ", "center", "bottom", 0, 0.04),
+                                     ([0, 0, 1], "THI", "right", "top", -0.03, -0.03),
+                                     ([0, 1, 0], "TBZ", "left", "top", 0.03, -0.03)]:
+            p = bary(f)
+            lab = s
+            if rec and rec.get(s):
+                v = rec[s]
+                se = np.std(v, ddof=1) / np.sqrt(len(v)) if len(v) > 1 else 0.0
+                lab = f"{s}\n{np.mean(v):.0f}±{se:.0f}%"
+            ax.text(p[0] + dx, p[1] + dy, lab, ha=ha, va=va, fontsize=10, linespacing=1.1,
+                    fontweight="bold", color=substance_color(s, SUBSTANCES.index(s)))
+        ax.set_aspect("equal"); ax.axis("off")
+
+    def _plot_triangle(self, res):
+        ax = self.c_tri.new_ax()
+        self._tri_frame(ax, self._recovery(res))
+        for rec in res:
+            if rec["nominal"] is None:
+                continue
+            p0 = bary(rec["nominal"]); p1 = bary(rec["mean"])
+            dom = int(np.argmax(rec["nominal"]))
+            col = substance_color(SUBSTANCES[dom], dom)
+            if np.linalg.norm(p1 - p0) > 1e-3:
+                ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=9,
+                                             color="#98a1ac", lw=1.1, zorder=2))
+            ax.scatter(*p1, s=38, color=col, edgecolors="white", linewidths=0.6, zorder=4)
+        ax.set_xlim(-0.12, 1.12); ax.set_ylim(-0.10, 1.06)
+        self.c_tri.fig.tight_layout(); self.c_tri.draw_idle()
+
+    def _plot_reldrift(self, res):
+        ax = self.c_rel.new_ax()
+        recs = [r for r in res if r["nominal"] is not None]
+        if not recs:
+            self.c_rel.placeholder("no nominal ratios"); return
+        dom = [int(np.argmax(r["nominal"])) for r in recs]
+        gap = np.array([composition_distance(r["nominal"], r["mean"]) for r in recs])
+        gap_n = gap / (gap.max() or 1.0) * 100
+        bars, ypos, ynames, ycols, spans = [], [], [], [], []
+        cursor, first = 0.0, True
+        for si in (2, 1, 0):                                   # THI-, TBZ-, DQ-dominant
+            members = [k for k in range(len(recs)) if dom[k] == si]
+            if not members:
+                continue
+            if not first:
+                cursor -= 0.8
+            first = False
+            members.sort(key=lambda k: -gap_n[k])
+            start = cursor
+            for k in members:
+                bars.append((cursor, k, si)); ypos.append(cursor)
+                ynames.append(recs[k]["name"].replace("_corrected", ""))
+                ycols.append(substance_color(SUBSTANCES[si], si))
+                cursor -= 1.0
+            spans.append((si, (start + cursor + 1.0) / 2))
+        for y, k, si in bars:
+            ax.barh(y, gap_n[k], height=0.66, alpha=0.85,
+                    color=substance_color(SUBSTANCES[si], si))
+        ax.set_yticks(ypos); ax.set_yticklabels(ynames, fontsize=8)
+        for t, c in zip(ax.get_yticklabels(), ycols):
+            t.set_color(c)
+        for si, yc in spans:
+            ax.text(103, yc, f"{SUBSTANCES[si]}-dom", va="center", ha="left", fontsize=9,
+                    fontweight="bold", color=substance_color(SUBSTANCES[si], si))
+        ax.set_xlim(0, 120)
+        ax.set_xlabel("predicted vs real  —  drift (% of worst)")
+        self.c_rel.fig.tight_layout(); self.c_rel.draw_idle()
+
+    def _plot_recovery(self, res):
+        ax = self.c_rec.new_ax()
+        per = self._recovery(res)
+        x = np.arange(len(SUBSTANCES))
+        for i, s in enumerate(SUBSTANCES):
+            col = substance_color(s, i)
+            v = per[s]
+            mu = float(np.mean(v)) if v else 0.0
+            se = float(np.std(v, ddof=1) / np.sqrt(len(v))) if len(v) > 1 else 0.0
+            ax.bar(i, mu, width=0.6, color=col, alpha=0.45, yerr=se, capsize=4,
+                   error_kw=dict(ecolor=INK, elinewidth=0.9))
+            if v:
+                ax.scatter(np.full(len(v), i), v, s=18, color=col,
+                           edgecolors="white", linewidths=0.5, zorder=3)
+                ax.text(i, max(v) + 4, f"{mu:.0f}±{se:.0f}%", ha="center", va="bottom",
+                        fontsize=9, color=INK)
+        ax.axhline(100, color=MUTE, ls="--", lw=1.0)
+        ax.set_xticks(x); ax.set_xticklabels(SUBSTANCES)
+        ax.set_ylabel("apparent recovery (%)")
+        allv = [w for s in SUBSTANCES for w in per[s]] + [100]
+        ax.set_ylim(0, max(allv) * 1.15 + 8)
+        self.c_rec.fig.tight_layout(); self.c_rec.draw_idle()
+
     # ---- export ----
     def _export(self):
         if self._res is None:
@@ -388,8 +569,12 @@ class ValidatePage(QWidget):
                     + [f"{rec.get(n, ''):.1f}" if rec.get(n) is not None else "" for n in res.names]
             rows.append(row)
         write_csv(os.path.join(d, "validation_table.csv"), head, rows)
-        n = _save_figs([("validate_parity", self.c_parity),
-                        ("validate_corrected", self.c_corr),
-                        ("validate_response", self.c_resp)], d)
+        figs = [("validate_parity", self.c_parity),
+                ("validate_corrected", self.c_corr),
+                ("validate_response", self.c_resp)]
+        if self._cres:                                   # composition view
+            figs += [("composition_maps", self.c_maps), ("drift_triangle", self.c_tri),
+                     ("relative_drift", self.c_rel), ("recovery", self.c_rec)]
+        n = _save_figs(figs, d)
         self.status.setText(f"exported response_factors.csv + table + {n} PNG → {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
