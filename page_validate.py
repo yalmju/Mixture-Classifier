@@ -372,7 +372,7 @@ class ValidatePage(QWidget):
             ax.scatter(xs, ys, color=col, s=42, edgecolors="white", linewidths=0.6,
                        label=n, zorder=3)
         ax.plot([0, 1], [0, 1], color=MUTE, ls="--", lw=1.0, zorder=1)
-        ax.set_xlim(-0.02, 1.02); ax.set_ylim(-0.02, 1.02); ax.set_aspect("equal")
+        ax.set_xlim(-0.02, 1.02); ax.set_ylim(-0.02, 1.02)   # fill panel (uniform export size)
         ax.set_xlabel("true fraction"); ax.set_ylabel(f"{title_obs} fraction")
         ax.legend(fontsize=10, framealpha=0.0, labelcolor="black")
         cv.fig.tight_layout(); cv.draw_idle()
@@ -414,7 +414,7 @@ class ValidatePage(QWidget):
             img = np.ones((len(uy), len(ux), 3))
             blend = np.clip(rec["frac"] @ C, 0.0, 1.0); hit = rec["hit"]
             img[rows[hit], cols[hit]] = blend[hit]
-            ax.imshow(img, origin="lower", interpolation="nearest", aspect="equal")
+            ax.imshow(img, origin="lower", interpolation="nearest", aspect="auto")
             ax.set_xticks([]); ax.set_yticks([])
             for s in ax.spines.values():
                 s.set_visible(False)
