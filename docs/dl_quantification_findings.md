@@ -39,56 +39,79 @@ Both are UI-agnostic (numpy + lazy torch, mirroring `model_training.py`).
 
 ![benchmark](dl_findings.png)
 
+**Binary (2-component), leave-one-map-out CV, 28 mixtures**
+
 | | mean spectrum (28) | per-pixel (3,360) |
 |---|---|---|
 | NNLS (no correction) | 27.5% | 28.0% |
 | linear response factor | **21.3%** | 23.2% |
 | DL residual (this work) | 21.8% | 26.8% |
 
+**Ternary (3-component), train on the 28 binary → predict 7 *unseen* ternary mixtures**
+
+| method | error | ablation of the DL |  |
+|---|---|---|---|
+| NNLS | 45.2% | physics pretrain only (no real) | 50.8% |
+| linear response factor | 42.7% | real binary fine-tune only | 35.0% |
+| **DL residual** | **33.4%** | physics + binary (full) | **33.4%** |
+
 - **Track A** (spectrum→µM, physics-simulated): on real mixtures it **matches NNLS**
-  (both ≈ 27.5% ratio error). Expected — A learns to invert the *same* analytic model
-  NNLS already inverts. Under a *stable gain* it recovers absolute µM at
-  **91–102% median recovery** on held-out synthetic data; the accuracy ceiling is set by
-  substrate-gain drift (absolute magnitude ⇒ concentration is unidentifiable without an
-  internal standard), not by the model.
-- **Track B** (residual correction): correction **works** — 27.5% → ~21%. But the
-  **DL residual does not beat the 3-parameter linear response-factor model.**
-- **Per-pixel does not help** (it makes DL *worse*). A map's hundreds of pixels share one
-  true ratio and one competition state; pixel-to-pixel variation is hotspot **noise**, not
-  new composition/concentration information. The number of *independent* surface→solution
-  examples is the number of **distinct compositions (28)**, not the pixel count. Extra
-  pixels just add noise the DL overfits — and averaging (mean spectrum) beats per-pixel for
-  every method.
+  (both ≈ 27.5% ratio error) — A learns to invert the *same* analytic model NNLS already
+  inverts. Under a *stable gain* it recovers absolute µM at **91–102% median recovery** on
+  held-out synthetic data; the accuracy ceiling is substrate-gain drift (magnitude ⇒
+  concentration is unidentifiable without an internal standard), not the model.
+- **Binary Track B**: correction **works** (27.5% → ~21%), but the DL residual only **ties**
+  the 3-parameter linear response factor — two-component competition in the measured regime
+  is well approximated by constant response factors, so the simple model is already optimal.
+- **Ternary generalization — the DL earns its edge.** Trained on the binary mixtures and
+  applied to the *unseen* 3-component mixtures, the DL cuts error to **33.4% vs 42.7%** for
+  the linear response factor (−9 pts). Three-way competition is where constant response
+  factors break (they cannot represent the joint denominator 1 + ΣKC), and the nonlinear
+  model recovers the buried components far better (e.g. `THI1TBZ1-DQ001` true 0/0.50/0.50 →
+  NNLS & RF predict 0/0/**1.00** total-THI, DL **0.10/0.06/0.84**).
+- **Ablation:** the win is driven by the **real binary data** through a nonlinear model
+  (35.0% alone), *not* by the simulator — physics-pretrain-only generalizes worst (50.8%,
+  the sim-to-real gap), and physics pretrain adds only a marginal boost on top (→ 33.4%).
+- **Per-pixel does not help** (it makes DL *worse*). A map's pixels share one true ratio;
+  pixel variation is hotspot **noise**, not new information. The independent-example count is
+  the number of **distinct compositions**, not pixels — averaging (mean spectrum) beats
+  per-pixel for every method.
 
 ## Interpretation (for the general goal)
 
-The binding constraint here is **not model capacity or pixel count — it is the number of
-distinct compositions/concentrations sampled.** With 3 compounds and 28 mixtures on a
-simple, analytically-invertible Langmuir system, the linear response-factor model is
-already the right-sized estimator, so a flexible DL cannot add value *on this system*.
+The value of the flexible model is **not** on the easy case (2-component, analytically
+invertible), where the 3-parameter linear response factor is already the right-sized
+estimator and DL only ties. It appears exactly where the analytic/linear inverse **breaks**:
 
-This is exactly the case the physics-informed framework is built to grow beyond. DL's
-advantage should appear when:
-
-1. **The physics is not analytically invertible** — non-additive mixing, peak shifts,
-   matrix effects, saturation coupling. NNLS/linear-RF have no closed form there; a DL
-   trained on a richer simulator does.
-2. **More components** — linear response factors scale poorly as competition couples many
-   species; a learned inverse handles the joint structure.
+1. **More components / joint competition** — confirmed here: on unseen ternary mixtures the
+   DL beats linear RF by 9 points, because constant response factors cannot represent 3-way
+   competition. This is the direct evidence the direction is right.
+2. **Non-analytic physics** — non-additive mixing, peak shifts, matrix effects, saturation
+   coupling: no closed form for NNLS/RF; a learned inverse handles it.
 3. **Absolute concentration across the whole space** — the calibration-grounded simulator
    gives µM for compositions/concentrations never measured, which is the actual product.
 
-## What unlocks the DL advantage (next measurements)
+Crucially, the ablation shows the **real mixtures are essential** (pure synthetic
+under-generalizes) — so the collected data is not redundant with the physics; it is what
+teaches the model the real competition. The binding lever is the **diversity of measured
+compositions/concentrations**, which the ternary set begins to supply.
 
-- Sample **more distinct compositions**, and add a **concentration axis** (same ratio,
-  different total concentration): competition is concentration-dependent, so this is where a
-  learned model can exceed a concentration-independent response factor.
-- Enrich the **simulator** with the measured non-idealities (feed recovery's response
-  factors / competition into A, add realistic noise & baseline) to close the sim-to-real gap.
-- Add an **internal standard / ratio head** so absolute µM survives gain drift.
+## What widens the DL advantage (next measurements)
 
-Until then, the operating correction is the **linear response factor** (already in the
-Recovery tab): ~21% composition error, principled, no overfitting.
+The ternary result already shows DL ahead where it matters. To widen the lead and reach the
+general tool:
+
+- **More ternary + higher-order compositions** — 7 ternary points started the win; denser
+  interior sampling (and 4+ components) is where linear RF degrades fastest.
+- **Add a concentration axis** (same ratio, different total concentration): competition is
+  concentration-dependent (θ = KC/(1+ΣKC)), so a learned model exceeds a
+  concentration-independent response factor most in the saturation regime.
+- **Enrich the simulator** with measured non-idealities to shrink the sim-to-real gap the
+  ablation exposed (pure synthetic under-generalized at 50.8%).
+- **Internal standard / ratio head** so absolute µM survives substrate-gain drift.
+
+Operating recommendation: **linear response factor** for the simple 2-component regime
+(~21%, no overfitting); the **DL residual** for 3+ component mixtures, where it already wins.
 
 ---
 
