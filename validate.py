@@ -132,13 +132,25 @@ def correct_fractions(obs, response, names):
 
 
 def validate_mixtures(data_dir, items, method="nnls", baseline=True, trim=None,
-                      calib_path=None, progress=None) -> ValidateResult:
+                      calib_path=None, peak_map=None, progress=None) -> ValidateResult:
     """``items`` is a list of (map_path, true_ratio[, true_conc]) — true_ratio maps
     substance → true fraction, and the optional true_conc maps substance → true
     concentration (M). Each map is unmixed against the pure references for the observed
     surface fraction (→ response factors + corrected solution ratio). If ``calib_path``
     (a dilution-series CSV) is given, the map is also quantified (competitive Langmuir)
     so we can report RECOVERY = measured / true concentration where true_conc is known."""
+    # calibration is OPTIONAL here — it only adds the RECOVERY (measured µM vs true)
+    # cross-check. Validate it once up front so a wrong/missing file degrades to
+    # ratio-only instead of killing every mixture in the loop.
+    if calib_path:
+        from io_utils import load_calibration_csv
+        try:
+            load_calibration_csv(calib_path)
+        except Exception as e:
+            if progress:
+                progress(f"calibration ignored ({e}) — ratio-only recovery")
+            calib_path = None
+
     rows, names = [], None
     for it in items:
         path, true = it[0], it[1]
@@ -146,7 +158,8 @@ def validate_mixtures(data_dir, items, method="nnls", baseline=True, trim=None,
         if progress:
             progress(f"unmixing {path}")
         r = unmix_map(data_dir, path, method=method, baseline=baseline, trim=trim,
-                      hit_mode="auto", calib_path=calib_path, progress=progress)
+                      hit_mode="auto", calib_path=calib_path, peak_map=peak_map,
+                      progress=progress)
         nb = [r.comps[i] for i in r.nonbg]
         names = nb
         obs = {nb[k]: float(r.mean_ratio[k]) for k in range(len(nb))}

@@ -25,7 +25,7 @@ from unmix import unmix_map
 from classify import classify_map
 from real_data import PEST_DEFAULT
 from dataset import load_preprocess, load_colors, save_colors
-from io_utils import write_csv
+from io_utils import write_csv, write_readme
 
 BG_GREY = "#c7ccd3"
 INTEN_CMAP = "magma"
@@ -804,5 +804,45 @@ class RealDataPage(QWidget):
         if getattr(r, "calibrated", False) and r.conc is not None:
             figs.append(("real_concentration_maps", self.c_conc))
         n = _save_figs(figs, d)
-        self.status.setText(f"exported 2 CSV + {n} PNG → {os.path.basename(d)}")
+        self._export_readme(d, r, nb, [f[0] for f in figs])
+        self.status.setText(f"exported README + 2 CSV + {n} PNG → {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _export_readme(self, d, r, nb, fig_names):
+        """WHAT / HOW / RESULT for a Real-data export (readable without the app)."""
+        from dataset import load_preprocess
+        cfg = load_preprocess(self.data_dir)
+        trim = cfg.get("trim")
+        window = f"{trim[0]:.0f}–{trim[1]:.0f} cm⁻¹" if trim else "full range"
+        ratio_str = " · ".join(f"{nm} {r.mean_ratio[i]:.0%}" for i, nm in enumerate(nb))
+        cal = getattr(r, "calibrated", False) and getattr(r, "conc_avg", None) is not None
+        conc_str = (" · ".join(f"{nm} {r.conc_avg[i] * 1e6:.3g} µM" for i, nm in enumerate(nb))
+                    if cal else "not computed (no calibration loaded)")
+        fig_docs = {
+            "real_intensity_maps": "per-pixel total baseline-removed band intensity.",
+            "real_composition_pies": "mean composition (pie) over the hit pixels.",
+            "real_composition": "per-pixel dominant-substance / composition map.",
+            "real_pixel_spectrum": "measured spectrum of the selected pixel.",
+            "real_concentration_maps": "per-pixel absolute concentration (µM).",
+        }
+        sections = {
+            "What this is": [
+                "A real SERS map unmixed against the pure references for per-pixel "
+                "composition (which substance, how much) and — if a calibration is loaded — "
+                "absolute concentration (µM). Background pixels are excluded."],
+            "How it was produced": [
+                f"- References: {self.data_dir}",
+                f"- Map: {os.path.basename(self.test) if getattr(self, 'test', None) else '(current)'}",
+                f"- Unmixing: {r.method.upper()} against pure reference templates",
+                f"- Baseline removal: {'on' if cfg.get('baseline') else 'off'}; "
+                f"spectral window: {window}",
+                f"- Calibration: {os.path.basename(self.calib_path) if self.calib_path else 'none (ratio only)'}"],
+            "Results": [
+                f"- Dominant substance: {r.dominant}",
+                f"- Substance pixels (hit fraction): {r.hit_frac:.0%}",
+                f"- Mean composition over hit pixels: {ratio_str}",
+                f"- Mean reconstruction R²: {r.mean_r2:.2f}",
+                f"- Mean concentration: {conc_str}"],
+        }
+        figures = [(fn, fig_docs[fn]) for fn in fig_names if fn in fig_docs]
+        write_readme(d, "UNMIXR — Real-data export", sections, figures)

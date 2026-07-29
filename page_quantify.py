@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 
 from ui_common import *
 from calibration import calibrate, quantify
-from io_utils import load_calibration_csv, load_calibration_folder, write_csv
+from io_utils import load_calibration_csv, load_calibration_folder, write_csv, write_readme
 
 
 def _prep_specs(specs, baseline=True):
@@ -839,8 +839,47 @@ class QuantifyPage(QWidget):
             write_csv(os.path.join(d, "quantify.csv"),
                       ["compound", "C_M", "ratio", "theta", "K_fit"], rows)
         n = _save_figs([("calibration_curve", self.c_iso)], d)
-        self.src.setText(f"exported CSV + {n} PNG → {os.path.basename(d)}")
+        self._export_readme(d, r)
+        self.src.setText(f"exported README + CSV + {n} PNG → {os.path.basename(d)}")
         self.src.setStyleSheet("")
+
+    def _export_readme(self, d, r):
+        """WHAT / HOW / RESULT for a calibration export (readable without the app)."""
+        names = r["names"]; model = r.get("model", "langmuir")
+        baseline = not self.chk_baselined.isChecked()
+        pks = r.get("peaks_used") or [""] * len(names)
+        r2 = r.get("r2") or [None] * len(names)
+        lod = r.get("lod") or [float("nan")] * len(names)
+        loq = r.get("loq") or [float("nan")] * len(names)
+        band_str = " · ".join(f"{nm} {pks[i]}" for i, nm in enumerate(names) if i < len(pks) and pks[i]) \
+            or "whole-spectrum NNLS signal"
+        res_lines = []
+        for i, nm in enumerate(names):
+            parts = [nm]
+            if i < len(r2) and r2[i] is not None:
+                parts.append(f"R²={r2[i]:.2f}")
+            if i < len(lod) and np.isfinite(lod[i]):
+                parts.append(f"LOD={_fmt_conc(lod[i])}")
+            if i < len(loq) and np.isfinite(loq[i]):
+                parts.append(f"LOQ={_fmt_conc(loq[i])}")
+            res_lines.append("- " + ", ".join(parts))
+        sections = {
+            "What this is": [
+                "Per-compound calibration: each compound's marker-band signal is measured "
+                "across a dilution series and fit to a response isotherm, giving the "
+                f"curve, fit quality (R²) and detection limits (LOD/LOQ). Model: {model}."],
+            "How it was produced": [
+                f"- Compounds: {len(names)} ({', '.join(names)})",
+                f"- Marker band(s) per compound: {band_str}",
+                f"- Fit model: {model} (Langmuir isotherm or linear)",
+                f"- Baseline removal: {'on' if baseline else 'off (CSVs already corrected)'}",
+                f"- LOD basis: {r.get('lod_method', 'residual')} "
+                f"(3.3σ/slope; blank-based if a BLK class was found)"],
+            "Results": res_lines,
+        }
+        figures = [("calibration_curve", "signal (B) vs concentration with the fitted "
+                    "isotherm, R², marker band and LOD per compound.")]
+        write_readme(d, "UNMIXR — Calibration export", sections, figures)
 
     def _run(self):
         # the per-compound peaks box (filled by VIP / Best R² / Pick) drives the fit

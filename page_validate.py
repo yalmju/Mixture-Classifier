@@ -13,16 +13,17 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QFileDialog, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QLineEdit,
+    QHeaderView, QAbstractItemView, QLineEdit, QCheckBox,
 )
 
 from matplotlib.colors import to_rgb
 from matplotlib.patches import FancyArrowPatch
+from matplotlib.lines import Line2D
 
 from ui_common import *
 from real_data import PEST_DEFAULT
 from dataset import load_preprocess
-from io_utils import write_csv
+from io_utils import write_csv, write_readme
 from validate import validate_mixtures, parse_mixture_label, parse_amount
 from composition import compute_composition, SUBSTANCES, bary, composition_distance
 
@@ -60,7 +61,7 @@ class ValidatePage(QWidget):
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(12)
 
         head = QVBoxLayout(); head.setSpacing(2)
-        h1 = QLabel("Validate — known-ratio mixtures → response factors"); h1.setObjectName("h1")
+        h1 = QLabel("Recovery — known-ratio mixtures → response factors"); h1.setObjectName("h1")
         sub = QLabel("Load mixtures whose true ratio you know (e.g. DQ_TBZ_1to3). Each "
                      "is unmixed against your pure references; the observed surface "
                      "ratio is compared to the true ratio to recover each substance's "
@@ -103,6 +104,25 @@ class ValidatePage(QWidget):
         repar_b.clicked.connect(self._reparse)
         brow.addWidget(bl); brow.addWidget(self.base_txt, 1); brow.addWidget(repar_b)
         root.addLayout(brow)
+
+        # VIP-band NNLS — decompose the composition on each compound's discriminative
+        # marker band(s) only, instead of the whole spectrum (less mixture cross-talk)
+        vrow = QHBoxLayout(); vrow.setSpacing(8)
+        self.vip_chk = QCheckBox("VIP-band NNLS"); self.vip_chk.setObjectName("field")
+        self.vip_chk.setToolTip("fit each mixture's composition only on the compounds' "
+                                "VIP marker bands (least cross-talk) rather than the full "
+                                "spectrum — matches how Quantify picks bands")
+        self.vip_txt = QLineEdit()
+        self.vip_txt.setPlaceholderText("e.g. DQ:1177, TBZ:1001, THI:1369  — bands the "
+                                        "composition is decomposed on (multi-band: DQ:1177+1566)")
+        self.vip_txt.setToolTip("one or more bands per compound as name:wavenumber "
+                                "(join a compound's bands with '+'); 'auto VIP' fills the pick")
+        vip_b = QPushButton("auto VIP"); vip_b.setObjectName("ghost")
+        vip_b.setToolTip("recommend each compound's least-cross-talk discriminative band "
+                         "from the references")
+        vip_b.clicked.connect(self._auto_vip)
+        vrow.addWidget(self.vip_chk); vrow.addWidget(self.vip_txt, 1); vrow.addWidget(vip_b)
+        root.addLayout(vrow)
 
         self.status = QLabel(""); self.status.setObjectName("sub")
         root.addWidget(self.status)
@@ -147,7 +167,7 @@ class ValidatePage(QWidget):
         body.addWidget(mcard)
         crow = QHBoxLayout(); crow.setSpacing(12)
         for cv, title in [
-            (self.c_tri, "Drift — real → predicted composition (arrows), corners = recovery"),
+            (self.c_tri, "Composition recovery (drift triangle)"),
             (self.c_rec, "Apparent recovery (predicted / real, mean ± SE over mixtures)"),
         ]:
             card, lay = _card(title); lay.addWidget(cv); cv.setMinimumHeight(300)
@@ -189,6 +209,43 @@ class ValidatePage(QWidget):
             return [c for c, _m in discover_dataset(self.data_dir) if not is_blank(c)]
         except Exception:
             return []
+
+    def _auto_vip(self):
+        """Fill the VIP field with each compound's least-cross-talk marker band(s),
+        computed from the references — the same pick Quantify uses."""
+        from unmix import compute_vip_bands
+        try:
+            cfg = load_preprocess(self.data_dir)
+            _nb, bands = compute_vip_bands(self.data_dir, baseline=cfg["baseline"],
+                                           trim=cfg["trim"])
+        except Exception as e:
+            self.status.setText(f"VIP failed — {e}")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        self.vip_txt.setText(", ".join(
+            f"{n}:" + "+".join(f"{b:.0f}" for b in bs) for n, bs in bands.items() if bs))
+        self.vip_chk.setChecked(True)
+        self.status.setText("VIP bands filled — composition will be fit on these bands")
+        self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _vip_peak_map(self):
+        """Parse the VIP field into {name: [wavenumbers]}, or None when unchecked/empty
+        (→ full-spectrum NNLS as before)."""
+        if not self.vip_chk.isChecked():
+            return None
+        out = {}
+        for tok in self.vip_txt.text().replace(";", ",").split(","):
+            if ":" not in tok:
+                continue
+            name, rest = tok.split(":", 1); name = name.strip()
+            bands = []
+            for part in rest.replace("+", " ").split():
+                try:
+                    bands.append(float(part))
+                except ValueError:
+                    pass
+            if name and bands:
+                out[name] = bands
+        return out or None
 
     def _add(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "Known-ratio mixture maps", "",
@@ -284,7 +341,7 @@ class ValidatePage(QWidget):
         params = dict(
             validate=dict(data_dir=self.data_dir, items=items, method="nnls",
                           baseline=cfg["baseline"], trim=cfg["trim"],
-                          calib_path=self.calib_path),
+                          calib_path=self.calib_path, peak_map=self._vip_peak_map()),
             composition=dict(data_dir=self.data_dir, baseline=cfg["baseline"],
                              files=[it[0] for it in items],
                              nominals=[it[1] for it in items]))
@@ -438,31 +495,34 @@ class ValidatePage(QWidget):
 
     def _tri_frame(self, ax, rec=None):
         A, B, C = bary([1, 0, 0]), bary([0, 0, 1]), bary([0, 1, 0])   # DQ, THI, TBZ
-        ax.plot([A[0], B[0], C[0], A[0]], [A[1], B[1], C[1], A[1]], color=INK, lw=0.8)
-        cen = (A + B + C) / 3
-        for P, Q in [(A, B), (B, C), (C, A)]:              # quarter ticks per edge
-            u = Q - P
-            n = np.array([-u[1], u[0]]); n = n / (np.hypot(*n) + 1e-9)
-            if np.dot(n, (P + Q) / 2 - cen) < 0:
-                n = -n
-            for t in (0.25, 0.5, 0.75):
-                pt = P + t * u
-                ax.plot([pt[0], pt[0] + 0.022 * n[0]], [pt[1], pt[1] + 0.022 * n[1]],
-                        color=MUTE, lw=0.7, zorder=1)
-        for f, s, ha, va, dx, dy in [([1, 0, 0], "DQ", "center", "bottom", 0, 0.04),
-                                     ([0, 0, 1], "THI", "right", "top", -0.03, -0.03),
-                                     ([0, 1, 0], "TBZ", "left", "top", 0.03, -0.03)]:
+        # faint interior grid parallel to each edge (25/50/75%) → gives the plot a scale
+        for t in (0.25, 0.5, 0.75):
+            for P, Q, R in [(A, B, C), (B, A, C), (C, A, B)]:
+                ax.plot([P[0] + t * (Q[0] - P[0]), P[0] + t * (R[0] - P[0])],
+                        [P[1] + t * (Q[1] - P[1]), P[1] + t * (R[1] - P[1])],
+                        color=FAINT, lw=0.5, alpha=0.45, zorder=0)
+        ax.plot([A[0], B[0], C[0], A[0]], [A[1], B[1], C[1], A[1]], color=INK, lw=1.0, zorder=1)
+        for f, s, ha, va, dx, dy in [([1, 0, 0], "DQ", "center", "bottom", 0, 0.05),
+                                     ([0, 0, 1], "THI", "right", "top", -0.03, -0.02),
+                                     ([0, 1, 0], "TBZ", "left", "top", 0.03, -0.02)]:
             p = bary(f)
             lab = s
+            col = substance_color(s, SUBSTANCES.index(s))
             if rec and rec.get(s):
                 v = rec[s]
+                mu = float(np.mean(v))
                 se = np.std(v, ddof=1) / np.sqrt(len(v)) if len(v) > 1 else 0.0
-                lab = f"{s}\n{np.mean(v):.0f}±{se:.0f}%"
-            ax.text(p[0] + dx, p[1] + dy, lab, ha=ha, va=va, fontsize=10, linespacing=1.1,
-                    fontweight="bold", color=substance_color(s, SUBSTANCES.index(s)))
+                # status by SYMBOL, not colour — keep each corner in its substance colour
+                tag = " ↑over" if mu > 120 else (" ↓under" if mu < 80 else " ✓")
+                lab = f"{s}\n{mu:.0f}±{se:.0f}%{tag}"
+            ax.text(p[0] + dx, p[1] + dy, lab, ha=ha, va=va, fontsize=10, linespacing=1.25,
+                    fontweight="bold", color=col)
         ax.set_aspect("equal"); ax.axis("off")
 
-    def _plot_triangle(self, res):
+    def _plot_triangle(self, res, annotated=False):
+        """Draw the recovery drift triangle. ``annotated`` adds the title + description
+        + reading guide — baked in only on EXPORT, so the standalone PNG is readable
+        with zero context; in-app the card header already labels it, kept uncluttered."""
         ax = self.c_tri.new_ax()
         self._tri_frame(ax, self._recovery(res))
         for rec in res:
@@ -471,11 +531,33 @@ class ValidatePage(QWidget):
             p0 = bary(rec["nominal"]); p1 = bary(rec["mean"])
             dom = int(np.argmax(rec["nominal"]))
             col = substance_color(SUBSTANCES[dom], dom)
+            ax.scatter(*p0, s=44, facecolors="none", edgecolors=FAINT,   # real ratio
+                       linewidths=1.2, zorder=3)
             if np.linalg.norm(p1 - p0) > 1e-3:
-                ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=9,
-                                             color="#98a1ac", lw=1.1, zorder=2))
-            ax.scatter(*p1, s=38, color=col, edgecolors="white", linewidths=0.6, zorder=4)
-        ax.set_xlim(-0.12, 1.12); ax.set_ylim(-0.10, 1.06)
+                ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=10,
+                                             color="#8b95a1", lw=1.1, zorder=2,
+                                             shrinkA=3, shrinkB=3))
+            ax.scatter(*p1, s=48, color=col, edgecolors="white",         # measured
+                       linewidths=0.7, zorder=4)
+        # legend decodes the marks — small, kept in both the in-app and exported view
+        handles = [
+            Line2D([], [], marker="o", mfc="none", mec=FAINT, mew=1.2, ls="", ms=8,
+                   label="real ratio"),
+            Line2D([], [], marker="o", mfc=INK, mec="white", ls="", ms=8, label="measured"),
+            Line2D([], [], marker=r"$\rightarrow$", color="#8b95a1", ls="", ms=11,
+                   label="drift")]
+        ax.legend(handles=handles, loc="upper right", bbox_to_anchor=(1.02, 1.0),
+                  fontsize=8, framealpha=0.0, handletextpad=0.4, labelspacing=0.3)
+        if annotated:                    # export only: full self-documenting caption
+            ax.set_title("Composition recovery — real vs measured mixture ratio",
+                         fontsize=11.5, fontweight="bold", color=INK, pad=24)
+            ax.text(0.5, 1.04, "arrow: real → measured   ·   corner %: recovery "
+                    "(100% = perfect, green 80–120%)", transform=ax.transAxes,
+                    ha="center", va="bottom", fontsize=8, color=MUTE)
+            ax.text(0.5, -0.02, "closer to a corner = more of that substance",
+                    transform=ax.transAxes, ha="center", va="top", fontsize=7.5,
+                    color=FAINT, style="italic")
+        ax.set_xlim(-0.16, 1.16); ax.set_ylim(-0.12, 1.10)
         self.c_tri.fig.tight_layout(); self.c_tri.draw_idle()
 
     def _plot_reldrift(self, res):
@@ -575,6 +657,67 @@ class ValidatePage(QWidget):
         if self._cres:                                   # composition view
             figs += [("composition_maps", self.c_maps), ("drift_triangle", self.c_tri),
                      ("relative_drift", self.c_rel), ("recovery", self.c_rec)]
+            self._plot_triangle(self._cres, annotated=True)   # bake caption into the PNG
         n = _save_figs(figs, d)
-        self.status.setText(f"exported response_factors.csv + table + {n} PNG → {os.path.basename(d)}")
+        if self._cres:
+            self._plot_triangle(self._cres)                   # restore clean in-app view
+        self._export_readme(d, res, [f[0] for f in figs])
+        self.status.setText(f"exported README + response_factors.csv + table + {n} PNG "
+                            f"→ {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _export_readme(self, d, res, fig_names):
+        """Write README.md describing WHAT the export is, HOW it was produced (settings),
+        and the RESULT numbers — so a PNG/CSV read out of context is still understandable."""
+        names = res.names
+        cfg = load_preprocess(self.data_dir)
+        pm = self._vip_peak_map()
+        vip = ("VIP marker bands only — "
+               + " · ".join(f"{k} {'+'.join(f'{b:.0f}' for b in v)}" for k, v in pm.items())
+               if pm else "the full spectrum")
+        trim = cfg.get("trim")
+        window = f"{trim[0]:.0f}–{trim[1]:.0f} cm⁻¹" if trim else "full range"
+        rf = sorted(res.response.items(), key=lambda kv: kv[1], reverse=True)
+        rf_str = " · ".join(f"{k} {v:.2f}×" for k, v in rf)
+        e0 = self._mean_err([r["obs"] for r in res.rows], res.rows, names)
+        e1 = self._mean_err(res.corrected, res.rows, names)
+        rec_str = "not computed (load a calibration + enter true concentrations)"
+        if res.mean_recovery:
+            rec_str = " · ".join(
+                f"{n} {res.mean_recovery[n]:.0f}%" for n in names
+                if np.isfinite(res.mean_recovery.get(n, float("nan")))) + \
+                "   (100% = perfect; 80–120% acceptable)"
+        fig_docs = {
+            "drift_triangle": "real (○) vs measured (●) composition per mixture; arrow = "
+                              "drift real→measured; corner % = recovery.",
+            "validate_response": "response factor per substance (× relative; higher = "
+                                 "over-reported on the surface).",
+            "validate_parity": "observed (surface) ratio vs true ratio — above the line = over-reported.",
+            "validate_corrected": "corrected (solution) ratio vs true ratio — should sit on the line.",
+            "composition_maps": "per-pixel colour blend of each mixture map.",
+            "relative_drift": "predicted vs real drift, grouped by dominant substance.",
+            "recovery": "apparent recovery % per substance (mean ± SE over mixtures).",
+        }
+        sections = {
+            "What this is": [
+                "Known-ratio mixtures unmixed against the pure references to check whether "
+                "the MEASURED composition matches the TRUE (solution) ratio, and to recover "
+                "each substance's response factor (relative surface sensitivity). A "
+                "high-response substance dominates the surface signal even in a balanced "
+                "mixture; the response factors convert an observed surface ratio back to a "
+                "solution ratio."],
+            "How it was produced": [
+                f"- References: {self.data_dir}",
+                f"- Mixtures: {len(res.rows)} known-ratio maps",
+                f"- Unmixing: NNLS against pure reference templates, fit on {vip}",
+                f"- Baseline removal: {'on' if cfg.get('baseline') else 'off'}; "
+                f"spectral window: {window}",
+                f"- Response factors anchored to {res.ref} (its factor ≈ 1)",
+                f"- Calibration: {os.path.basename(self.calib_path) if self.calib_path else 'none (ratio only)'}"],
+            "Results": [
+                f"- Response factors (×, higher = over-reported): {rf_str}",
+                f"- Recovery (measured / true): {rec_str}",
+                f"- Mean composition error: {e0:.0%} → {e1:.0%} after response-factor correction."],
+        }
+        figures = [(fn, fig_docs[fn]) for fn in fig_names if fn in fig_docs]
+        write_readme(d, "UNMIXR — Recovery export", sections, figures)

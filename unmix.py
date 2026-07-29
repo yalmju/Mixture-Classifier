@@ -93,8 +93,73 @@ def _templates(data_dir, baseline, progress):
     return names, wn, np.array(means)
 
 
+def vip_bands(axis, ref_spectra, names, k=2, min_purity=0.5, lo=400.0, hi=1800.0):
+    """Per-compound VIP-style marker band(s): among each compound's REAL peaks, the
+    one(s) where its L2-normalised reference SHAPE most exceeds every OTHER compound
+    (least cross-talk). L2-normalising first removes the response-factor bias so a
+    strong emitter doesn't win every band. Returns {name: [wavenumbers]}.
+
+    UI-agnostic mirror of the Quantify page's ``_vip_peaks`` so Validate / Real can
+    unmix on the same discriminative bands the user quantifies on."""
+    from scipy.signal import find_peaks
+    axis = np.asarray(axis, float)
+    R = np.asarray(ref_spectra, float)
+    R = R / (np.linalg.norm(R, axis=1, keepdims=True) + 1e-12)      # shape, not magnitude
+    band = (axis >= lo) & (axis <= hi)
+    if band.sum() < 5:
+        band = np.ones(len(axis), bool)
+    out = {}
+    for i, nm in enumerate(names):
+        others = np.delete(R, i, axis=0)
+        omax = others.max(axis=0) if len(others) else np.zeros(R.shape[1])
+        score = R[i] - omax                                        # one-vs-rest separation
+        idx, _ = find_peaks(R[i], prominence=(R[i].max() or 1.0) * 0.05)
+        idx = [j for j in idx if band[j]]
+        if not idx:
+            idx = [int(np.argmax(np.where(band, score, -np.inf)))]
+        ordered = sorted(idx, key=lambda j: score[j], reverse=True)
+        chosen = []
+        for j in ordered:                                          # up to k CLEAN bands
+            pur = float(np.clip(score[j] / (R[i][j] + 1e-12), 0.0, 1.0))
+            if not chosen or (pur >= min_purity and len(chosen) < k):
+                chosen.append(float(axis[j]))
+            if len(chosen) >= k:
+                break
+        out[nm] = chosen
+    return out
+
+
+def compute_vip_bands(data_dir, baseline=True, trim=None, k=2, lo=400.0, hi=1800.0):
+    """Load the references in ``data_dir`` and return (nb_names, {name: [wavenumbers]})
+    of the non-background substances' VIP marker bands — for the Validate UI to show
+    and edit before it drives the VIP-band NNLS."""
+    names, wn, means = _templates(data_dir, baseline, None)
+    if trim is not None:
+        lo_t, hi_t = trim
+        m = (wn >= lo_t) & (wn <= hi_t)
+        if m.sum() >= 10:
+            means = means[:, m]; wn = wn[m]
+    nonbg = [i for i in range(len(names)) if not is_blank(names[i])]
+    nb_names = [names[i] for i in nonbg]
+    ref = _baseline_removed(means[nonbg], baseline)
+    return nb_names, vip_bands(wn, ref, nb_names, k=k, lo=lo, hi=hi)
+
+
+def _vip_fit_mask(wn, peak_map, window, min_pts):
+    """Boolean mask over ``wn`` = union of each compound's VIP band ± window. None when
+    no peak_map, or too few points to fit ``min_pts`` components (falls back to full)."""
+    if not peak_map:
+        return None
+    mask = np.zeros(len(wn), bool)
+    for bands in peak_map.values():
+        for b in np.atleast_1d(bands):
+            mask |= (wn >= float(b) - window) & (wn <= float(b) + window)
+    return mask if mask.sum() >= max(min_pts, 3) else None
+
+
 def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
               min_frac=0.05, hit_mode="threshold", calib_path=None,
+              peak_map=None, peak_window=10.0,
               progress=None) -> UnmixResult:
     """Unmix ``test_path`` against the substances in ``data_dir`` (background
     included) by ``method`` ('nnls' or 'mcr'). ``hit_mode`` decides which pixels
@@ -102,7 +167,13 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     directly (a pixel is a hit when its strongest component is a substance, not the
     blank — threshold-free), 'threshold' uses ``min_frac`` (the substances must make
     up at least that fraction of the pixel). If ``calib_path`` (a dilution-series
-    CSV) is given, also recover per-pixel absolute concentration (M)."""
+    CSV) is given, also recover per-pixel absolute concentration (M).
+
+    ``peak_map`` ({name: [wavenumbers]}) restricts the NNLS fit to each compound's VIP
+    marker-band windows (± ``peak_window`` cm⁻¹): the composition is then decomposed on
+    the least-cross-talk discriminative bands instead of the whole spectrum. Display /
+    band-image spectra stay full; only the abundance fit (and its reconstruction R²) use
+    the masked region. Ignored for method='mcr'."""
     names, wn, means = _templates(data_dir, baseline, progress)
     wn_u, cube_u, _mean_u, coord = load_map(test_path)
 
@@ -126,16 +197,27 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         if progress:
             progress("MCR-ALS refining component spectra")
         A, templates = _mcr_als(X, templates, progress=progress)
+        fit_T, fit_X = templates, X                        # peak_map ignored for MCR
     else:
-        A = np.zeros((len(X), K))
-        for i, y in enumerate(X):
-            A[i], _ = nnls(templates.T, y)
+        # optional: fit only on the VIP marker-band windows (least cross-talk). Keeps
+        # `templates`/`spectra` full for display; A + reliab use the masked region.
+        fit_mask = _vip_fit_mask(wn, peak_map, peak_window, K)
+        if fit_mask is not None:
+            fit_T = _l2(_baseline_removed(means, baseline)[:, fit_mask])
+            fit_X = _l2(spectra[:, fit_mask])
+            if progress:
+                progress(f"VIP-band NNLS — {int(fit_mask.sum())}/{len(wn)} points")
+        else:
+            fit_T, fit_X = templates, X
+        A = np.zeros((len(fit_X), K))
+        for i, y in enumerate(fit_X):
+            A[i], _ = nnls(fit_T.T, y)
             if progress and i % 300 == 0:
-                progress(f"NNLS unmixing — pixel {i}/{len(X)}")
+                progress(f"NNLS unmixing — pixel {i}/{len(fit_X)}")
 
-    recon = A @ templates
-    ss_res = np.sum((X - recon) ** 2, axis=1)
-    ss_tot = np.sum((X - X.mean(axis=1, keepdims=True)) ** 2, axis=1)
+    recon = A @ fit_T
+    ss_res = np.sum((fit_X - recon) ** 2, axis=1)
+    ss_tot = np.sum((fit_X - fit_X.mean(axis=1, keepdims=True)) ** 2, axis=1)
     reliab = np.clip(1.0 - np.divide(ss_res, ss_tot, out=np.ones_like(ss_res),
                                      where=ss_tot > 0), 0.0, 1.0)
 
