@@ -113,6 +113,43 @@ general tool:
 Operating recommendation: **linear response factor** for the simple 2-component regime
 (~21%, no overfitting); the **DL residual** for 3+ component mixtures, where it already wins.
 
+## Update — full mixture set (binary + ternary) and buried-component recovery
+
+Training the corrector on the **full mixture set** (28 binary + 7 ternary, leave-one-map-out
+over all 35) so it sees the hard 3-way competition, and giving the DL the **full spectrum**:
+
+| method | overall composition err | buried non-THI err | buried detect |
+|---|---|---|---|
+| NNLS | 31.0% | 0.35 | 44% |
+| linear response factor | 23.9% | 0.27 | 68% |
+| PLS (full spectrum) | 26.5% | 0.37 | 100% |
+| **full-spectrum DL** | **20.5%** | 0.29 | 86% |
+
+Two conditions flip the result in the DL's favour: **(1) full-spectrum input** (the buried
+component's information is in the spectral shape, not in its ~0 NNLS projection — this is why
+NNLS / response-factor / physics-inversion all fail to un-bury) and **(2) the hard
+competition examples in training**. With both, the DL gives the best overall composition and
+strong buried-component detection.
+
+The goal, restated: **THI dominates the surface no matter what — recover the co-components it
+buries, using the known synthesis ratios as supervision.**
+
+- ![buried recovery](buried_recovery.png) — on THI-dominated ternary, NNLS loses the buried
+  co-component (→0, 29–44% detection); models trained on the known ratios recover it.
+- ![classification triangle](classify_triangle.png) — per-substance recovery ± SE on the
+  ternary simplex. NNLS: THI 287 ± 55 % (over), DQ 48 ± 10 % / TBZ buried; full-spectrum DL:
+  DQ 103 ± 21 %, TBZ 102 ± 24 %, THI 158 ± 27 % — recovery balanced toward the ideal 100 %.
+- **Binary is hard too** (adsorption competition DQ < TBZ < THI): recovery of the buried
+  weaker adsorber — NNLS 0.27, PLS 0.23, **DL 0.20** L1 error; DL leads on every pair, most on
+  DQ-under-THI (DL 0.18 vs NNLS 0.27).
+
+Remaining DL failures (9/35 cases; median error is 12 %): DQ↔TBZ confusion at extreme ratios
+and residual THI collapse. Next: model ensembling (seed variance), a PLS+DL hybrid,
+data augmentation, and more extreme-ratio / distinct compositions.
+
+Per-mixture predictions: `mixture_predictions.csv`. An independent same-substrate batch (blind)
+is the needed next validation before claiming real-sample performance.
+
 ---
 
 *Reproduce:* `python dl_quantify.py` (synthetic self-test). Real-data validation scripts
