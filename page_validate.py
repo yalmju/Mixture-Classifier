@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QFileDialog, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QLineEdit, QCheckBox, QProgressBar, QSpinBox,
+    QComboBox,
 )
 
 from matplotlib.patches import FancyArrowPatch
@@ -193,22 +194,40 @@ class ValidatePage(QWidget):
         ibl.addLayout(vrow)
 
         # DL training settings — used by BOTH 'DL predict' (leave-one-out) and 'Save DL
-        # model'. Downstream (Real-data apply) needs no knobs; tuning lives here.
+        # model'. Method dropdown; each method's own sub-parameters appear automatically.
+        # Downstream (Real-data apply) needs no knobs; tuning lives here.
         drow = QHBoxLayout(); drow.setSpacing(8)
-        dlbl = QLabel("DL training:"); dlbl.setObjectName("field")
+        dlbl = QLabel("DL method:"); dlbl.setObjectName("field")
+        self.dl_method = QComboBox(); self.dl_method.setObjectName("field")
+        for text, data in [("MLP (deep)", "mlp"), ("PLS", "pls"),
+                           ("Random Forest", "rf"), ("1D-CNN", "cnn")]:
+            self.dl_method.addItem(text, data)
+        self.dl_method.setToolTip("composition model — the best one is data-dependent, so pick "
+                                  "per experiment. Sub-parameters below change with the method.")
+        self.dl_method.currentIndexChanged.connect(self._update_dl_params)
+        # per-method sub-parameter widgets (shown/hidden by _update_dl_params)
         self.dl_ep = QSpinBox(); self.dl_ep.setRange(20, 3000); self.dl_ep.setSingleStep(50)
         self.dl_ep.setValue(350); self.dl_ep.setPrefix("epochs "); self.dl_ep.setObjectName("field")
-        self.dl_ep.setToolTip("fine-tune iterations for the composition (and µM) network")
+        self.dl_ep.setToolTip("training iterations (MLP / CNN)")
         self.dl_seed = QSpinBox(); self.dl_seed.setRange(0, 999); self.dl_seed.setValue(0)
         self.dl_seed.setPrefix("seed "); self.dl_seed.setObjectName("field")
-        self.dl_seed.setToolTip("base RNG seed (each left-out mixture uses seed + i)")
+        self.dl_seed.setToolTip("RNG seed (MLP / CNN / RF)")
         self.dl_pre = QCheckBox("physics pretrain"); self.dl_pre.setChecked(True)
         self.dl_pre.setObjectName("field")
-        self.dl_pre.setToolTip("warm up on physics-simulated mixtures from the calibration "
-                               "before fitting the real ones (needs a loaded calibration)")
-        drow.addWidget(dlbl); drow.addWidget(self.dl_ep); drow.addWidget(self.dl_seed)
-        drow.addWidget(self.dl_pre); drow.addStretch(1)
+        self.dl_pre.setToolTip("MLP only — warm up on physics-simulated mixtures from the "
+                               "calibration before fitting the real ones (needs a calibration)")
+        self.dl_nc = QSpinBox(); self.dl_nc.setRange(1, 20); self.dl_nc.setValue(8)
+        self.dl_nc.setPrefix("components "); self.dl_nc.setObjectName("field")
+        self.dl_nc.setToolTip("PLS latent components")
+        self.dl_nt = QSpinBox(); self.dl_nt.setRange(20, 1000); self.dl_nt.setSingleStep(20)
+        self.dl_nt.setValue(300); self.dl_nt.setPrefix("trees "); self.dl_nt.setObjectName("field")
+        self.dl_nt.setToolTip("Random-Forest trees")
+        drow.addWidget(dlbl); drow.addWidget(self.dl_method)
+        for w in (self.dl_ep, self.dl_seed, self.dl_pre, self.dl_nc, self.dl_nt):
+            drow.addWidget(w)
+        drow.addStretch(1)
         ibl.addLayout(drow)
+        self._update_dl_params()
 
         # editable table: file  |  true ratio (name:parts, comma-separated)
         self.table = QTableWidget(0, 2)
@@ -433,10 +452,21 @@ class ValidatePage(QWidget):
                 items.append((self._files[row], ratio, tc))
         return items
 
+    def _update_dl_params(self):
+        """Show only the sub-parameters that the chosen composition method uses."""
+        m = self.dl_method.currentData()
+        self.dl_ep.setVisible(m in ("mlp", "cnn"))
+        self.dl_seed.setVisible(m in ("mlp", "cnn", "rf"))
+        self.dl_pre.setVisible(m == "mlp")
+        self.dl_nc.setVisible(m == "pls")
+        self.dl_nt.setVisible(m == "rf")
+
     def _dl_opts(self):
         """DL training knobs shared by 'DL predict' (leave-one-out) and 'Save DL model'."""
-        return dict(epochs=self.dl_ep.value(), seed=self.dl_seed.value(),
-                    use_pretrain=self.dl_pre.isChecked())
+        return dict(method=self.dl_method.currentData(),
+                    epochs=self.dl_ep.value(), seed=self.dl_seed.value(),
+                    use_pretrain=self.dl_pre.isChecked(),
+                    n_components=self.dl_nc.value(), n_trees=self.dl_nt.value())
 
     # ---- run ----
     def _run(self):

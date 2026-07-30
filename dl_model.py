@@ -29,6 +29,21 @@ def _refs(data_dir, baseline, trim):
     return subs, wn, mask, P, lo, hi
 
 
+def _cnn(n_feat, n_comp):
+    """1-D CNN over the spectrum → composition logits. Same builder for train & apply so
+    a saved state_dict reloads. (torch imported lazily to keep this module UI-agnostic.)"""
+    import torch.nn as nn
+    class C(nn.Module):
+        def __init__(s):
+            super().__init__()
+            s.b = nn.Sequential(nn.Conv1d(1, 16, 7, padding=3), nn.ReLU(), nn.MaxPool1d(2),
+                                nn.Conv1d(16, 32, 5, padding=2), nn.ReLU(), nn.AdaptiveAvgPool1d(8),
+                                nn.Flatten(), nn.Linear(32 * 8, 64), nn.ReLU(), nn.Linear(64, n_comp))
+        def forward(s, x):
+            return s.b(x[:, None, :])
+    return C()
+
+
 def _mean_spectrum(cube, mask):
     cube = np.asarray(cube, float)[:, mask]
     w = cube.sum(1); w = w / (w.sum() + 1e-12)
@@ -47,6 +62,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
       - "mlp"  physics-informed deep net — knobs: epochs, seed, use_pretrain
       - "pls"  PLS regression           — knob: n_components
       - "rf"   random forest            — knobs: n_trees, seed
+      - "cnn"  1-D CNN over the spectrum — knobs: epochs, seed
     The µM head (order-of-magnitude concentration) is the same small MLP regardless."""
     import torch, torch.nn as nn
     from real_data import load_map
@@ -95,6 +111,18 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         comp_store = {"method": "rf",
                       "sk": RandomForestRegressor(n_estimators=int(n_trees),
                                                   random_state=int(seed)).fit(X, Y)}
+    elif method == "cnn":
+        import torch
+        torch.manual_seed(int(seed)); net = _cnn(X.shape[1], len(subs))
+        sm = torch.nn.LogSoftmax(dim=1)
+        op = torch.optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-3)
+        Xt = torch.tensor(X); Yt = torch.tensor(Y); w = 1.0 + 2.0 * (1.0 - Yt)   # up-weight buried
+        for _ in range(int(epochs)):
+            net.train(); op.zero_grad()
+            (w * (sm(net(Xt)).exp() - Yt).abs()).sum(1).mean().backward(); op.step()
+        net.eval()
+        comp_store = {"method": "cnn",
+                      "comp_state": {k: v.detach().numpy() for k, v in net.state_dict().items()}}
     else:
         method = "mlp"
         comp = train_composition(X, Y, len(subs), pretrain=pre, seed=seed, epochs_ft=epochs)
@@ -138,10 +166,13 @@ def apply_model(model, wn, cube):
     if method in ("pls", "rf"):                                # sklearn composition head
         comp = np.clip(np.asarray(model["sk"].predict(xl2[None, :])[0], float), 0, None)
         comp = comp / (comp.sum() + 1e-12)
-    else:                                                      # MLP (softmax) head
+    else:                                                      # torch softmax head (MLP or CNN)
         import torch
-        from dl_quantify import _spec_net
-        net = _spec_net(model["n_feat"], len(subs), model["comp_hidden"])
+        if method == "cnn":
+            net = _cnn(model["n_feat"], len(subs))
+        else:
+            from dl_quantify import _spec_net
+            net = _spec_net(model["n_feat"], len(subs), model["comp_hidden"])
         net.load_state_dict({k: torch.tensor(v) for k, v in model["comp_state"].items()}); net.eval()
         with torch.no_grad():
             comp = torch.softmax(net(torch.tensor(xl2[None, :])), 1).numpy()[0]

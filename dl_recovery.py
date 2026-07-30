@@ -15,7 +15,8 @@ import numpy as np
 
 
 def dl_recovery(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
-                epochs=350, seed=0, use_pretrain=True):
+                method="mlp", epochs=350, seed=0, use_pretrain=True,
+                n_components=8, n_trees=300):
     """items: list of (map_path, true_ratio_dict[, true_conc]). Returns a list of
     {name, nominal, mean[, uM_true, uM_pred]} in composition.SUBSTANCES order
     (leave-one-map-out DL). uM_* only when absolute concentrations (µM) were supplied for
@@ -119,8 +120,31 @@ def dl_recovery(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         if progress:
             progress(f"DL leave-one-out — mixture {i + 1}/{N}  ({N - i - 1} left)")
         tr = [j for j in range(N) if j != i]
-        model = train_composition(X[tr], Y[tr], len(subs), pretrain=pre, seed=seed + i, epochs_ft=epochs)
-        pred = predict_composition(model, X[i])[0]
+        if method == "pls":
+            from sklearn.cross_decomposition import PLSRegression
+            nc = max(1, min(int(n_components), len(tr) - 1, X.shape[1]))
+            p = np.clip(PLSRegression(n_components=nc).fit(X[tr], Y[tr]).predict(X[i][None, :])[0], 0, None)
+            pred = p / (p.sum() + 1e-12)
+        elif method == "rf":
+            from sklearn.ensemble import RandomForestRegressor
+            rf = RandomForestRegressor(n_estimators=int(n_trees), random_state=int(seed)).fit(X[tr], Y[tr])
+            p = np.clip(rf.predict(X[i][None, :])[0], 0, None); pred = p / (p.sum() + 1e-12)
+        elif method == "cnn":
+            from dl_model import _cnn
+            torch.manual_seed(seed + i); net = _cnn(X.shape[1], len(subs))
+            sm = torch.nn.LogSoftmax(dim=1)
+            op = torch.optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-3)
+            Xt = torch.tensor(X[tr].astype(np.float32)); Yt = torch.tensor(Y[tr].astype(np.float32))
+            wt = 1.0 + 2.0 * (1.0 - Yt)
+            for _ in range(int(epochs)):
+                net.train(); op.zero_grad()
+                (wt * (sm(net(Xt)).exp() - Yt).abs()).sum(1).mean().backward(); op.step()
+            net.eval()
+            with torch.no_grad():
+                pred = torch.softmax(net(torch.tensor(X[i][None, :].astype(np.float32))), 1).numpy()[0]
+        else:
+            model = train_composition(X[tr], Y[tr], len(subs), pretrain=pre, seed=seed + i, epochs_ft=epochs)
+            pred = predict_composition(model, X[i])[0]
         nom = np.zeros(len(SUBSTANCES)); mn = np.zeros(len(SUBSTANCES))
         for k, o in enumerate(order):
             nom[o] = Y[i][k]; mn[o] = pred[k]
