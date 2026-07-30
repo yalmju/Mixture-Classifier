@@ -113,6 +113,26 @@ general tool:
 Operating recommendation: **linear response factor** for the simple 2-component regime
 (~21%, no overfitting); the **DL residual** for 3+ component mixtures, where it already wins.
 
+### Architecture / simulator / loss ablations (35-map LOO)
+
+| config | composition err | buried non-THI err | buried detect |
+|---|---|---|---|
+| MLP · base sim · **minor-weighted loss** | **18.3%** | **0.25** | 86% |
+| MLP · rich (domain-randomised) sim | 20.5% | 0.27 | 90% |
+| 1D-CNN · base sim | 28.1% | 0.38 | 76% |
+| 1D-CNN · rich sim | 23.7% | 0.32 | 80% |
+
+- The **minor-component-weighted L1 loss** (up-weight small/buried components; identity-agnostic,
+  no hard-coding of which compound dominates) is a real gain: plain L1 20.5% → weighted **18.3%**
+  (buried err 0.29 → 0.25). "Who dominates" is learned from the mixtures, not set by hand.
+- **1D-CNN is worse** (28% vs MLP 18%) — too many parameters for ~34 training mixtures.
+- **Aggressive domain randomisation hurts** the MLP (18.3% → 20.5%): the pretrain distribution
+  drifts away from the real data. A moderate simulator is best.
+- So the integrated model (MLP + weighted loss + moderate physics pretrain) is already the best
+  config found; architecture/simulator tuning does not help at this data size. The remaining
+  lever is data diversity (compositions + a concentration axis). Untried: focal / hard-example
+  weighting (fully automatic per-sample weighting).
+
 ## Update — full mixture set (binary + ternary) and buried-component recovery
 
 Training the corrector on the **full mixture set** (28 binary + 7 ternary, leave-one-map-out
