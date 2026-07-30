@@ -37,9 +37,12 @@ def _mean_spectrum(cube, mask):
     return np.clip(mean - als_baseline(mean), 0, None)
 
 
-def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None):
+def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
+                epochs=350, seed=0, use_pretrain=True):
     """Train composition (+ µM if absolute concentrations given) on ALL mixtures.
-    items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict."""
+    items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
+    Knobs: ``epochs`` (fine-tune iterations for both heads), ``seed``, ``use_pretrain``
+    (physics simulator warm-up; needs a calibration)."""
     import torch, torch.nn as nn
     from real_data import load_map
     from dl_quantify import simulate_mixtures, train_composition, _spec_net, _ratio
@@ -61,7 +64,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         raise ValueError("need ≥3 mixtures to train.")
 
     pre = None
-    if calib_path:
+    if calib_path and use_pretrain:
         try:
             from io_utils import load_calibration_csv
             from calibration import calibrate
@@ -77,7 +80,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
 
     if progress:
         progress("training composition head")
-    comp = train_composition(X, Y, len(subs), pretrain=pre, seed=0)
+    comp = train_composition(X, Y, len(subs), pretrain=pre, seed=seed, epochs_ft=epochs)
     comp_np = {k: v.cpu().numpy() for k, v in comp["state"].items()}
 
     uM = None
@@ -88,13 +91,13 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         hv = np.array(have); C = np.array([Cabs[i] if Cabs[i] is not None else [0.0] * len(subs)
                                            for i in range(len(X))], float)
         mu = Xabs[hv].mean(0); sd = Xabs[hv].std(0) + 1e-8
-        torch.manual_seed(0)
+        torch.manual_seed(seed)
         net = nn.Sequential(nn.Linear(Xabs.shape[1], 256), nn.BatchNorm1d(256), nn.ReLU(),
                             nn.Dropout(0.15), nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, len(subs)))
         op = torch.optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-3)
         Xt = torch.tensor(((Xabs[hv] - mu) / sd).astype(np.float32))
         Yt = torch.tensor((np.log10(np.clip(C[hv], 1e-8, None)) + 6.0).astype(np.float32))
-        for _ in range(400):
+        for _ in range(epochs):
             net.train(); op.zero_grad(); ((net(Xt) - Yt) ** 2).mean().backward(); op.step()
         net.eval()
         uM = {"state": {k: v.detach().numpy() for k, v in net.state_dict().items()},

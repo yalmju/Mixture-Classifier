@@ -13,7 +13,7 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QFileDialog, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QLineEdit, QCheckBox, QProgressBar,
+    QHeaderView, QAbstractItemView, QLineEdit, QCheckBox, QProgressBar, QSpinBox,
 )
 
 from matplotlib.patches import FancyArrowPatch
@@ -139,10 +139,13 @@ class ValidatePage(QWidget):
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost"); exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Validate"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
+        self.cancel_btn = QPushButton("Cancel"); self.cancel_btn.setObjectName("ghost")
+        self.cancel_btn.setToolTip("stop the running Validate / DL job")
+        self.cancel_btn.clicked.connect(self._cancel); self.cancel_btn.setVisible(False)
         ctl.addWidget(self.ref_lbl); ctl.addStretch(1)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.dl_chk)
         ctl.addWidget(add_b); ctl.addWidget(self.explain_btn); ctl.addWidget(self.savemodel_btn)
-        ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
+        ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.cancel_btn); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
         # collapsible input detail (fixed components · VIP · mixture table) — collapse it
@@ -188,6 +191,24 @@ class ValidatePage(QWidget):
         vip_b.clicked.connect(self._auto_vip)
         vrow.addWidget(self.vip_chk); vrow.addWidget(self.vip_txt, 1); vrow.addWidget(vip_b)
         ibl.addLayout(vrow)
+
+        # DL training settings — used by BOTH 'DL predict' (leave-one-out) and 'Save DL
+        # model'. Downstream (Real-data apply) needs no knobs; tuning lives here.
+        drow = QHBoxLayout(); drow.setSpacing(8)
+        dlbl = QLabel("DL training:"); dlbl.setObjectName("field")
+        self.dl_ep = QSpinBox(); self.dl_ep.setRange(20, 3000); self.dl_ep.setSingleStep(50)
+        self.dl_ep.setValue(350); self.dl_ep.setPrefix("epochs "); self.dl_ep.setObjectName("field")
+        self.dl_ep.setToolTip("fine-tune iterations for the composition (and µM) network")
+        self.dl_seed = QSpinBox(); self.dl_seed.setRange(0, 999); self.dl_seed.setValue(0)
+        self.dl_seed.setPrefix("seed "); self.dl_seed.setObjectName("field")
+        self.dl_seed.setToolTip("base RNG seed (each left-out mixture uses seed + i)")
+        self.dl_pre = QCheckBox("physics pretrain"); self.dl_pre.setChecked(True)
+        self.dl_pre.setObjectName("field")
+        self.dl_pre.setToolTip("warm up on physics-simulated mixtures from the calibration "
+                               "before fitting the real ones (needs a loaded calibration)")
+        drow.addWidget(dlbl); drow.addWidget(self.dl_ep); drow.addWidget(self.dl_seed)
+        drow.addWidget(self.dl_pre); drow.addStretch(1)
+        ibl.addLayout(drow)
 
         # editable table: file  |  true ratio (name:parts, comma-separated)
         self.table = QTableWidget(0, 2)
@@ -412,6 +433,11 @@ class ValidatePage(QWidget):
                 items.append((self._files[row], ratio, tc))
         return items
 
+    def _dl_opts(self):
+        """DL training knobs shared by 'DL predict' (leave-one-out) and 'Save DL model'."""
+        return dict(epochs=self.dl_ep.value(), seed=self.dl_seed.value(),
+                    use_pretrain=self.dl_pre.isChecked())
+
     # ---- run ----
     def _run(self):
         items = self._items()
@@ -429,8 +455,9 @@ class ValidatePage(QWidget):
         if self.dl_chk.isChecked():                        # physics-informed DL composition
             params["dl"] = dict(data_dir=self.data_dir, items=items,
                                 calib_path=self.calib_path, baseline=cfg["baseline"],
-                                trim=cfg["trim"])
+                                trim=cfg["trim"], **self._dl_opts())
         self.btn.setEnabled(False); self.btn.setText("Working…")
+        self._cancelled = False; self.cancel_btn.setVisible(True)
         self.status.setText("● starting…"); self.status.setStyleSheet(f"color:{MUTE};")
         self.progbar.setRange(0, 0); self.progbar.setVisible(True)   # busy indicator
         self._thread = QThread(); self._worker = ValidateWorker(params)
@@ -443,6 +470,21 @@ class ValidatePage(QWidget):
         self._worker.fail.connect(self._thread.quit)
         self._thread.start()
 
+    def _cancel(self):
+        """Stop whichever background job is running and free the UI."""
+        self._cancelled = True
+        for name in ("_thread", "_ethread", "_sthread"):
+            th = getattr(self, name, None)
+            if th is not None and th.isRunning():
+                th.quit()
+                if not th.wait(300):
+                    th.terminate(); th.wait()
+        self.cancel_btn.setVisible(False); self.progbar.setVisible(False)
+        self.btn.setEnabled(True); self.btn.setText("Validate")
+        self.explain_btn.setEnabled(True); self.explain_btn.setText("DL explain")
+        self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
+        self.status.setText("cancelled"); self.status.setStyleSheet(f"color:{MUTE};")
+
     # ---- DL explain (interpretability) ----
     def _run_explain(self):
         items = self._items()
@@ -453,6 +495,7 @@ class ValidatePage(QWidget):
         params = dict(data_dir=self.data_dir, items=items, calib_path=self.calib_path,
                       baseline=cfg["baseline"], trim=cfg["trim"])
         self.explain_btn.setEnabled(False); self.explain_btn.setText("Explaining…")
+        self._cancelled = False; self.cancel_btn.setVisible(True)
         self.progbar.setRange(0, 0); self.progbar.setVisible(True)
         self.status.setText("● DL explain — training…"); self.status.setStyleSheet(f"color:{MUTE};")
         self._ethread = QThread(); self._eworker = ExplainWorker(params)
@@ -466,14 +509,16 @@ class ValidatePage(QWidget):
         self._ethread.start()
 
     def _apply_explain(self, r):
+        if getattr(self, "_cancelled", False):
+            return
         self.explain_btn.setEnabled(True); self.explain_btn.setText("DL explain")
-        self.progbar.setVisible(False)
+        self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
         self.status.setText("done (DL explain)"); self.status.setStyleSheet(f"color:{MUTE};")
         self._plot_explain(r)
 
     def _error_explain(self, tb):
         self.explain_btn.setEnabled(True); self.explain_btn.setText("DL explain")
-        self.progbar.setVisible(False)
+        self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
         self.status.setText("DL explain failed — " + tb.strip().splitlines()[-1][:80])
         self.status.setStyleSheet(f"color:{RED};")
 
@@ -489,8 +534,9 @@ class ValidatePage(QWidget):
             return
         cfg = load_preprocess(self.data_dir)
         params = dict(data_dir=self.data_dir, items=items, calib_path=self.calib_path,
-                      baseline=cfg["baseline"], trim=cfg["trim"], out=p)
+                      baseline=cfg["baseline"], trim=cfg["trim"], out=p, **self._dl_opts())
         self.savemodel_btn.setEnabled(False); self.savemodel_btn.setText("Saving…")
+        self._cancelled = False; self.cancel_btn.setVisible(True)
         self.progbar.setRange(0, 0); self.progbar.setVisible(True)
         self.status.setText("● training DL model…"); self.status.setStyleSheet(f"color:{MUTE};")
         self._sthread = QThread(); self._sworker = SaveModelWorker(params)
@@ -504,17 +550,18 @@ class ValidatePage(QWidget):
         self._sthread.start()
 
     def _saved_model(self, info):
+        if getattr(self, "_cancelled", False):
+            return
         self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
-        self.progbar.setVisible(False)
+        self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
         self.status.setText("DL model saved → " + os.path.basename(info))
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _error_save(self, tb):
         self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
-        self.progbar.setVisible(False)
+        self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
         self.status.setText("DL model save failed — " + tb.strip().splitlines()[-1][:80])
         self.status.setStyleSheet(f"color:{RED};")
-        print(tb, file=sys.stderr)
         print(tb, file=sys.stderr)
 
     def _plot_explain(self, r):
@@ -566,12 +613,14 @@ class ValidatePage(QWidget):
 
     def _error(self, tb):
         self.btn.setEnabled(True); self.btn.setText("Validate")
-        self.progbar.setVisible(False)
+        self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
         self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
 
     def _apply(self, pair):
+        if getattr(self, "_cancelled", False):
+            return
         if isinstance(pair, tuple):
             res, cres = pair[0], pair[1]
             dres = pair[2] if len(pair) > 2 else None
@@ -581,7 +630,7 @@ class ValidatePage(QWidget):
         comp = dres if dres else cres
         self._res = res; self._cres = comp; self._is_dl = bool(dres)
         self.btn.setEnabled(True); self.btn.setText("Validate")
-        self.progbar.setVisible(False)
+        self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
         self.tgl.setChecked(False)                          # auto-collapse inputs → show results
         self.status.setText("done (DL composition)" if dres else "done")
         self.status.setStyleSheet(f"color:{MUTE};")
@@ -872,6 +921,18 @@ class ValidatePage(QWidget):
                     + [f"{rec.get(n, ''):.1f}" if rec.get(n) is not None else "" for n in res.names]
             rows.append(row)
         write_csv(os.path.join(d, "validation_table.csv"), head, rows)
+        if self._cres:                                   # composition data (redraws triangle/recovery/drift)
+            crecs = [r for r in self._cres if r.get("nominal") is not None]
+            chead = ["mixture"] + [f"true_{s}" for s in SUBSTANCES] + \
+                    [f"measured_{s}" for s in SUBSTANCES] + \
+                    [f"recovery_{s}_pct" for s in SUBSTANCES] + ["drift"]
+            crows = []
+            for r in crecs:
+                nom = np.asarray(r["nominal"], float); mn = np.asarray(r["mean"], float)
+                rec = [f"{mn[i] / nom[i] * 100:.1f}" if nom[i] > 0 else "" for i in range(len(SUBSTANCES))]
+                crows.append([r["name"]] + [f"{v:.4f}" for v in nom] + [f"{v:.4f}" for v in mn] +
+                             rec + [f"{composition_distance(nom, mn):.4f}"])
+            write_csv(os.path.join(d, "composition_view.csv"), chead, crows)
         figs = [("validate_parity", self.c_parity),
                 ("validate_corrected", self.c_corr),
                 ("validate_response", self.c_resp)]
@@ -945,6 +1006,13 @@ class ValidatePage(QWidget):
                 f"- Response factors (×, higher = over-reported): {rf_str}",
                 f"- Recovery (measured / true): {rec_str}",
                 f"- Mean composition error: {e0:.0%} → {e1:.0%} after response-factor correction."],
+            "Data files (every figure is redrawable from these)": [
+                "- `response_factors.csv` — response factor ± SE per substance (→ validate_response).",
+                "- `validation_table.csv` — true / observed / corrected ratio + recovery per mixture "
+                "(→ validate_parity, validate_corrected).",
+                "- `composition_view.csv` — true & measured composition, per-substance recovery %, and "
+                "drift per mixture (→ drift_triangle, relative_drift, recovery).",
+                "Each PNG is a rendering of one of these tables — re-plot from the CSV in any tool."],
         }
         figures = [(fn, fig_docs[fn]) for fn in fig_names if fn in fig_docs]
         write_readme(d, "UNMIXR — Recovery export", sections, figures)

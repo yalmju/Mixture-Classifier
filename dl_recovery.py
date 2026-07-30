@@ -14,11 +14,16 @@ import os
 import numpy as np
 
 
-def dl_recovery(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None):
+def dl_recovery(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
+                epochs=350, seed=0, use_pretrain=True):
     """items: list of (map_path, true_ratio_dict[, true_conc]). Returns a list of
     {name, nominal, mean[, uM_true, uM_pred]} in composition.SUBSTANCES order
     (leave-one-map-out DL). uM_* only when absolute concentrations (µM) were supplied for
-    ≥3 mixtures — the DL then also predicts an ORDER-OF-MAGNITUDE µM per component."""
+    ≥3 mixtures — the DL then also predicts an ORDER-OF-MAGNITUDE µM per component.
+
+    Training knobs: ``epochs`` (fine-tune iterations), ``seed`` (base RNG seed; each
+    left-out mixture uses seed+i), ``use_pretrain`` (physics simulator warm-up; needs a
+    calibration — ignored when none is loaded)."""
     import torch
     from unmix import _templates, _baseline_removed, _l2
     from real_data import load_map
@@ -62,7 +67,7 @@ def dl_recovery(data_dir, items, calib_path=None, baseline=True, trim=None, prog
 
     # physics pretrain from the calibration (K, gA) — skipped gracefully if unavailable
     pre = None
-    if calib_path:
+    if calib_path and use_pretrain:
         try:
             from io_utils import load_calibration_csv
             from calibration import calibrate
@@ -96,12 +101,12 @@ def dl_recovery(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             mu = Xabs[tr].mean(0); sd = Xabs[tr].std(0) + 1e-8
             Xt = ((Xabs[tr] - mu) / sd).astype(np.float32); Xe = ((Xabs[i] - mu) / sd).astype(np.float32)
             Yt = (np.log10(np.clip(C[tr], 1e-8, None)) + 6.0).astype(np.float32)   # log10 µM
-            torch.manual_seed(i)
+            torch.manual_seed(seed + i)
             net = nn.Sequential(nn.Linear(Xt.shape[1], 256), nn.BatchNorm1d(256), nn.ReLU(),
                                 nn.Dropout(0.15), nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, len(subs)))
             op = torch.optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-3)
             Xtt = torch.tensor(Xt); Ytt = torch.tensor(Yt)
-            for _ in range(350):
+            for _ in range(epochs):
                 net.train(); op.zero_grad(); ((net(Xtt) - Ytt) ** 2).mean().backward(); op.step()
             net.eval()
             with torch.no_grad():
@@ -114,7 +119,7 @@ def dl_recovery(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         if progress:
             progress(f"DL leave-one-out — mixture {i + 1}/{N}  ({N - i - 1} left)")
         tr = [j for j in range(N) if j != i]
-        model = train_composition(X[tr], Y[tr], len(subs), pretrain=pre, seed=i)
+        model = train_composition(X[tr], Y[tr], len(subs), pretrain=pre, seed=seed + i, epochs_ft=epochs)
         pred = predict_composition(model, X[i])[0]
         nom = np.zeros(len(SUBSTANCES)); mn = np.zeros(len(SUBSTANCES))
         for k, o in enumerate(order):
