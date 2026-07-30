@@ -113,7 +113,12 @@ general tool:
 Operating recommendation: **linear response factor** for the simple 2-component regime
 (~21%, no overfitting); the **DL residual** for 3+ component mixtures, where it already wins.
 
-### Model benchmark — evidence for the MLP (35-map LOO, mean ± SD over 3 seeds)
+### Composition benchmark — evidence for the MLP (35-map LOO, mean ± SD over 3 seeds)
+
+*This benchmark scores the **composition** task — who is present and in what ratio (composition
+error, RMSE, R²) plus present/absent **detection** (ROC-AUC, PR-AUC, F1). It does **not** score
+absolute µM; that is the separate [Concentration benchmark](#concentration-benchmark--absolute-µm-order-of-magnitude-only)
+below. Ratio-only methods such as NNLS appear here because they output a composition, not a µM.*
 
 ![benchmark](model_benchmark.png)
 
@@ -199,7 +204,13 @@ attribution concentrates on them (THI sharply at 1368 / 550 cm⁻¹), band permu
 importance peaks on them, and ablating them collapses the prediction (THI −100 %, TBZ −38 %,
 DQ −22 %). So the network learned the real SERS fingerprint, not a dataset artefact.
 
-## Absolute concentration (µM) — order-of-magnitude only
+## Concentration benchmark — absolute µM (order-of-magnitude only)
+
+*Distinct from the [Composition benchmark](#composition-benchmark--evidence-for-the-mlp-35-map-loo-mean--sd-over-3-seeds)
+above: that one scores the ratio / who-is-present; this one scores the **absolute concentration
+in µM**. The physics baseline here is **calibration inversion** — solving the competitive-Langmuir
+model (fit from the single-component standard curves) for concentration — not NNLS. Learned
+baselines PLS and 1D-CNN are included alongside the MLP for a like-for-like comparison.*
 
 Why single-component standard curves are the wrong tool for mixtures: a pure-compound
 calibration follows θ = KC/(1+KC), but in a mixture the coverage is competitive,
@@ -213,16 +224,33 @@ Result (leave-one-out on the consolidated **Ratio_mix** set — 34 mixtures, one
 session, 10–1000 µM; different sessions must NOT be pooled, as gain/batch differences break
 the absolute scale):
 
+Per-component recovery, calibration inversion vs the DL:
+
 | within an order of magnitude | DQ | TBZ | THI | mean |
 |---|---|---|---|---|
-| physics inversion | 44 % | **20 %** | 80 % | ~48 % |
+| calibration inversion | 44 % | **20 %** | 80 % | ~48 % |
 | DL regression | **68 %** | **60 %** | 80 % | **~69 %** |
 
-- The **DL reaches ~70 % within an order of magnitude** (median ~3×) and clearly beats physics
-  inversion — most on the competition-buried TBZ (60 % vs 20 %), whose concentration classical
-  inversion cannot recover at all.
-- **Precise µM (within 2×) is not achievable** (8–36 %, R²(log)<0) — competitive adsorption +
-  signal-magnitude (gain) dependence are physical limits, not fit-quality issues.
+Four-method comparison (all components pooled, leave-one-out):
+
+| method | within-2× | within-order | median fold error |
+|---|---|---|---|
+| calibration inversion (Langmuir) | 11 % | 48 % | ~14× |
+| PLS regression | **28 %** | 61 % | ~4–5× |
+| 1D-CNN | 21 % | 52 % | ~9× |
+| **MLP-DL (ours)** | 21 % | **69 %** | **~3×** |
+
+![concentration accuracy — all methods](concentration_accuracy.png)
+
+- Every **learned** method beats calibration inversion on order-of-magnitude accuracy — the
+  competitive-Langmuir inversion collapses because a single-component curve is the wrong model
+  for a competitive surface (see above).
+- The **MLP leads within-order (69 %) and on median fold error (~3×)**, most on the
+  competition-buried TBZ (60 % vs 20 %) that classical inversion cannot recover at all. PLS is
+  the closest baseline and is actually best at the tight **2×** cut (28 %), but falls behind the
+  MLP as the tolerance widens; the 1D-CNN is weakest (too many parameters for ~34 mixtures).
+- **Precise µM (within 2×) is not achievable by any method** (≤28 %, R²(log)<0) — competitive
+  adsorption + signal-magnitude (gain) dependence are physical limits, not fit-quality issues.
 - The honest deliverable is **semi-quantitative, order-of-magnitude concentration**
   ("~10 vs ~100 vs ~1000 µM"), for all components including the ones THI buries — which
   classical methods lose entirely. Keep to one consistent measurement session per model.

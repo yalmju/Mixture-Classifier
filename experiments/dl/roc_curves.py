@@ -78,22 +78,26 @@ def rflin_loo():
     for i in range(N):
         tr=[j for j in range(N) if j!=i]; r=fit_response_factors(S[tr],Y[tr]); Pm[i]=apply_response_factors(S[i][None,:],r)[0]
     return Pm
-PREDS = {"NNLS": S, "linear RF": rflin_loo(), "PLS": sk_loo(lambda: PLSRegression(n_components=3)),
+PREDS = {"NNLS": S, "response factor": rflin_loo(), "PLS": sk_loo(lambda: PLSRegression(n_components=3)),
          "SVR": sk_loo(lambda: MultiOutputRegressor(SVR(C=10,gamma="scale"))),
          "RandomForest": sk_loo(lambda: RandomForestRegressor(n_estimators=300,random_state=0)),
          "1D-CNN": torch_loo(CNN), "MLP-DL (ours)": mlp_loo()}
 lab = np.concatenate([(Y[:,c]>0.05).astype(int) for c in range(3)])
-COL = {"NNLS":"#9aa3ad","linear RF":"#c98a15","PLS":"#1a73e8","SVR":"#6b5fd6","RandomForest":"#0f9d6b","1D-CNN":"#d64545","MLP-DL (ours)":"#4a9e2a"}
+COL = {"NNLS":"#9aa3ad","response factor":"#c98a15","PLS":"#1a73e8","SVR":"#6b5fd6","RandomForest":"#0f9d6b","1D-CNN":"#d64545","MLP-DL (ours)":"#4a9e2a"}
 plt.figure(figsize=(6.4,6.0))
+import csv as _csv
+_rows=[]
 for name, Pm in PREDS.items():
     sc = np.concatenate([Pm[:,c] for c in range(3)])
     fpr,tpr,_ = roc_curve(lab, sc); a=auc(fpr,tpr)
     lw = 2.6 if "ours" in name else 1.4
     plt.plot(fpr,tpr,color=COL[name],lw=lw,label=f"{name}  (AUC {a:.3f})")
+    for f,t in zip(fpr,tpr): _rows.append([name,f"{a:.4f}",f"{f:.4f}",f"{t:.4f}"])
+with open(os.path.join(os.getcwd(),"docs","roc_curves.csv"),"w",newline="",encoding="utf-8") as _f:
+    _w=_csv.writer(_f); _w.writerow(["method","AUC","fpr","tpr"]); _w.writerows(_rows)
 plt.plot([0,1],[0,1],ls="--",color="#c7ccd2",lw=1)
 plt.xlabel("false positive rate"); plt.ylabel("true positive rate")
-plt.title("Detection ROC — component present/absent (micro-avg, 35-map LOO)", fontsize=11, fontweight="bold")
 plt.legend(fontsize=8.5, loc="lower right", framealpha=0.9)
 for s in ("top","right"): plt.gca().spines[s].set_visible(False)
 plt.tight_layout(); plt.savefig(os.path.join(os.getcwd(),"docs","roc_curves.png"), dpi=120, facecolor="white")
-print("saved docs/roc_curves.png")
+print("saved docs/roc_curves.png + docs/roc_curves.csv")

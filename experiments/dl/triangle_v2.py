@@ -16,7 +16,7 @@ root = "S:/Google Drive"
 acf = next(os.path.join(e.path, "ACF_PEST_DB") for e in os.scandir(root)
            if e.is_dir() and os.path.isdir(os.path.join(e.path, "ACF_PEST_DB")))
 pure = os.path.join(acf, "Pure")
-folders = [os.path.join(acf, "Ratio", "Binary"), os.path.join(acf, "Ratio", "Tertiary")]
+folders = [os.path.join(acf, "Ratio", "Ratio_mix")]     # consolidated 34-mixture set (same as concentration)
 from unmix import _templates, _baseline_removed, _l2
 from real_data import load_map
 from dataset import is_blank
@@ -47,7 +47,7 @@ else:
         y = np.clip(mean-als_baseline(mean), 0, None); return y/(np.linalg.norm(y)+1e-12)
     X, S, Y = [], [], []
     for folder in folders:
-        for p in sorted(glob.glob(os.path.join(folder, "*_corrected.csv"))):
+        for p in sorted(glob.glob(os.path.join(folder, "*orrected.csv"))):   # '_corrected' & '-corrected'
             t = parse_mixture_label(os.path.basename(p), nb)
             if t and len(t) >= 2:
                 y = mix_spec(p); X.append(y); S.append(surface_composition(y[None,:],P)[0]); Y.append(_ratio([t.get(n,0) for n in nb]))
@@ -81,37 +81,61 @@ def recovery(Pm, s):
     v=np.array(v); se=v.std(ddof=1)/np.sqrt(len(v)) if len(v)>1 else 0.0
     return float(v.mean()), float(se)
 
-def panel(ax, Pm, title):
+_H=3**0.5/2; _TOP=np.array([0.5,_H]); _BL=np.array([0.0,0.0]); _BR=np.array([1.0,0.0])
+def bary(frac):                                              # THI top · TBZ bottom-left · DQ bottom-right
+    f=np.asarray(frac,float)
+    return f[2]*_TOP + f[1]*_BL + f[0]*_BR
+
+def panel(ax, Pm):
     A,B,C = bary([1,0,0]), bary([0,0,1]), bary([0,1,0])
+    # accuracy heatmap over the interior — IDW from each sample's accuracy at its true composition
+    gx=np.linspace(min(A[0],B[0],C[0]),max(A[0],B[0],C[0]),260)
+    gy=np.linspace(min(A[1],B[1],C[1]),max(A[1],B[1],C[1]),260)
+    GX,GY=np.meshgrid(gx,gy)
+    det=(B[1]-C[1])*(A[0]-C[0])+(C[0]-B[0])*(A[1]-C[1])
+    l1=((B[1]-C[1])*(GX-C[0])+(C[0]-B[0])*(GY-C[1]))/det
+    l2=((C[1]-A[1])*(GX-C[0])+(A[0]-C[0])*(GY-C[1]))/det
+    inside=(l1>=-1e-9)&(l2>=-1e-9)&((1-l1-l2)>=-1e-9)
+    pts=np.array([bary(Y[i]) for i in range(N)])
+    acc=np.array([1-min((0.5*np.abs(Pm[i]-Y[i]).sum())/EMAX,1) for i in range(N)])
+    gi=np.stack([GX.ravel(),GY.ravel()],1)                # smooth IDW over the whole grid …
+    d2=((gi[:,None,0]-pts[None,:,0])**2+(gi[:,None,1]-pts[None,:,1])**2)+3e-3
+    wv=1.0/d2**0.9
+    Z=((wv*acc[None,:]).sum(1)/wv.sum(1)).reshape(GX.shape)
+    try:
+        from scipy.ndimage import gaussian_filter
+        Z=gaussian_filter(Z,sigma=7)                      # … then blur out the blotches
+    except Exception:
+        pass
+    ax.pcolormesh(GX,GY,np.ma.masked_where(~inside,Z),cmap=cmap,vmin=0,vmax=1,
+                  alpha=0.42,shading="gouraud",zorder=0)
     for t in (0.25,0.5,0.75):
         for Pp,Q,R in [(A,B,C),(B,A,C),(C,A,B)]:
             ax.plot([Pp[0]+t*(Q[0]-Pp[0]),Pp[0]+t*(R[0]-Pp[0])],[Pp[1]+t*(Q[1]-Pp[1]),Pp[1]+t*(R[1]-Pp[1])],color=FAINT,lw=0.5,alpha=0.4,zorder=0)
     ax.plot([A[0],B[0],C[0],A[0]],[A[1],B[1],C[1],A[1]],color=INK,lw=1.0,zorder=1)
-    for f,s,ha,va,dx,dy,col,si in [([1,0,0],"DQ","center","bottom",0,0.05,"#1a73e8",0),([0,0,1],"THI","right","top",-0.03,-0.02,"#d6336c",2),([0,1,0],"TBZ","left","top",0.03,-0.02,"#4a9e2a",1)]:
+    for f,s,ha,va,dx,dy,col,si in [([0,0,1],"THI","center","bottom",0,0.06,"#d6336c",2),([0,1,0],"TBZ","center","top",0,-0.06,"#4a9e2a",1),([1,0,0],"DQ","center","top",0,-0.06,"#1a73e8",0)]:
         p=bary(f); rec,se=recovery(Pm,si)
-        ax.text(p[0]+dx,p[1]+dy,f"{s}\nrecovery {rec:.0f}±{se:.0f}%",ha=ha,va=va,fontsize=10,fontweight="bold",color=col,linespacing=1.25)
+        ax.text(p[0]+dx,p[1]+dy,f"{s}\n{rec:.0f}±{se:.0f}%",ha=ha,va=va,fontsize=15,fontweight="bold",color=col,linespacing=1.3)
     for i in range(N):
         p0=bary(Y[i]); p1=bary(Pm[i]); e=0.5*np.abs(Pm[i]-Y[i]).sum()
-        ax.scatter(*p0,s=34,facecolors="none",edgecolors=MUTE,linewidths=1.0,zorder=3)
-        if np.linalg.norm(p1-p0)>1e-3:
-            ax.add_patch(FancyArrowPatch(p0,p1,arrowstyle="-|>",mutation_scale=7,color="#b6bcc4",lw=0.8,zorder=2,shrinkA=2,shrinkB=2))
-        ax.scatter(*p1,s=46,color=cmap(1-min(e/EMAX,1)),edgecolors="white",linewidths=0.5,zorder=4)
-    me=np.mean([0.5*np.abs(Pm[i]-Y[i]).sum() for i in range(N)])
-    ax.set_title(f"{title}\nmean composition error {me:.0%}",fontsize=11,fontweight="bold",color=INK,pad=8)
+        if np.linalg.norm(p1-p0)>1e-3:                       # drift arrow (soft grey)
+            ax.add_patch(FancyArrowPatch(p0,p1,arrowstyle="-|>",mutation_scale=14,
+                         color="#6b7280",lw=1.5,alpha=0.8,zorder=2,shrinkA=4,shrinkB=6))
+        ax.scatter(*p0,s=60,facecolors="white",edgecolors="#333333",linewidths=1.5,zorder=3)
+        ax.scatter(*p1,s=115,color=cmap(1-min(e/EMAX,1)),edgecolors="white",linewidths=0.9,zorder=4)
+    print(f"  {'panel'}: {N} true points plotted")
     ax.set_aspect("equal"); ax.axis("off"); ax.set_xlim(-0.16,1.16); ax.set_ylim(-0.13,1.10)
 
-fig,axes=plt.subplots(1,2,figsize=(12,6))
-panel(axes[0],Pn,"NNLS (classical unmixing)")
-panel(axes[1],Pd,"full-spectrum DL (ours)")
-sm2=ScalarMappable(norm=Normalize(0,1),cmap=plt.get_cmap("RdYlGn"))
-cb=fig.colorbar(sm2,ax=axes,fraction=0.025,pad=0.02)
-cb.set_label("prediction accuracy   (1 = exact · green good, red poor)",fontsize=9)
-cb.set_ticks([0,0.5,1.0])
-h=[Line2D([],[],marker="o",mfc="none",mec=MUTE,mew=1.0,ls="",ms=8,label="true composition"),
-   Line2D([],[],marker="o",mfc="#4a9e2a",mec="white",ls="",ms=8,label="prediction (colour = accuracy)")]
-fig.legend(handles=h,loc="lower center",ncol=2,fontsize=9,framealpha=0,bbox_to_anchor=(0.45,-0.02))
-fig.suptitle("Composition classification on the ternary simplex  (leave-one-out, 35 real mixtures)",
-             fontsize=12.5,fontweight="bold",color=INK,y=1.0)
-fig.tight_layout(rect=(0,0.03,1,0.97))
-fig.savefig(os.path.join(os.getcwd(),"docs","classify_triangle.png"),dpi=120,facecolor="white",bbox_inches="tight")
-print("saved docs/classify_triangle.png")
+def save_one(Pm, fname):                                     # one full-size triangle per PNG (no overlap)
+    fig,ax=plt.subplots(figsize=(7.6,7.2))
+    panel(ax,Pm)
+    sm2=ScalarMappable(norm=Normalize(0,1),cmap=plt.get_cmap("RdYlGn"))
+    cb=fig.colorbar(sm2,ax=ax,fraction=0.03,pad=0.02,shrink=0.42,aspect=20)   # small scale bar
+    cb.set_label("accuracy (green = exact, red = poor)",fontsize=11); cb.set_ticks([0,0.5,1.0]); cb.ax.tick_params(labelsize=10)
+    h=[Line2D([],[],marker="o",mfc="none",mec=MUTE,mew=1.4,ls="",ms=11,label="true composition"),
+       Line2D([],[],marker="o",mfc="#4a9e2a",mec="white",ls="",ms=12,label="prediction (colour = accuracy)")]
+    fig.legend(handles=h,loc="lower center",ncol=2,fontsize=11,framealpha=0,bbox_to_anchor=(0.5,0.0))
+    fig.savefig(os.path.join(os.getcwd(),"docs",fname),dpi=130,facecolor="white",bbox_inches="tight")
+save_one(Pn,"classify_triangle_nnls.png")
+save_one(Pd,"classify_triangle_dl.png")
+print("saved docs/classify_triangle_nnls.png + docs/classify_triangle_dl.png")

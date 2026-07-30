@@ -111,46 +111,51 @@ for c, name in enumerate(nb):
     print(f"  {name}: bands {[f'{w:.0f}' for w in bands]}  pred {before:.2f} → {after:.2f} "
           f"({100*(after-before)/(before+1e-9):+.0f}%)")
 
-# ---------- figure ----------
+# ---------- figures (three separate PNGs, no titles — figure-set ready) ----------
 COL = {"DQ": "#1a73e8", "TBZ": "#4a9e2a", "THI": "#d6336c"}
-fig = plt.figure(figsize=(11, 7.5))
-gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 1.1], hspace=0.5, wspace=0.25)
-for c, name in enumerate(nb):
-    ax = fig.add_subplot(gs[c, 0])
+D = os.path.join(os.getcwd(), "docs")
+# (1) Integrated-Gradients attribution — DQ/TBZ/THI stacked
+figA, axes = plt.subplots(len(nb), 1, figsize=(7.2, 5.4), sharex=True)
+for ax, name in zip(axes, nb):
     ax.plot(wnv, attr[name], color=COL[name], lw=0.9)
     ax.fill_between(wnv, attr[name], color=COL[name], alpha=0.25)
     for wv in vip.get(name, []):
-        ax.axvline(wv, color=INK if False else "#555", ls=":", lw=1.0)
-        ax.text(wv, 1.02, f"{wv:.0f}", fontsize=7, ha="center", color="#555")
+        ax.axvline(wv, color="#555", ls=":", lw=1.0)
     ax.set_ylabel(f"{name}\nIG attr", color=COL[name], fontweight="bold", fontsize=9)
     ax.set_xlim(LO, HI); ax.set_ylim(0, 1.15)
-    if c < 2: ax.set_xticklabels([])
     for s in ("top","right"): ax.spines[s].set_visible(False)
-fig.text(0.28, 0.955, "(1) Integrated-Gradients attribution — dotted = each compound's VIP bands",
-         ha="center", fontsize=10, fontweight="bold")
-fig.axes[0].set_xlabel(""); fig.axes[2].set_xlabel("wavenumber (cm-1)")
-# permutation importance
-axp = fig.add_subplot(gs[0:2, 1])
+axes[-1].set_xlabel("wavenumber (cm-1)")
+figA.tight_layout(); figA.savefig(os.path.join(D, "interp_ig.png"), dpi=120, facecolor="white", bbox_inches="tight")
+# (2) Band permutation importance
+figB, axp = plt.subplots(figsize=(7.2, 4.2))
 axp.plot(perm[:,0], np.clip(perm[:,1],0,None)*100, color="#25303b", lw=1.2)
 axp.fill_between(perm[:,0], np.clip(perm[:,1],0,None)*100, color="#8b95a1", alpha=0.3)
 for name in nb:
     for wv in vip.get(name, []):
         axp.axvline(wv, color=COL[name], ls=":", lw=1.0)
-axp.set_title("(2) Band permutation importance", fontsize=10, fontweight="bold")
 axp.set_xlabel("wavenumber (cm-1)"); axp.set_ylabel("Δ composition error (%) when shuffled")
 axp.set_xlim(LO, HI)
 for s in ("top","right"): axp.spines[s].set_visible(False)
-# ablation
-axa = fig.add_subplot(gs[2, 1])
+figB.tight_layout(); figB.savefig(os.path.join(D, "interp_permutation.png"), dpi=120, facecolor="white", bbox_inches="tight")
+# (3) Ligand ablation
+figC, axa = plt.subplots(figsize=(5.4, 4.2))
 x = np.arange(len(nb)); w = 0.38
 before = [abl[n][0] for n in nb]; after = [abl[n][1] for n in nb]
 axa.bar(x-w/2, before, w, label="full spectrum", color=[COL[n] for n in nb], alpha=0.9)
 axa.bar(x+w/2, after, w, label="VIP bands ablated", color=[COL[n] for n in nb], alpha=0.35, hatch="//")
 axa.set_xticks(x); axa.set_xticklabels(nb); axa.set_ylabel("mean predicted fraction")
-axa.set_title("(3) Ligand ablation — zeroing own VIP bands collapses the prediction",
-              fontsize=9.5, fontweight="bold")
 axa.legend(fontsize=8, framealpha=0)
 for s in ("top","right"): axa.spines[s].set_visible(False)
-fig.savefig(os.path.join(os.getcwd(), "docs", "dl_interpretability.png"), dpi=120,
-            facecolor="white", bbox_inches="tight")
-print("saved docs/dl_interpretability.png")
+figC.tight_layout(); figC.savefig(os.path.join(D, "interp_ablation.png"), dpi=120, facecolor="white", bbox_inches="tight")
+# data dumps so every panel is redrawable
+import csv as _csv
+with open(os.path.join(os.getcwd(),"docs","interpretability_ig.csv"),"w",newline="",encoding="utf-8") as _f:
+    _w=_csv.writer(_f); _w.writerow(["wavenumber_cm-1"]+[f"IG_{n}" for n in nb])
+    for j in range(len(wnv)): _w.writerow([f"{wnv[j]:.1f}"]+[f"{attr[n][j]:.4f}" for n in nb])
+with open(os.path.join(os.getcwd(),"docs","interpretability_permutation.csv"),"w",newline="",encoding="utf-8") as _f:
+    _w=_csv.writer(_f); _w.writerow(["wavenumber_cm-1","delta_comp_error_frac"])
+    for r in perm: _w.writerow([f"{r[0]:.1f}",f"{r[1]:.5f}"])
+with open(os.path.join(os.getcwd(),"docs","interpretability_ablation.csv"),"w",newline="",encoding="utf-8") as _f:
+    _w=_csv.writer(_f); _w.writerow(["substance","full_spectrum_frac","VIP_ablated_frac"])
+    for n in nb: _w.writerow([n,f"{abl[n][0]:.4f}",f"{abl[n][1]:.4f}"])
+print("saved docs/dl_interpretability.png + 3 CSVs (ig/permutation/ablation)")

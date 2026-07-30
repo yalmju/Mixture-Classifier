@@ -133,7 +133,7 @@ def metrics(Pm):
     be=np.mean([np.abs(Pm[i][nonTHI]-Y[i][nonTHI]).sum() for i in ti])
     return dict(ce=ce, mae=mae, rmse=rmse, r2=r2, auc=auc, ap=ap, f1=f1, be=be)
 
-METHODS = [("NNLS", lambda s: S, False), ("linear RF", rf_lin_loo, False),
+METHODS = [("NNLS", lambda s: S, False), ("response factor", rf_lin_loo, False),
            ("PLS", pls_loo, False), ("SVR", svr_loo, False),
            ("RandomForest", rf_loo, True), ("1D-CNN", cnn_loo, True),
            ("MLP-DL (ours)", mlp_loo, True)]
@@ -162,15 +162,12 @@ cols=["#9aa3ad","#c98a15","#1a73e8","#6b5fd6","#0f9d6b","#d64545","#4a9e2a"]
 fig,(a1,a2)=plt.subplots(1,2,figsize=(12,4.8))
 ce=[rows[k]["ce"][0]*100 for k in order]; ces=[rows[k]["ce"][1]*100 for k in order]
 b=a1.bar(range(len(order)), ce, yerr=ces, capsize=4, color=cols, edgecolor="white")
-for bi,v in zip(b,ce): a1.text(bi.get_x()+bi.get_width()/2, v+0.4, f"{v:.1f}", ha="center", fontsize=8.5, fontweight="bold")
-a1.set_ylabel("composition error (%)"); a1.set_title("Quantification error  (lower = better)", fontweight="bold")
+a1.set_ylabel("composition error (%)")
 au=[rows[k]["auc"][0] for k in order]; aus=[rows[k]["auc"][1] for k in order]
 b=a2.bar(range(len(order)), au, yerr=aus, capsize=4, color=cols, edgecolor="white")
-for bi,v in zip(b,au): a2.text(bi.get_x()+bi.get_width()/2, v+0.005, f"{v:.2f}", ha="center", fontsize=8.5, fontweight="bold")
-a2.set_ylim(0.5,1.02); a2.set_ylabel("detection ROC-AUC"); a2.set_title("Detection AUC  (higher = better)", fontweight="bold")
+a2.set_ylim(0.5,1.02); a2.set_ylabel("detection ROC-AUC")
 for ax in (a1,a2):
     ax.set_xticks(range(len(order))); ax.set_xticklabels(order, rotation=20, ha="right", fontsize=8.5)
     for s in ("top","right"): ax.spines[s].set_visible(False)
-fig.suptitle("Model benchmark — 35-map leave-one-out, mean ± SD over 3 seeds", fontsize=12.5, fontweight="bold")
-fig.tight_layout(rect=(0,0,1,0.96)); fig.savefig(os.path.join(os.getcwd(),"docs","model_benchmark.png"), dpi=120, facecolor="white")
+fig.tight_layout(); fig.savefig(os.path.join(os.getcwd(),"docs","model_benchmark.png"), dpi=120, facecolor="white")
 print("saved docs/model_benchmark.png + docs/model_benchmark.csv")
