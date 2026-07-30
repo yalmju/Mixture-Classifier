@@ -555,6 +555,18 @@ class ValidatePage(QWidget):
         else:
             txt += ("<br><span style='color:%s'>load a calibration + enter true "
                     "concentrations (e.g. DQ:100uM) to get recovery %%.</span>" % FAINT)
+        if dres and any("uM_pred" in r for r in dres):        # DL order-of-magnitude µM
+            lr = []
+            for r in dres:
+                tp, pp = r.get("uM_true", {}), r.get("uM_pred", {})
+                for s in tp:
+                    if tp[s] > 0 and s in pp:
+                        lr.append(abs(np.log10(max(pp[s], 1e-4) / tp[s])))
+            if lr:
+                fac = 10 ** float(np.median(lr)); wo = float(np.mean(np.array(lr) < 1))
+                txt += ("<br><b style='color:%s'>approx. concentration (DL, semi-quantitative)</b>: "
+                        "median within ~%.1f× of true, %.0f%% within order-of-magnitude "
+                        "— screening level (not precise µM)." % (BLUE, fac, 100 * wo))
         self.readout.setText(txt)
 
     @staticmethod
