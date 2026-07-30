@@ -13,7 +13,7 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QFileDialog, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QLineEdit, QCheckBox,
+    QHeaderView, QAbstractItemView, QLineEdit, QCheckBox, QProgressBar,
 )
 
 from matplotlib.colors import to_rgb
@@ -91,6 +91,17 @@ class ValidatePage(QWidget):
         ctl.addWidget(add_b); ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
+        # collapsible input detail (fixed components · VIP · mixture table) — collapse it
+        # (auto-collapses after a run) to give the result plots the full window height
+        self.tgl = QPushButton(); self.tgl.setObjectName("ghost")
+        self.tgl.setCheckable(True); self.tgl.setChecked(True)
+        self.tgl.setStyleSheet("text-align:left; padding:4px 8px;")
+        self.tgl.toggled.connect(self._toggle_inputs)
+        root.addWidget(self.tgl)
+
+        self.inbox = QWidget(); ibl = QVBoxLayout(self.inbox)
+        ibl.setContentsMargins(0, 0, 0, 0); ibl.setSpacing(12)
+
         # fixed-component base ratio — auto-added to files that don't name them
         brow = QHBoxLayout(); brow.setSpacing(8)
         bl = QLabel("fixed components:"); bl.setObjectName("field")
@@ -103,7 +114,7 @@ class ValidatePage(QWidget):
         repar_b.setToolTip("re-read every filename's true ratio using the fixed-components base")
         repar_b.clicked.connect(self._reparse)
         brow.addWidget(bl); brow.addWidget(self.base_txt, 1); brow.addWidget(repar_b)
-        root.addLayout(brow)
+        ibl.addLayout(brow)
 
         # VIP-band NNLS — decompose the composition on each compound's discriminative
         # marker band(s) only, instead of the whole spectrum (less mixture cross-talk)
@@ -122,10 +133,7 @@ class ValidatePage(QWidget):
                          "from the references")
         vip_b.clicked.connect(self._auto_vip)
         vrow.addWidget(self.vip_chk); vrow.addWidget(self.vip_txt, 1); vrow.addWidget(vip_b)
-        root.addLayout(vrow)
-
-        self.status = QLabel(""); self.status.setObjectName("sub")
-        root.addWidget(self.status)
+        ibl.addLayout(vrow)
 
         # editable table: file  |  true ratio (name:parts, comma-separated)
         self.table = QTableWidget(0, 2)
@@ -134,7 +142,18 @@ class ValidatePage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
         self.table.setMaximumHeight(170)
-        root.addWidget(self.table)
+        ibl.addWidget(self.table)
+        root.addWidget(self.inbox)
+        self._toggle_inputs(True)                          # set the toggle label
+
+        # progress: a busy bar (shown only while working) + the live status text
+        prow = QHBoxLayout(); prow.setSpacing(8)
+        self.status = QLabel(""); self.status.setObjectName("sub")
+        self.progbar = QProgressBar(); self.progbar.setTextVisible(False)
+        self.progbar.setFixedHeight(6); self.progbar.setMaximumWidth(180)
+        self.progbar.setVisible(False)
+        prow.addWidget(self.progbar); prow.addWidget(self.status, 1)
+        root.addLayout(prow)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
         self.k_mix = Kpi("mixtures"); self.k_sub = Kpi("substances")
@@ -202,6 +221,12 @@ class ValidatePage(QWidget):
 
     def set_data_dir(self, path):
         self.data_dir = path; self.ref_lbl.setText(self._short(path))
+
+    def _toggle_inputs(self, on):
+        """Show/hide the input detail (fixed components · VIP · mixture table)."""
+        self.inbox.setVisible(on)
+        self.tgl.setText(("▾  " if on else "▸  ")
+                         + "inputs  (fixed components · VIP bands · mixture table)")
 
     def _ref_names(self):
         try:
@@ -346,7 +371,8 @@ class ValidatePage(QWidget):
                              files=[it[0] for it in items],
                              nominals=[it[1] for it in items]))
         self.btn.setEnabled(False); self.btn.setText("Working…")
-        self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
+        self.status.setText("● starting…"); self.status.setStyleSheet(f"color:{MUTE};")
+        self.progbar.setRange(0, 0); self.progbar.setVisible(True)   # busy indicator
         self._thread = QThread(); self._worker = ValidateWorker(params)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -359,6 +385,7 @@ class ValidatePage(QWidget):
 
     def _error(self, tb):
         self.btn.setEnabled(True); self.btn.setText("Validate")
+        self.progbar.setVisible(False)
         self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
@@ -367,6 +394,8 @@ class ValidatePage(QWidget):
         res, cres = pair if isinstance(pair, tuple) else (pair, None)
         self._res = res; self._cres = cres
         self.btn.setEnabled(True); self.btn.setText("Validate")
+        self.progbar.setVisible(False)
+        self.tgl.setChecked(False)                          # auto-collapse inputs → show results
         self.status.setText("done"); self.status.setStyleSheet(f"color:{MUTE};")
         names = res.names
         self.k_mix.set(str(len(res.rows)), TEAL)
