@@ -113,6 +113,27 @@ general tool:
 Operating recommendation: **linear response factor** for the simple 2-component regime
 (~21%, no overfitting); the **DL residual** for 3+ component mixtures, where it already wins.
 
+### Model benchmark — evidence for the MLP (35-map LOO, mean ± SD over 3 seeds)
+
+![benchmark](model_benchmark.png)
+
+| method | comp err ↓ | RMSE ↓ | R² ↑ | ROC-AUC ↑ | PR-AUC ↑ | F1 ↑ | buried err ↓ |
+|---|---|---|---|---|---|---|---|
+| NNLS | 31.0% | 0.322 | 0.13 | 0.911 | 0.95 | 0.82 | 0.35 |
+| linear response factor | 23.9% | 0.249 | 0.48 | **0.917** | 0.95 | 0.87 | 0.27 |
+| PLS | 26.5% | 0.233 | 0.55 | 0.877 | 0.94 | 0.84 | 0.37 |
+| SVR | 26.0% | 0.221 | 0.59 | 0.877 | 0.94 | 0.77 | 0.32 |
+| Random Forest | 27.9% | 0.225 | 0.58 | 0.877 | 0.94 | 0.82 | 0.40 |
+| 1D-CNN | 29.5% ± 4.2 | 0.284 | 0.32 | 0.801 | 0.89 | 0.80 | 0.44 |
+| **MLP-DL (ours)** | **19.1% ± 0.6** | **0.193** | **0.69** | 0.912 | **0.95** | **0.88** | **0.26** |
+
+Detection of presence is easy for almost every method (ROC-AUC 0.88–0.92); the
+differentiator is **quantification accuracy**, where the MLP dominates — composition error
+19.1% (next best 23.9%), R² 0.69 (next 0.59), lowest RMSE and buried error. It is best on 6
+of 7 metrics and tied-best on AUC, with low seed variance (± 0.6%). The 1D-CNN is the worst
+and most unstable (± 4.2%) — too many parameters for ~34 training mixtures. Full numbers:
+`model_benchmark.csv`.
+
 ### Architecture / simulator / loss ablations (35-map LOO)
 
 | config | composition err | buried non-THI err | buried detect |
