@@ -768,19 +768,20 @@ class ValidatePage(QWidget):
             ax.set_title("Composition recovery — real vs measured mixture ratio",
                          fontsize=11.5, fontweight="bold", color=INK, pad=24)
             ax.text(0.5, 1.04, "arrow: real → measured   ·   corner %: recovery "
-                    "(100% = perfect, green 80–120%)", transform=ax.transAxes,
-                    ha="center", va="bottom", fontsize=8, color=MUTE)
-            ax.text(0.5, -0.02, "closer to a corner = more of that substance",
-                    transform=ax.transAxes, ha="center", va="top", fontsize=7.5,
-                    color=FAINT, style="italic")
+                    "(100% = perfect, green 80–120%)   ·   closer to a corner = more of "
+                    "that substance", transform=ax.transAxes,
+                    ha="center", va="bottom", fontsize=7.5, color=MUTE)
         ax.set_xlim(-0.16, 1.16); ax.set_ylim(-0.12, 1.10)
         self.c_tri.fig.tight_layout(); self.c_tri.draw_idle()
 
     def _plot_reldrift(self, res):
-        ax = self.c_rel.new_ax()
         recs = [r for r in res if r["nominal"] is not None]
         if not recs:
-            self.c_rel.placeholder("no nominal ratios"); return
+            self.c_rel.new_ax(); self.c_rel.placeholder("no nominal ratios"); return
+        # give each mixture ~19 px of vertical room so the labels never overlap (the panel
+        # lives in a scroll area, so a tall figure just scrolls)
+        self.c_rel.setMinimumHeight(max(300, len(recs) * 19 + 110))
+        ax = self.c_rel.new_ax()
         dom = [int(np.argmax(r["nominal"])) for r in recs]
         gap = np.array([composition_distance(r["nominal"], r["mean"]) for r in recs])
         gap_n = gap / (gap.max() or 1.0) * 100
@@ -804,7 +805,9 @@ class ValidatePage(QWidget):
         for y, k, si in bars:
             ax.barh(y, gap_n[k], height=0.66, alpha=0.85,
                     color=substance_color(SUBSTANCES[si], si))
-        ax.set_yticks(ypos); ax.set_yticklabels(ynames, fontsize=8)
+        ax.set_yticks(ypos)
+        ax.set_yticklabels(ynames, fontsize=7 if len(recs) > 24 else 8)
+        ax.tick_params(axis="y", length=0)
         for t, c in zip(ax.get_yticklabels(), ycols):
             t.set_color(c)
         for si, yc in spans:
