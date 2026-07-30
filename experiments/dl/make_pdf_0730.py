@@ -65,13 +65,15 @@ S += [Paragraph("3. 해석성 — 화학적으로 타당한 모델인가", H2),
       img(os.path.join(DOCS,"dl_interpretability.png"), 16*cm),
       Paragraph("(1) IG attribution이 각 성분 VIP밴드에 집중 (THI 1368/550 날카로움) · (2) permutation importance도 같은 밴드 · (3) ligand ablation 시 예측 붕괴 (THI −100%, TBZ −38%, DQ −22%).", CAP)]
 
-S += [Paragraph("4. 절대농도(µM) 예측 — 아직 어려움 (정직)", H2),
-      tbl([["방법 / 지표","THI recovery","R²(log) 범위","within-2×","within-order"],
-           ["물리역산","1213% (폭발)","−2 ~ −19.6","12~19%","48~73%"],
-           ["DL 회귀","100% (정상)","−0.6 ~ −1.3","23~40%","69~80%"]],
-          [4*cm,3.2*cm,3.2*cm,2.6*cm,3*cm]),
-      Spacer(1,3),
-      Paragraph("DL이 물리역산을 확실히 개선(THI 폭발 제거)하지만, 절대 µM는 여전히 R²<0 · 2배 이내 정밀도 미달. <b>자릿수(order)는 ~70~80% 맞음</b>. 조성 비율은 신뢰(R² 0.69), 절대 µM는 internal standard·농도데이터 확충 필요. → 새로 확보한 Ratio_mix(농도축 34개)로 다음 검증 예정.", BODY)]
+S += [Paragraph("4. 절대농도(µM) 예측 — 실패 (정직한 결과)", H2),
+      Paragraph("Binary + Tertiary + Ratio_mix 합쳐 <b>69개 혼합물, 0.1~1000µM 전 범위</b> 검증.", BODY),
+      tbl([["방법 / 지표","R²(log) DQ/TBZ/THI","within-2×","within-order"],
+           ["물리역산","−3.8 / −9.7 / −0.6","6~20%","45~64%"],
+           ["DL 회귀","−1.2 / −1.1 / −1.1","8~16%","45~49%"]],
+          [3.6*cm,4.8*cm,3*cm,3*cm]),
+      img(os.path.join(DOCS,"concentration_pred.png"), 15*cm),
+      Paragraph("predicted vs true µM (log-log). 두 방법 다 대각선을 못 따라감.", CAP),
+      Paragraph("<b>두 방법 다 실패</b> (R²<0, within-2× 6~20%). DL도 물리역산을 못 이김. <b>원인</b>: 절대 µM는 신호 크기(magnitude)=gain에 의존하는데, 서로 다른 측정 세션(Binary/Ratio_mix)은 gain이 달라 magnitude→µM 매핑이 불일치. 조성 <b>비율</b>은 gain-무관이라 잘 되지만(R² 0.69), 절대 µM는 <b>internal standard</b> 또는 단일 세션 gain 일관성이 필요. (drawable ink 재현성이 관건)", BODY)]
 
 S += [Paragraph("5. 종합 · 다음", H2),
       Paragraph("• 조성 정량: <b>full-spectrum MLP</b>가 고전기법·CNN 모두 압도, 해석성까지 확보. THI 지배 혼합물의 묻힌 성분 복원.", BODY),
