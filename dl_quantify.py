@@ -273,6 +273,62 @@ def predict_residual(model, surf):
 
 
 # --------------------------------------------------------------------------
+# 2c. Full-spectrum composition model — spectrum → composition (softmax), the variant
+# that wins on the full mixture set. Physics-pretrained on simulated (spectrum, comp),
+# fine-tuned on the real known-ratio mixtures. This is what the Recovery panel's DL
+# option uses (leave-one-map-out).
+# --------------------------------------------------------------------------
+def _spec_net(n_feat, n_comp, hidden=(256, 64)):
+    import torch.nn as nn
+    return nn.Sequential(
+        nn.Linear(n_feat, hidden[0]), nn.BatchNorm1d(hidden[0]), nn.ReLU(), nn.Dropout(0.15),
+        nn.Linear(hidden[0], hidden[1]), nn.ReLU(),
+        nn.Linear(hidden[1], n_comp))
+
+
+def train_composition(X, Y, n_comp, *, pretrain=None, epochs_pre=25, epochs_ft=350,
+                      lr=3e-4, seed=0):
+    """Fit spectrum → composition (softmax, L1 loss). ``pretrain=(Xp, Yp)`` warms up on
+    physics-simulated (spectrum, composition) first. Returns a portable model dict."""
+    import torch
+    from torch.utils.data import TensorDataset, DataLoader
+    X = np.asarray(X, np.float32); Y = np.asarray(Y, np.float32)
+    n_feat = X.shape[1]; torch.manual_seed(seed)
+    net = _spec_net(n_feat, n_comp); sm = torch.nn.LogSoftmax(dim=1)
+    # minor-component-weighted L1: up-weight the SMALL (buried) components so the model
+    # is pushed to recover them rather than letting the dominant one drive the gradient.
+    def loss(xb, yb):
+        pred = sm(net(xb)).exp()
+        w = 1.0 + 2.0 * (1.0 - yb)            # true≈0 (buried) → weight 3; true=1 → weight 1
+        return (w * (pred - yb).abs()).sum(1).mean()
+    if pretrain is not None and len(pretrain[0]):
+        Xp = np.asarray(pretrain[0], np.float32); Yp = np.asarray(pretrain[1], np.float32)
+        opt = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=1e-4)
+        dl = DataLoader(TensorDataset(torch.tensor(Xp), torch.tensor(Yp)),
+                        batch_size=256, shuffle=True)
+        for _ in range(epochs_pre):
+            net.train()
+            for xb, yb in dl:
+                opt.zero_grad(); loss(xb, yb).backward(); opt.step()
+    if len(X):
+        opt = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=1e-3)
+        Xt = torch.tensor(X); Yt = torch.tensor(Y)
+        for _ in range(epochs_ft):
+            net.train(); opt.zero_grad(); loss(Xt, Yt).backward(); opt.step()
+    net.eval()
+    return dict(state={k: v.clone() for k, v in net.state_dict().items()},
+                n_feat=n_feat, n_comp=n_comp)
+
+
+def predict_composition(model, X):
+    """Spectra (m, n_feat) → composition (m, n_comp), rows summing to 1."""
+    import torch
+    net = _spec_net(model["n_feat"], model["n_comp"]); net.load_state_dict(model["state"]); net.eval()
+    with torch.no_grad():
+        return torch.softmax(net(torch.tensor(np.atleast_2d(np.asarray(X, np.float32)))), dim=1).numpy()
+
+
+# --------------------------------------------------------------------------
 # 3. Self-test: train on a synthetic lab, report recovery on a held-out set
 # --------------------------------------------------------------------------
 def _recovery_report(C_true, C_pred, names):

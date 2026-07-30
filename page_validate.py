@@ -41,7 +41,11 @@ class ValidateWorker(QObject):
             vres = validate_mixtures(progress=self.progress.emit, **self.params["validate"])
             cp = self.params.get("composition")
             cres = compute_composition(progress=self.progress.emit, **cp) if cp else None
-            self.done.emit((vres, cres))
+            dres = None
+            if self.params.get("dl"):
+                from dl_recovery import dl_recovery
+                dres = dl_recovery(progress=self.progress.emit, **self.params["dl"])
+            self.done.emit((vres, cres, dres))
         except Exception:
             self.fail.emit(traceback.format_exc())
 
@@ -81,12 +85,16 @@ class ValidatePage(QWidget):
                          "when you enter true concentrations (e.g. DQ:100uM) in the table")
         cal_b.clicked.connect(self._browse_calib)
         self.cal_lbl = QLabel("no calib (ratio only)"); self.cal_lbl.setObjectName("field")
+        self.dl_chk = QCheckBox("DL predict"); self.dl_chk.setObjectName("field")
+        self.dl_chk.setToolTip("physics-informed DL composition (leave-one-map-out over the "
+                               "loaded mixtures). The composition view (triangle · recovery · "
+                               "drift) then shows the DL prediction instead of NNLS. Slower.")
         clr_b = QPushButton("Clear"); clr_b.setObjectName("ghost"); clr_b.clicked.connect(self._clear)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost"); exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Validate"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(self.ref_lbl); ctl.addStretch(1)
-        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl)
+        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.dl_chk)
         ctl.addWidget(add_b); ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
@@ -365,6 +373,10 @@ class ValidatePage(QWidget):
             composition=dict(data_dir=self.data_dir, baseline=cfg["baseline"],
                              files=[it[0] for it in items],
                              nominals=[it[1] for it in items]))
+        if self.dl_chk.isChecked():                        # physics-informed DL composition
+            params["dl"] = dict(data_dir=self.data_dir, items=items,
+                                calib_path=self.calib_path, baseline=cfg["baseline"],
+                                trim=cfg["trim"])
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText("● starting…"); self.status.setStyleSheet(f"color:{MUTE};")
         self.progbar.setRange(0, 0); self.progbar.setVisible(True)   # busy indicator
@@ -386,12 +398,19 @@ class ValidatePage(QWidget):
         print(tb, file=sys.stderr)
 
     def _apply(self, pair):
-        res, cres = pair if isinstance(pair, tuple) else (pair, None)
-        self._res = res; self._cres = cres
+        if isinstance(pair, tuple):
+            res, cres = pair[0], pair[1]
+            dres = pair[2] if len(pair) > 2 else None
+        else:
+            res, cres, dres = pair, None, None
+        # composition view uses the DL prediction when it was requested, else NNLS
+        comp = dres if dres else cres
+        self._res = res; self._cres = comp; self._is_dl = bool(dres)
         self.btn.setEnabled(True); self.btn.setText("Validate")
         self.progbar.setVisible(False)
         self.tgl.setChecked(False)                          # auto-collapse inputs → show results
-        self.status.setText("done"); self.status.setStyleSheet(f"color:{MUTE};")
+        self.status.setText("done (DL composition)" if dres else "done")
+        self.status.setStyleSheet(f"color:{MUTE};")
         names = res.names
         self.k_mix.set(str(len(res.rows)), TEAL)
         self.k_sub.set(str(len(names)), AMBER)
@@ -400,9 +419,9 @@ class ValidatePage(QWidget):
         e1 = self._mean_err(res.corrected, res.rows, names)
         self.k_err.set(f"{e0:.0%} → {e1:.0%}", BLUE)
         self._plot_parity(res); self._plot_corr(res); self._plot_resp(res)
-        if cres:                                          # composition view
-            self._plot_triangle(cres)
-            self._plot_reldrift(cres); self._plot_recovery(cres)
+        if comp:                                          # composition view (NNLS or DL)
+            self._plot_triangle(comp)
+            self._plot_reldrift(comp); self._plot_recovery(comp)
         rf = "  ·  ".join(f"{n} {res.response[n]:.2f}×" for n in names)
         dom = max(res.response, key=res.response.get)
         txt = (f"<b>response factors</b> (anchor {res.ref}): {rf}<br>"
