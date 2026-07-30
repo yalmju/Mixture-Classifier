@@ -497,16 +497,18 @@ class ValidatePage(QWidget):
         self.c_resp.fig.tight_layout(); self.c_resp.draw_idle()
 
     # ---- composition view (drift · recovery) ----
-    def _recovery(self, res):
+    def _recovery(self, res, min_frac=0.03):
         """Per-substance apparent recovery (%) over true mixtures (≥2 nominal
-        components); pure/dilution maps excluded. {substance: [pct, ...]}."""
+        components). Components below ``min_frac`` (trace, e.g. a 1% ternary spike) are
+        EXCLUDED: recovery = pred/true blows up for a tiny denominator (0.01 → 0.04 =
+        400%) and makes the metric meaningless. {substance: [pct, ...]}."""
         per = {s: [] for s in SUBSTANCES}
         for r in res:
             nom = r["nominal"]
             if nom is None or int(np.count_nonzero(nom)) < 2:
                 continue
             for i, s in enumerate(SUBSTANCES):
-                if nom[i] > 0:
+                if nom[i] > min_frac:
                     per[s].append(r["mean"][i] / nom[i] * 100)
         return per
 
@@ -559,16 +561,17 @@ class ValidatePage(QWidget):
                                              shrinkA=3, shrinkB=3))
             ax.scatter(*p1, s=52, color=cmap(1 - min(e / EMAX, 1)),      # measured, by accuracy
                        edgecolors="white", linewidths=0.7, zorder=4)
-        # legend decodes the marks — small, kept in both the in-app and exported view
+        # legend decodes the marks — SHORT labels in the empty top-left corner so the box
+        # never overflows into the DQ apex / recovery labels (a long label overflowed the
+        # narrow in-app panel). Colour meaning is a small caption below.
         handles = [
-            Line2D([], [], marker="o", mfc="none", mec=FAINT, mew=1.2, ls="", ms=8,
-                   label="real ratio"),
-            Line2D([], [], marker="o", mfc=cmap(0.85), mec="white", ls="", ms=8,
-                   label="measured (green=accurate, red=off)"),
-            Line2D([], [], marker=r"$\rightarrow$", color="#8b95a1", ls="", ms=11,
-                   label="drift")]
-        ax.legend(handles=handles, loc="upper right", bbox_to_anchor=(1.02, 1.0),
-                  fontsize=8, framealpha=0.0, handletextpad=0.4, labelspacing=0.3)
+            Line2D([], [], marker="o", mfc="none", mec=FAINT, mew=1.2, ls="", ms=7, label="real"),
+            Line2D([], [], marker="o", mfc=cmap(0.85), mec="white", ls="", ms=7, label="measured"),
+            Line2D([], [], marker=r"$\rightarrow$", color="#8b95a1", ls="", ms=10, label="drift")]
+        ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(-0.04, 1.02),
+                  fontsize=7.5, framealpha=0.0, handletextpad=0.3, labelspacing=0.25)
+        ax.text(0.5, -0.11, "dot colour = accuracy  (green good → red off)",
+                transform=ax.transAxes, ha="center", va="top", fontsize=7.5, color=FAINT)
         if annotated:                    # export only: full self-documenting caption
             ax.set_title("Composition recovery — real vs measured mixture ratio",
                          fontsize=11.5, fontweight="bold", color=INK, pad=24)
@@ -682,12 +685,12 @@ class ValidatePage(QWidget):
         n = _save_figs(figs, d)
         if self._cres:
             self._plot_triangle(self._cres)                   # restore clean in-app view
-        self._export_readme(d, res, [f[0] for f in figs])
+        self._export_readme(d, res, [f[0] for f in figs], is_dl=getattr(self, "_is_dl", False))
         self.status.setText(f"exported README + response_factors.csv + table + {n} PNG "
                             f"→ {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
 
-    def _export_readme(self, d, res, fig_names):
+    def _export_readme(self, d, res, fig_names, is_dl=False):
         """Write README.md describing WHAT the export is, HOW it was produced (settings),
         and the RESULT numbers — so a PNG/CSV read out of context is still understandable."""
         names = res.names
@@ -708,15 +711,17 @@ class ValidatePage(QWidget):
                 f"{n} {res.mean_recovery[n]:.0f}%" for n in names
                 if np.isfinite(res.mean_recovery.get(n, float("nan")))) + \
                 "   (100% = perfect; 80–120% acceptable)"
+        comp_src = ("physics-informed DL (leave-one-map-out prediction)" if is_dl
+                    else "NNLS surface unmixing")
         fig_docs = {
-            "drift_triangle": "real (○) vs measured (●) composition per mixture; arrow = "
-                              "drift real→measured; corner % = recovery.",
+            "drift_triangle": f"real (○) vs measured (●) composition per mixture [{comp_src}]; "
+                              "arrow = drift real→measured; corner % = recovery.",
             "validate_response": "response factor per substance (× relative; higher = "
                                  "over-reported on the surface).",
             "validate_parity": "observed (surface) ratio vs true ratio — above the line = over-reported.",
             "validate_corrected": "corrected (solution) ratio vs true ratio — should sit on the line.",
-            "relative_drift": "predicted vs real drift, grouped by dominant substance.",
-            "recovery": "apparent recovery % per substance (mean ± SE over mixtures).",
+            "relative_drift": f"predicted vs real drift, grouped by dominant substance [{comp_src}].",
+            "recovery": f"apparent recovery % per substance (mean ± SE, trace <3% excluded) [{comp_src}].",
         }
         sections = {
             "What this is": [
@@ -729,7 +734,11 @@ class ValidatePage(QWidget):
             "How it was produced": [
                 f"- References: {self.data_dir}",
                 f"- Mixtures: {len(res.rows)} known-ratio maps",
-                f"- Unmixing: NNLS against pure reference templates, fit on {vip}",
+                f"- Response-factor unmixing: NNLS against pure reference templates, fit on {vip}",
+                f"- Composition view (triangle · recovery · drift): "
+                + ("physics-informed DL, leave-one-map-out over the loaded mixtures "
+                   "(spectrum→composition MLP, physics-pretrained)" if is_dl
+                   else "NNLS surface composition"),
                 f"- Baseline removal: {'on' if cfg.get('baseline') else 'off'}; "
                 f"spectral window: {window}",
                 f"- Response factors anchored to {res.ref} (its factor ≈ 1)",
