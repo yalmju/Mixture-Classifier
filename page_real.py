@@ -12,7 +12,7 @@ from matplotlib.colors import to_rgb
 from matplotlib.patches import Wedge, Patch
 from matplotlib.collections import PatchCollection
 
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
@@ -489,6 +489,8 @@ class RealDataPage(QWidget):
 
     # ---- run ----
     def _run(self):
+        if worker_busy(self):                             # already running — ignore
+            return
         if not self.test:
             self.status.setText("load a test map first")
             self.status.setStyleSheet(f"color:{RED};"); return
@@ -509,15 +511,8 @@ class RealDataPage(QWidget):
                           calib_path=self.calib_path)
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
-        self._thread = QThread(); self._worker = RealWorker(params, use_model=use_model)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._progress)
-        self._worker.done.connect(self._apply)
-        self._worker.fail.connect(self._error)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.fail.connect(self._thread.quit)
-        self._thread.start()
+        start_worker(self, RealWorker(params, use_model=use_model),
+                     done=self._apply, fail=self._error, progress=self._progress)
 
     def thr_value(self):
         return float(self.thr.itemAt(1).widget().value())
