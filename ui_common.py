@@ -23,19 +23,28 @@ def _ensure_qt_plugin_path():
     conda / PyQt5 Qt in the shell profile — and searched nowhere at all instead
     of falling back to the wheel's own plugins.
 
-    Only fills in a blank value, so a deliberately set path is left alone. Does
-    nothing if the wheel has no plugins directory, which is the other cause of
-    this error (a broken PyQt6-Qt6 install) and needs a reinstall, not a path.
+    A path that is set and actually usable is always left alone. One that is
+    blank, or that points somewhere with no platforms/ directory (a Qt5 or
+    Homebrew Qt left over in the shell profile — the reason this keeps coming
+    back after a reinstall "fixes" it), is replaced with the wheel's own.
+
+    Does nothing if the wheel has no plugins directory, which is the other cause
+    of this error (a broken PyQt6-Qt6 install) and needs a reinstall, not a path.
     """
     key = "QT_QPA_PLATFORM_PLUGIN_PATH"
-    if os.environ.get(key):                  # set and non-empty: respect it
-        return
+    current = os.environ.get(key)
+    if current and os.path.isdir(os.path.join(current, "platforms")):
+        return                               # set and usable: respect it
     try:
         import PyQt6
     except ImportError:                      # nothing to point at yet
         return
     plugins = os.path.join(os.path.dirname(PyQt6.__file__), "Qt6", "plugins")
     if os.path.isdir(os.path.join(plugins, "platforms")):
+        if current:
+            print(f"UNMIXR: ignoring unusable {key}={current!r} "
+                  f"(no platforms/ there); using PyQt6's own plugins",
+                  file=sys.stderr)
         os.environ[key] = plugins
 
 
