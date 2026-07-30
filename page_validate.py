@@ -67,6 +67,26 @@ class ExplainWorker(QObject):
             self.fail.emit(traceback.format_exc())
 
 
+class SaveModelWorker(QObject):
+    done = pyqtSignal(str)
+    fail = pyqtSignal(str)
+    progress = pyqtSignal(str)
+
+    def __init__(self, params):
+        super().__init__()
+        self.params = params
+
+    def run(self):
+        try:
+            from dl_model import train_model, save_model
+            out = self.params.pop("out")
+            model = train_model(progress=self.progress.emit, **self.params)
+            save_model(model, out)
+            self.done.emit(f"{out}  (n={model['n_train']}, µM {'yes' if model['has_uM'] else 'no'})")
+        except Exception:
+            self.fail.emit(traceback.format_exc())
+
+
 class ValidatePage(QWidget):
     def __init__(self):
         super().__init__()
@@ -111,13 +131,17 @@ class ValidatePage(QWidget):
                                     "spectral bands it uses (Integrated Gradients + band "
                                     "permutation importance + ligand ablation)")
         self.explain_btn.clicked.connect(self._run_explain)
+        self.savemodel_btn = QPushButton("Save DL model"); self.savemodel_btn.setObjectName("ghost")
+        self.savemodel_btn.setToolTip("train the DL on the loaded mixtures and save it, so the "
+                                      "Real-data tab can apply it to unknown maps (composition + µM)")
+        self.savemodel_btn.clicked.connect(self._save_dl_model)
         clr_b = QPushButton("Clear"); clr_b.setObjectName("ghost"); clr_b.clicked.connect(self._clear)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost"); exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Validate"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(self.ref_lbl); ctl.addStretch(1)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.dl_chk)
-        ctl.addWidget(add_b); ctl.addWidget(self.explain_btn)
+        ctl.addWidget(add_b); ctl.addWidget(self.explain_btn); ctl.addWidget(self.savemodel_btn)
         ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
@@ -452,6 +476,45 @@ class ValidatePage(QWidget):
         self.progbar.setVisible(False)
         self.status.setText("DL explain failed — " + tb.strip().splitlines()[-1][:80])
         self.status.setStyleSheet(f"color:{RED};")
+
+    # ---- train + save a DL model (for the Real-data tab) ----
+    def _save_dl_model(self):
+        items = self._items()
+        if len(items) < 3:
+            self.status.setText("add ≥3 mixtures to train a DL model")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        p, _ = QFileDialog.getSaveFileName(self, "Save DL model", "dl_model.dlm",
+                                           "DL model (*.dlm)")
+        if not p:
+            return
+        cfg = load_preprocess(self.data_dir)
+        params = dict(data_dir=self.data_dir, items=items, calib_path=self.calib_path,
+                      baseline=cfg["baseline"], trim=cfg["trim"], out=p)
+        self.savemodel_btn.setEnabled(False); self.savemodel_btn.setText("Saving…")
+        self.progbar.setRange(0, 0); self.progbar.setVisible(True)
+        self.status.setText("● training DL model…"); self.status.setStyleSheet(f"color:{MUTE};")
+        self._sthread = QThread(); self._sworker = SaveModelWorker(params)
+        self._sworker.moveToThread(self._sthread)
+        self._sthread.started.connect(self._sworker.run)
+        self._sworker.progress.connect(lambda m: self.status.setText("● " + m))
+        self._sworker.done.connect(self._saved_model)
+        self._sworker.fail.connect(self._error_save)
+        self._sworker.done.connect(self._sthread.quit)
+        self._sworker.fail.connect(self._sthread.quit)
+        self._sthread.start()
+
+    def _saved_model(self, info):
+        self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
+        self.progbar.setVisible(False)
+        self.status.setText("DL model saved → " + os.path.basename(info))
+        self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _error_save(self, tb):
+        self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
+        self.progbar.setVisible(False)
+        self.status.setText("DL model save failed — " + tb.strip().splitlines()[-1][:80])
+        self.status.setStyleSheet(f"color:{RED};")
+        print(tb, file=sys.stderr)
         print(tb, file=sys.stderr)
 
     def _plot_explain(self, r):

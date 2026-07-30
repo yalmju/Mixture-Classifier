@@ -57,6 +57,7 @@ class RealDataPage(QWidget):
         super().__init__()
         self._thread = None
         self._res = None
+        self.dl_model = None
         self._sel = None
         self._click_axes = []       # axes that accept a pixel click
         self._colors = {}           # per-substance colour override {name: '#hex'}
@@ -93,6 +94,11 @@ class RealDataPage(QWidget):
                            "used by the 'Trained model' method")
         model_b.clicked.connect(self._browse_model)
         self.model_lbl = QLabel(""); self.model_lbl.setObjectName("field")
+        dlm_b = QPushButton("Load DL model…"); dlm_b.setObjectName("ghost")
+        dlm_b.setToolTip("a DL model saved from the Recovery tab (.dlm) → physics-informed "
+                         "DL composition (+ approximate µM) for this map, on top of the NNLS unmix")
+        dlm_b.clicked.connect(self._browse_dl)
+        self.dlm_lbl = QLabel(""); self.dlm_lbl.setObjectName("field")
         cal_b = QPushButton("Load calibration…"); cal_b.setObjectName("ghost")
         cal_b.setToolTip("a dilution-series CSV → per-pixel absolute concentration (µM)")
         cal_b.clicked.connect(self._browse_calib)
@@ -165,6 +171,7 @@ class RealDataPage(QWidget):
         ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x)
         ctl.addLayout(self.cmb_method)
         ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
+        ctl.addWidget(dlm_b); ctl.addWidget(self.dlm_lbl)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.cal_x)
         ctl.addLayout(hitcol); ctl.addLayout(self.thr); ctl.addLayout(flipcol)
         ctl.addLayout(relcol); ctl.addLayout(prescol)
@@ -369,6 +376,22 @@ class RealDataPage(QWidget):
             self.model_path = p; self.model_lbl.setText(os.path.basename(p))
             self.cmb_method.itemAt(1).widget().setCurrentIndex(2)   # switch to model
 
+    def _browse_dl(self):
+        p, _ = QFileDialog.getOpenFileName(self, "DL model (.dlm from Recovery)", "",
+                                           "DL model (*.dlm);;all (*)")
+        if not p:
+            return
+        try:
+            from dl_model import load_model
+            self.dl_model = load_model(p)
+            self.dlm_lbl.setText("DL: " + os.path.basename(p))
+            self.dlm_lbl.setStyleSheet("")
+            if self._res is not None:
+                self._apply(self._res)                    # refresh readout with the DL row
+        except Exception as e:
+            self.dl_model = None; self.dlm_lbl.setText("DL load failed")
+            print(e, file=sys.stderr)
+
     def _browse_calib(self):
         p, _ = QFileDialog.getOpenFileName(
             self, "Calibration spectra CSV (compound, concentration_M, wavenumbers…) "
@@ -572,6 +595,20 @@ class RealDataPage(QWidget):
                        if float(np.min(r.calib_r2)) < 0.7 else "")
                 txt += (f"<br><span style='color:{FAINT}'>calibration fit: {r2s}{tag}"
                         "  ·  click a pixel for its µM</span>")
+        if getattr(self, "dl_model", None) is not None and self.test:
+            try:
+                from dl_model import apply_model
+                from real_data import load_map
+                wn, cube, _mn, _c = load_map(self.test)
+                d = apply_model(self.dl_model, wn, cube)
+                comp = "  ·  ".join(f"{k} {v * 100:.0f}%" for k, v in d["composition"].items())
+                txt += f"<br><b style='color:{BLUE}'>DL composition</b> (physics-informed): {comp}"
+                if d["uM"]:
+                    um = "  ·  ".join(f"{k} ≈{v:.0f} µM" for k, v in d["uM"].items())
+                    txt += (f"<br><b style='color:{BLUE}'>DL concentration</b> "
+                            f"(order-of-magnitude, semi-quantitative): {um}")
+            except Exception as e:
+                print("DL apply failed:", e, file=sys.stderr)
         self.readout.setText(txt)
 
     # ---- plots ----
