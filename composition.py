@@ -85,7 +85,7 @@ def compute_composition(data_dir, baseline=True, files=None, nominals=None,
     out = []
     for i, p in enumerate(files):
         if progress:
-            progress(f"unmixing {os.path.basename(p)}  ({i + 1}/{len(files)})")
+            progress(f"unmixing {os.path.basename(p)}  ({i + 1}/{len(files)}, {len(files) - i - 1} left)")
         key = (os.path.abspath(p), round(os.path.getmtime(p), 3), bool(baseline))
         rec = cache.get(key)
         if rec is None:

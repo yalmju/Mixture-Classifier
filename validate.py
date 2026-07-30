@@ -151,15 +151,19 @@ def validate_mixtures(data_dir, items, method="nnls", baseline=True, trim=None,
                 progress(f"calibration ignored ({e}) — ratio-only recovery")
             calib_path = None
 
+    import os
     rows, names = [], None
-    for it in items:
+    total = len(items)
+    for k, it in enumerate(items, 1):
         path, true = it[0], it[1]
         true_conc = it[2] if len(it) > 2 else None
+        prefix = f"[{k}/{total}] {os.path.basename(path)}"
+        sub = (lambda msg, _p=prefix: progress(f"{_p} · {msg}")) if progress else None
         if progress:
-            progress(f"unmixing {path}")
+            progress(f"{prefix} — unmixing  ({total - k} left)")
         r = unmix_map(data_dir, path, method=method, baseline=baseline, trim=trim,
                       hit_mode="auto", calib_path=calib_path, peak_map=peak_map,
-                      progress=progress)
+                      progress=sub)
         nb = [r.comps[i] for i in r.nonbg]
         names = nb
         obs = {nb[k]: float(r.mean_ratio[k]) for k in range(len(nb))}

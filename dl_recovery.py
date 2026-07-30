@@ -80,7 +80,7 @@ def dl_recovery(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     out = []
     for i in range(N):
         if progress:
-            progress(f"DL leave-one-out — mixture {i + 1}/{N}")
+            progress(f"DL leave-one-out — mixture {i + 1}/{N}  ({N - i - 1} left)")
         tr = [j for j in range(N) if j != i]
         model = train_composition(X[tr], Y[tr], len(subs), pretrain=pre, seed=i)
         pred = predict_composition(model, X[i])[0]
