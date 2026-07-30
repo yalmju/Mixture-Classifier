@@ -81,10 +81,14 @@ class ComposePanel(QWidget):
         cal_b.setToolTip("optional dilution-series CSV — enables the MLP physics pretrain")
         cal_b.clicked.connect(self._browse_calib)
         self.cal_lbl = QLabel("no calib"); self.cal_lbl.setObjectName("field")
+        self.chk_uM = QCheckBox("ratios are µM"); self.chk_uM.setObjectName("field")
+        self.chk_uM.setToolTip("treat the ratio numbers as absolute concentrations in µM "
+                               "(e.g. DQ1000 → 1000 µM) — also trains an order-of-magnitude "
+                               "concentration head, so Real-data can report a µM range")
         clr_b = QPushButton("Clear"); clr_b.setObjectName("ghost"); clr_b.clicked.connect(self._clear)
         frow.addWidget(pure_b); frow.addWidget(self.ref_lbl, 1)
         frow.addWidget(cal_b); frow.addWidget(self.cal_lbl)
-        frow.addWidget(add_b); frow.addWidget(clr_b)
+        frow.addWidget(self.chk_uM); frow.addWidget(add_b); frow.addWidget(clr_b)
         root.addLayout(frow)
 
         # ---- method + per-method sub-parameters (auto-shown) ----
@@ -200,7 +204,11 @@ class ComposePanel(QWidget):
                 except ValueError:
                     pass
             if len(ratio) >= 2:
-                items.append((self._files[row], ratio))
+                if self.chk_uM.isChecked():                  # ratio number = µM → concentration in M
+                    conc = {k: v * 1e-6 for k, v in ratio.items()}
+                    items.append((self._files[row], ratio, conc))
+                else:
+                    items.append((self._files[row], ratio))
         return items
 
     def _update_params(self):
@@ -247,8 +255,10 @@ class ComposePanel(QWidget):
         self.save_b.setEnabled(True); self.pbar.setVisible(False)
         self.k_err.set(f"{err:.0%}" if err == err else "—")
         self.k_n.set(str(model.get("n_train", 0)))
-        self.k_m.set(model.get("method", "mlp").upper())
-        self.status.setText("done — trained; Save model to use it in Recovery / Real data")
+        self.k_m.set(model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else ""))
+        MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")   # → Recovery / Real adopt it
+        self.status.setText("done — trained. Recovery & Real-data now use this model; "
+                            "Save to keep it.")
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _fail(self, tb):

@@ -57,6 +57,24 @@ COLOR_BUS = _ColorBus()
 _SUB_COLORS = {}                       # substance name -> "#hex" override
 
 
+# a single trained composition model shared across tabs: the Model tab (Step 2)
+# publishes it here, and Recovery / Real-data adopt it so they APPLY the trained
+# model instead of retraining ("train once, reuse downstream").
+class _ModelBus(QObject):
+    changed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.model = None
+        self.origin = ""               # short label of where it came from
+
+    def set(self, model, origin=""):
+        self.model = model; self.origin = origin
+        self.changed.emit()
+
+MODEL_BUS = _ModelBus()
+
+
 def set_substance_colors(mapping):
     """Replace the global substance→colour overrides ({name: '#hex'})."""
     _SUB_COLORS.clear()
@@ -274,5 +292,5 @@ __all__ = [
     "PAGE", "PANEL", "CARD", "LINE", "INK", "MUTE", "FAINT", "TEAL", "BLUE",
     "AMBER", "CORAL", "PURPLE", "PINK", "GREEN", "RED", "TNGRAY",
     "SERIES", "CM_CMAP", "Canvas", "Kpi", "_card", "_save_figs",
-    "COLOR_BUS", "set_substance_colors", "substance_colors", "substance_color",
+    "COLOR_BUS", "MODEL_BUS", "set_substance_colors", "substance_colors", "substance_color",
 ]

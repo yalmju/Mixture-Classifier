@@ -43,7 +43,11 @@ class ValidateWorker(QObject):
             cp = self.params.get("composition")
             cres = compute_composition(progress=self.progress.emit, **cp) if cp else None
             dres = None
-            if self.params.get("dl"):
+            if self.params.get("shared_model") is not None:      # inherit the Model-tab model
+                from dl_model import apply_recovery
+                dres = apply_recovery(self.params["shared_model"],
+                                      self.params["shared_items"], progress=self.progress.emit)
+            elif self.params.get("dl"):
                 from dl_recovery import dl_recovery
                 dres = dl_recovery(progress=self.progress.emit, **self.params["dl"])
             self.done.emit((vres, cres, dres))
@@ -94,7 +98,9 @@ class ValidatePage(QWidget):
         self._thread = None
         self._res = None
         self._cres = None                # composition (per-pixel) result
+        self._shared_model = MODEL_BUS.model         # model trained in the Model tab (Step 2)
         COLOR_BUS.changed.connect(self._recolor)     # top-bar picker → recolour
+        MODEL_BUS.changed.connect(self._on_model_bus)
         self._files = []                 # full paths, aligned with table rows
         self.data_dir = PEST_DEFAULT
         self.calib_path = None           # dilution-series CSV → recovery (measured µM)
@@ -461,6 +467,16 @@ class ValidatePage(QWidget):
         self.dl_nc.setVisible(m == "pls")
         self.dl_nt.setVisible(m == "rf")
 
+    def _on_model_bus(self):
+        """A model was trained in the Model tab → Recovery applies it (no retraining)."""
+        self._shared_model = MODEL_BUS.model
+        active = self._shared_model is not None
+        self.dl_chk.setText("DL predict (Model-tab model)" if active else "DL predict")
+        for w in (self.dl_method, self.dl_ep, self.dl_seed, self.dl_pre, self.dl_nc, self.dl_nt):
+            w.setEnabled(not active)                 # applying, not training → knobs inert
+        if active:
+            self.dl_chk.setChecked(True)
+
     def _dl_opts(self):
         """DL training knobs shared by 'DL predict' (leave-one-out) and 'Save DL model'."""
         return dict(method=self.dl_method.currentData(),
@@ -483,9 +499,13 @@ class ValidatePage(QWidget):
                              files=[it[0] for it in items],
                              nominals=[it[1] for it in items]))
         if self.dl_chk.isChecked():                        # physics-informed DL composition
-            params["dl"] = dict(data_dir=self.data_dir, items=items,
-                                calib_path=self.calib_path, baseline=cfg["baseline"],
-                                trim=cfg["trim"], **self._dl_opts())
+            if self._shared_model is not None:             # inherit the Model-tab model (no retrain)
+                params["shared_model"] = self._shared_model
+                params["shared_items"] = items
+            else:
+                params["dl"] = dict(data_dir=self.data_dir, items=items,
+                                    calib_path=self.calib_path, baseline=cfg["baseline"],
+                                    trim=cfg["trim"], **self._dl_opts())
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self._cancelled = False; self.cancel_btn.setVisible(True)
         self.status.setText("● starting…"); self.status.setStyleSheet(f"color:{MUTE};")

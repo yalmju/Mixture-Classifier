@@ -190,6 +190,39 @@ def apply_model(model, wn, cube):
     return out
 
 
+def apply_recovery(model, items, progress=None):
+    """Apply an already-trained composition model to each known-ratio mixture (NO training)
+    → list of {name, nominal, mean[, uM_pred, uM_true]} in composition.SUBSTANCES order,
+    the same shape dl_recovery returns, so the Recovery plots don't change. This is how
+    Recovery 'inherits' the model trained once in the Model tab."""
+    import os
+    from real_data import load_map
+    from composition import SUBSTANCES
+    subs = model["subs"]
+    out = []
+    for k, it in enumerate(items):
+        if progress:
+            progress(f"applying model — {k + 1}/{len(items)}")
+        path, ratio = it[0], it[1]
+        conc = it[2] if len(it) > 2 else None
+        wn, cube, _m, _c = load_map(path)
+        res = apply_model(model, wn, cube); comp = res["composition"]
+        s = sum(float(ratio.get(sn, 0)) for sn in subs)
+        nom = np.zeros(len(SUBSTANCES)); mn = np.zeros(len(SUBSTANCES))
+        for sn in subs:
+            o = SUBSTANCES.index(sn)
+            nom[o] = float(ratio.get(sn, 0)) / s if s > 0 else 0.0
+            mn[o] = comp.get(sn, 0.0)
+        row = {"name": os.path.basename(path).replace("_corrected", "").replace(".csv", ""),
+               "nominal": nom, "mean": mn}
+        if res.get("uM"):
+            row["uM_pred"] = {sn: res["uM"][sn] for sn in subs}
+            if conc:
+                row["uM_true"] = {sn: conc[sn] * 1e6 for sn in subs if conc.get(sn, 0) > 0}
+        out.append(row)
+    return out
+
+
 def save_model(model, path):
     with open(path, "wb") as f:
         pickle.dump(model, f)

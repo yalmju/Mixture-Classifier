@@ -99,6 +99,8 @@ class RealDataPage(QWidget):
                          "DL composition (+ approximate µM) for this map, on top of the NNLS unmix")
         dlm_b.clicked.connect(self._browse_dl)
         self.dlm_lbl = QLabel(""); self.dlm_lbl.setObjectName("field")
+        MODEL_BUS.changed.connect(self._adopt_model)       # auto-use a model trained in the Model tab
+        self._adopt_model()
         cal_b = QPushButton("Load calibration…"); cal_b.setObjectName("ghost")
         cal_b.setToolTip("a dilution-series CSV → per-pixel absolute concentration (µM)")
         cal_b.clicked.connect(self._browse_calib)
@@ -375,6 +377,16 @@ class RealDataPage(QWidget):
         if p:
             self.model_path = p; self.model_lbl.setText(os.path.basename(p))
             self.cmb_method.itemAt(1).widget().setCurrentIndex(2)   # switch to model
+
+    def _adopt_model(self):
+        """Adopt the composition model trained in the Model tab (Step 2), if any."""
+        if MODEL_BUS.model is None:
+            return
+        self.dl_model = MODEL_BUS.model
+        self.dlm_lbl.setText("DL: " + (MODEL_BUS.origin or "trained model"))
+        self.dlm_lbl.setStyleSheet("")
+        if getattr(self, "_res", None) is not None:
+            self._apply(self._res)
 
     def _browse_dl(self):
         p, _ = QFileDialog.getOpenFileName(self, "DL model (.dlm from Recovery)", "",
