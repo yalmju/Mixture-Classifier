@@ -6,6 +6,13 @@ from __future__ import annotations
 import os
 import sys
 
+# Pin matplotlib's Qt binding to the one the app itself uses. Left unset,
+# matplotlib picks whichever binding it finds first, so a machine that also has
+# PyQt5 / PySide6 installed can load a SECOND Qt library into the process —
+# which crashes at startup (most visibly on macOS). Must precede any matplotlib
+# import; the app is PyQt6-only, so there is nothing else to negotiate.
+os.environ.setdefault("QT_API", "PyQt6")
+
 import matplotlib
 matplotlib.use("QtAgg")
 from cycler import cycler
