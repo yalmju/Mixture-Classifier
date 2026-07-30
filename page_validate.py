@@ -525,7 +525,10 @@ class ValidatePage(QWidget):
         names = res.names
         self.k_mix.set(str(len(res.rows)), TEAL)
         self.k_sub.set(str(len(names)), AMBER)
-        self.k_max.set(f"{max(res.response.values()):.1f}×", CORAL)
+        se = res.response_se or {}
+        dom = max(res.response, key=res.response.get)
+        self.k_max.set((f"{res.response[dom]:.0f}±{se.get(dom,0):.0f}×" if se.get(dom)
+                        else f"{res.response[dom]:.1f}×"), CORAL)
         e0 = self._mean_err([r["obs"] for r in res.rows], res.rows, names)
         e1 = self._mean_err(res.corrected, res.rows, names)
         self.k_err.set(f"{e0:.0%} → {e1:.0%}", BLUE)
@@ -533,11 +536,10 @@ class ValidatePage(QWidget):
         if comp:                                          # composition view (NNLS or DL)
             self._plot_triangle(comp)
             self._plot_reldrift(comp); self._plot_recovery(comp)
-        rf = "  ·  ".join(f"{n} {res.response[n]:.2f}×" for n in names)
-        dom = max(res.response, key=res.response.get)
-        txt = (f"<b>response factors</b> (anchor {res.ref}): {rf}<br>"
+        rf = "  ·  ".join(f"{n} {res.response[n]:.1f}±{se.get(n,0):.1f}×" for n in names)
+        txt = (f"<b>response factors</b> (anchor {res.ref}, mean±SE): {rf}<br>"
                f"<b>{dom}</b> is over-reported on the surface by "
-               f"{res.response[dom]:.1f}× — that is why it tends to dominate every map. "
+               f"{res.response[dom]:.0f}±{se.get(dom,0):.0f}× — that is why it tends to dominate every map. "
                f"Mean ratio error drops {e0:.0%} → {e1:.0%} after correction.")
         if getattr(res, "calibrated", False) and res.mean_recovery:
             rec = "  ·  ".join(f"{n} {res.mean_recovery[n]:.0f}%" for n in names
@@ -596,12 +598,16 @@ class ValidatePage(QWidget):
         ax = self.c_resp.new_ax()
         names = res.names
         vals = [res.response[n] for n in names]
+        se = res.response_se or {}
+        errs = [se.get(n, 0.0) for n in names]
         cols = [substance_color(names[i], i) for i in range(len(names))]
         x = np.arange(len(names))
-        ax.bar(x, vals, color=cols)
+        ax.bar(x, vals, color=cols, yerr=errs, capsize=4,
+               error_kw=dict(ecolor=INK, elinewidth=0.9))
         ax.axhline(1.0, color=MUTE, ls="--", lw=1.0)
-        for xi, v in zip(x, vals):
-            ax.text(xi, v + 0.03, f"{v:.2f}×", ha="center", fontsize=9, color=INK)
+        for xi, v, e in zip(x, vals, errs):
+            ax.text(xi, v + e + 0.03 * max(vals), f"{v:.1f}±{e:.1f}×", ha="center",
+                    fontsize=8.5, color=INK)
         ax.set_xticks(x); ax.set_xticklabels(names, fontsize=9)
         ax.set_ylabel("response factor (×)")
         ax.set_ylim(0, max(vals) * 1.2 + 0.2)
@@ -764,9 +770,11 @@ class ValidatePage(QWidget):
         if not d:
             return
         res = self._res
+        rse = res.response_se or {}
         write_csv(os.path.join(d, "response_factors.csv"),
-                  ["substance", "response_factor", "anchor"],
-                  [[n, f"{res.response[n]:.5f}", res.ref] for n in res.names])
+                  ["substance", "response_factor", "SE", "anchor"],
+                  [[n, f"{res.response[n]:.5f}", f"{rse.get(n, 0.0):.5f}", res.ref]
+                   for n in res.names])
         cal = getattr(res, "calibrated", False)
         head = ["mixture"] + [f"true_{n}" for n in res.names] \
             + [f"obs_{n}" for n in res.names] + [f"corr_{n}" for n in res.names] \
@@ -812,8 +820,9 @@ class ValidatePage(QWidget):
                if pm else "the full spectrum")
         trim = cfg.get("trim")
         window = f"{trim[0]:.0f}–{trim[1]:.0f} cm⁻¹" if trim else "full range"
+        rse = res.response_se or {}
         rf = sorted(res.response.items(), key=lambda kv: kv[1], reverse=True)
-        rf_str = " · ".join(f"{k} {v:.2f}×" for k, v in rf)
+        rf_str = " · ".join(f"{k} {v:.1f}±{rse.get(k, 0):.1f}×" for k, v in rf)
         e0 = self._mean_err([r["obs"] for r in res.rows], res.rows, names)
         e1 = self._mean_err(res.corrected, res.rows, names)
         rec_str = "not computed (load a calibration + enter true concentrations)"

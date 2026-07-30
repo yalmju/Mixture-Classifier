@@ -30,6 +30,7 @@ class ValidateResult:
     response: dict                 # name -> response factor (min normalised to 1)
     corrected: list                # per mixture: corrected (solution) fractions dict
     ref: str = ""                  # substance the factors are anchored to (r≈1)
+    response_se: dict = None       # name -> standard error of the response factor
     recovery: list = None          # per mixture: {name: recovery %} (needs calib + true M)
     mean_recovery: dict = None     # name -> mean recovery % over mixtures
     calibrated: bool = False       # True if concentrations were quantified
@@ -117,7 +118,13 @@ def _response_factors(rows, names):
                 logr[n].append(np.log((oi / oref) * (tref / ti)))
     rf = {n: (float(np.exp(np.mean(logr[n]))) if logr[n] else 1.0) for n in names}
     mn = min(rf.values()) or 1.0
-    return {n: rf[n] / mn for n in names}, ref
+    rfn = {n: rf[n] / mn for n in names}
+    # standard error of the (geometric) factor: it is estimated from the spread of the
+    # per-mixture log-ratios, so it carries uncertainty. se_log = SD(logr)/√n; delta method
+    # → absolute SE ≈ factor · se_log.
+    se = {n: (rfn[n] * float(np.std(logr[n], ddof=1) / np.sqrt(len(logr[n])))
+              if len(logr[n]) > 1 else 0.0) for n in names}
+    return rfn, ref, se
 
 
 def correct_fractions(obs, response, names):
@@ -176,7 +183,7 @@ def validate_mixtures(data_dir, items, method="nnls", baseline=True, trim=None,
                      "true_conc": true_conc, "meas": meas})
     if not names:
         raise ValueError("no mixtures to validate.")
-    response, ref = _response_factors(rows, names)
+    response, ref, response_se = _response_factors(rows, names)
     corrected = [dict(zip(names, correct_fractions(r["obs"], response, names)))
                  for r in rows]
     # recovery = measured / true concentration (%), where both are known
@@ -193,4 +200,5 @@ def validate_mixtures(data_dir, items, method="nnls", baseline=True, trim=None,
     calibrated = any(r["meas"] for r in rows)
     return ValidateResult(names=names, rows=rows, response=response,
                           corrected=corrected, ref=ref, recovery=recovery,
-                          mean_recovery=mean_recovery, calibrated=calibrated)
+                          mean_recovery=mean_recovery, calibrated=calibrated,
+                          response_se=response_se)
