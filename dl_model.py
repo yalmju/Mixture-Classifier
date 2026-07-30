@@ -38,11 +38,16 @@ def _mean_spectrum(cube, mask):
 
 
 def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
-                epochs=350, seed=0, use_pretrain=True):
-    """Train composition (+ µM if absolute concentrations given) on ALL mixtures.
+                method="mlp", epochs=350, seed=0, use_pretrain=True,
+                n_components=8, n_trees=300):
+    """Train a composition model (+ µM if absolute concentrations given) on ALL mixtures.
     items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
-    Knobs: ``epochs`` (fine-tune iterations for both heads), ``seed``, ``use_pretrain``
-    (physics simulator warm-up; needs a calibration)."""
+
+    ``method`` picks the composition head:
+      - "mlp"  physics-informed deep net — knobs: epochs, seed, use_pretrain
+      - "pls"  PLS regression           — knob: n_components
+      - "rf"   random forest            — knobs: n_trees, seed
+    The µM head (order-of-magnitude concentration) is the same small MLP regardless."""
     import torch, torch.nn as nn
     from real_data import load_map
     from dl_quantify import simulate_mixtures, train_composition, _spec_net, _ratio
@@ -78,10 +83,24 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         except Exception:
             pre = None
 
+    method = (method or "mlp").lower()
     if progress:
-        progress("training composition head")
-    comp = train_composition(X, Y, len(subs), pretrain=pre, seed=seed, epochs_ft=epochs)
-    comp_np = {k: v.cpu().numpy() for k, v in comp["state"].items()}
+        progress(f"training composition head ({method})")
+    if method == "pls":
+        from sklearn.cross_decomposition import PLSRegression
+        nc = max(1, min(int(n_components), len(X) - 1, X.shape[1]))
+        comp_store = {"method": "pls", "sk": PLSRegression(n_components=nc).fit(X, Y)}
+    elif method == "rf":
+        from sklearn.ensemble import RandomForestRegressor
+        comp_store = {"method": "rf",
+                      "sk": RandomForestRegressor(n_estimators=int(n_trees),
+                                                  random_state=int(seed)).fit(X, Y)}
+    else:
+        method = "mlp"
+        comp = train_composition(X, Y, len(subs), pretrain=pre, seed=seed, epochs_ft=epochs)
+        comp_store = {"method": "mlp",
+                      "comp_state": {k: v.cpu().numpy() for k, v in comp["state"].items()},
+                      "comp_hidden": (256, 64)}
 
     uM = None
     have = [i for i in range(len(X)) if Cabs[i] is not None and any(c > 0 for c in Cabs[i])]
@@ -104,24 +123,28 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
               "mu": mu, "sd": sd}
 
     return {"subs": subs, "lo": lo, "hi": hi, "n_feat": int(mask.sum()), "P": P,
-            "comp_state": comp_np, "comp_hidden": (256, 64), "uM": uM,
-            "n_train": int(len(X)), "has_uM": uM is not None}
+            "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None, **comp_store}
 
 
 def apply_model(model, wn, cube):
     """Score a test map (or single spectrum): returns {composition: {name: frac},
     uM: {name: µM} or None}. Handles the model's own window + standardisation."""
-    import torch
-    from dl_quantify import _spec_net
     lo, hi = model["lo"], model["hi"]
     mask = (np.asarray(wn) >= lo) & (np.asarray(wn) <= hi)
     ya = _mean_spectrum(cube, mask)
     subs = model["subs"]
-    net = _spec_net(model["n_feat"], len(subs), model["comp_hidden"])
-    net.load_state_dict({k: torch.tensor(v) for k, v in model["comp_state"].items()}); net.eval()
     xl2 = (ya / (np.linalg.norm(ya) + 1e-12)).astype(np.float32)
-    with torch.no_grad():
-        comp = torch.softmax(net(torch.tensor(xl2[None, :])), 1).numpy()[0]
+    method = model.get("method", "mlp")
+    if method in ("pls", "rf"):                                # sklearn composition head
+        comp = np.clip(np.asarray(model["sk"].predict(xl2[None, :])[0], float), 0, None)
+        comp = comp / (comp.sum() + 1e-12)
+    else:                                                      # MLP (softmax) head
+        import torch
+        from dl_quantify import _spec_net
+        net = _spec_net(model["n_feat"], len(subs), model["comp_hidden"])
+        net.load_state_dict({k: torch.tensor(v) for k, v in model["comp_state"].items()}); net.eval()
+        with torch.no_grad():
+            comp = torch.softmax(net(torch.tensor(xl2[None, :])), 1).numpy()[0]
     out = {"composition": {subs[k]: float(comp[k]) for k in range(len(subs))}, "uM": None}
     if model.get("uM"):
         import torch.nn as nn
