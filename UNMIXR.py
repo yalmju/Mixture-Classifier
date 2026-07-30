@@ -166,6 +166,14 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # Windows taskbar groups by AppUserModelID; without an explicit one the taskbar shows
+    # the python(w).exe icon instead of our window icon. Set it before the QApplication.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("UNMIXR.SERS.app")
+        except Exception:
+            pass
     app = QApplication(sys.argv)
     app.setStyleSheet(QSS)
     app.setFont(QFont("Segoe UI", 10))
