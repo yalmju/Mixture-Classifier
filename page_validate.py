@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QHeaderView, QAbstractItemView, QLineEdit, QCheckBox, QProgressBar,
 )
 
-from matplotlib.colors import to_rgb
 from matplotlib.patches import FancyArrowPatch
 from matplotlib.lines import Line2D
 
@@ -178,12 +177,9 @@ class ValidatePage(QWidget):
         rlay.addWidget(self.c_resp); self.c_resp.setMinimumHeight(300)
         body.addWidget(rcard)
 
-        # ---- composition view (colour blend · drift · recovery) ----
-        self.c_maps = Canvas(); self.c_tri = Canvas()
+        # ---- composition view (drift · recovery) ----
+        self.c_tri = Canvas()
         self.c_rel = Canvas(); self.c_rec = Canvas()
-        mcard, mlay = _card("Composition maps — per-pixel colour blend of each mixture")
-        mlay.addWidget(self.c_maps); self.c_maps.setMinimumHeight(320)
-        body.addWidget(mcard)
         crow = QHBoxLayout(); crow.setSpacing(12)
         for cv, title in [
             (self.c_tri, "Composition recovery (drift triangle)"),
@@ -204,7 +200,6 @@ class ValidatePage(QWidget):
         for cv, m in [(self.c_parity, "Add mixtures, then Validate"),
                       (self.c_corr, "Corrected ratio appears here"),
                       (self.c_resp, "Response factors appear here"),
-                      (self.c_maps, "Composition colour maps appear here"),
                       (self.c_tri, "Drift triangle appears here"),
                       (self.c_rec, "Recovery appears here"),
                       (self.c_rel, "Relative drift appears here")]:
@@ -406,7 +401,7 @@ class ValidatePage(QWidget):
         self.k_err.set(f"{e0:.0%} → {e1:.0%}", BLUE)
         self._plot_parity(res); self._plot_corr(res); self._plot_resp(res)
         if cres:                                          # composition view
-            self._plot_maps(cres); self._plot_triangle(cres)
+            self._plot_triangle(cres)
             self._plot_reldrift(cres); self._plot_recovery(cres)
         rf = "  ·  ".join(f"{n} {res.response[n]:.2f}×" for n in names)
         dom = max(res.response, key=res.response.get)
@@ -482,33 +477,7 @@ class ValidatePage(QWidget):
         ax.set_ylim(0, max(vals) * 1.2 + 0.2)
         self.c_resp.fig.tight_layout(); self.c_resp.draw_idle()
 
-    # ---- composition view (colour blend · drift · recovery) ----
-    def _rgb(self):
-        return np.array([to_rgb(substance_color(s, i)) for i, s in enumerate(SUBSTANCES)])
-
-    def _plot_maps(self, res):
-        C = self._rgb()
-        n = len(res)
-        nc = int(np.ceil(np.sqrt(n))); nr = int(np.ceil(n / nc))
-        self.c_maps.fig.clear()
-        for k, rec in enumerate(res):
-            ax = self.c_maps.fig.add_subplot(nr, nc, k + 1)
-            x, y = rec["coords"][:, 0], rec["coords"][:, 1]
-            ux, uy = np.unique(x), np.unique(y)
-            xi = {v: i for i, v in enumerate(ux)}; yi = {v: i for i, v in enumerate(uy)}
-            rows = np.array([yi[v] for v in y]); cols = np.array([xi[v] for v in x])
-            img = np.ones((len(uy), len(ux), 3))
-            blend = np.clip(rec["frac"] @ C, 0.0, 1.0); hit = rec["hit"]
-            img[rows[hit], cols[hit]] = blend[hit]
-            ax.imshow(img, origin="lower", interpolation="nearest", aspect="auto")
-            ax.set_xticks([]); ax.set_yticks([])
-            for s in ax.spines.values():
-                s.set_visible(False)
-            m = rec["mean"] * 100
-            ax.set_xlabel(f"{rec['name']}\nDQ{m[0]:.0f} TBZ{m[1]:.0f} THI{m[2]:.0f}",
-                          fontsize=8, color=INK, labelpad=2)
-        self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
-
+    # ---- composition view (drift · recovery) ----
     def _recovery(self, res):
         """Per-substance apparent recovery (%) over true mixtures (≥2 nominal
         components); pure/dilution maps excluded. {substance: [pct, ...]}."""
@@ -541,8 +510,8 @@ class ValidatePage(QWidget):
                 v = rec[s]
                 mu = float(np.mean(v))
                 se = np.std(v, ddof=1) / np.sqrt(len(v)) if len(v) > 1 else 0.0
-                # status by SYMBOL, not colour — keep each corner in its substance colour
-                tag = " ↑over" if mu > 120 else (" ↓under" if mu < 80 else " ✓")
+                # over/under tag by arrow (ASCII-safe); in-range gets no tag
+                tag = " ↑over" if mu > 120 else (" ↓under" if mu < 80 else "")
                 lab = f"{s}\n{mu:.0f}±{se:.0f}%{tag}"
             ax.text(p[0] + dx, p[1] + dy, lab, ha=ha, va=va, fontsize=10, linespacing=1.25,
                     fontweight="bold", color=col)
@@ -552,27 +521,31 @@ class ValidatePage(QWidget):
         """Draw the recovery drift triangle. ``annotated`` adds the title + description
         + reading guide — baked in only on EXPORT, so the standalone PNG is readable
         with zero context; in-app the card header already labels it, kept uncluttered."""
+        import matplotlib.pyplot as _plt
+        cmap = _plt.get_cmap("RdYlGn")                    # green = accurate, red = wrong
+        EMAX = 0.6
         ax = self.c_tri.new_ax()
         self._tri_frame(ax, self._recovery(res))
         for rec in res:
             if rec["nominal"] is None:
                 continue
-            p0 = bary(rec["nominal"]); p1 = bary(rec["mean"])
-            dom = int(np.argmax(rec["nominal"]))
-            col = substance_color(SUBSTANCES[dom], dom)
+            nom = np.asarray(rec["nominal"], float); mn = np.asarray(rec["mean"], float)
+            p0 = bary(nom); p1 = bary(mn)
+            e = 0.5 * float(np.abs(mn - nom).sum())       # composition error → accuracy colour
             ax.scatter(*p0, s=44, facecolors="none", edgecolors=FAINT,   # real ratio
                        linewidths=1.2, zorder=3)
             if np.linalg.norm(p1 - p0) > 1e-3:
                 ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=10,
                                              color="#8b95a1", lw=1.1, zorder=2,
                                              shrinkA=3, shrinkB=3))
-            ax.scatter(*p1, s=48, color=col, edgecolors="white",         # measured
-                       linewidths=0.7, zorder=4)
+            ax.scatter(*p1, s=52, color=cmap(1 - min(e / EMAX, 1)),      # measured, by accuracy
+                       edgecolors="white", linewidths=0.7, zorder=4)
         # legend decodes the marks — small, kept in both the in-app and exported view
         handles = [
             Line2D([], [], marker="o", mfc="none", mec=FAINT, mew=1.2, ls="", ms=8,
                    label="real ratio"),
-            Line2D([], [], marker="o", mfc=INK, mec="white", ls="", ms=8, label="measured"),
+            Line2D([], [], marker="o", mfc=cmap(0.85), mec="white", ls="", ms=8,
+                   label="measured (green=accurate, red=off)"),
             Line2D([], [], marker=r"$\rightarrow$", color="#8b95a1", ls="", ms=11,
                    label="drift")]
         ax.legend(handles=handles, loc="upper right", bbox_to_anchor=(1.02, 1.0),
@@ -684,7 +657,7 @@ class ValidatePage(QWidget):
                 ("validate_corrected", self.c_corr),
                 ("validate_response", self.c_resp)]
         if self._cres:                                   # composition view
-            figs += [("composition_maps", self.c_maps), ("drift_triangle", self.c_tri),
+            figs += [("drift_triangle", self.c_tri),
                      ("relative_drift", self.c_rel), ("recovery", self.c_rec)]
             self._plot_triangle(self._cres, annotated=True)   # bake caption into the PNG
         n = _save_figs(figs, d)
@@ -723,7 +696,6 @@ class ValidatePage(QWidget):
                                  "over-reported on the surface).",
             "validate_parity": "observed (surface) ratio vs true ratio — above the line = over-reported.",
             "validate_corrected": "corrected (solution) ratio vs true ratio — should sit on the line.",
-            "composition_maps": "per-pixel colour blend of each mixture map.",
             "relative_drift": "predicted vs real drift, grouped by dominant substance.",
             "recovery": "apparent recovery % per substance (mean ± SE over mixtures).",
         }
