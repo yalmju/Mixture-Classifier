@@ -65,22 +65,32 @@ S += [Paragraph("3. 해석성 — 화학적으로 타당한 모델인가", H2),
       img(os.path.join(DOCS,"dl_interpretability.png"), 16*cm),
       Paragraph("(1) IG attribution이 각 성분 VIP밴드에 집중 (THI 1368/550 날카로움) · (2) permutation importance도 같은 밴드 · (3) ligand ablation 시 예측 붕괴 (THI −100%, TBZ −38%, DQ −22%).", CAP)]
 
-S += [Paragraph("4. 절대농도(µM) 예측 — 실패 (정직한 결과)", H2),
-      Paragraph("Binary + Tertiary + Ratio_mix 합쳐 <b>69개 혼합물, 0.1~1000µM 전 범위</b> 검증.", BODY),
-      tbl([["방법 / 지표","R²(log) DQ/TBZ/THI","within-2×","within-order"],
-           ["물리역산","−3.8 / −9.7 / −0.6","6~20%","45~64%"],
-           ["DL 회귀","−1.2 / −1.1 / −1.1","8~16%","45~49%"]],
-          [3.6*cm,4.8*cm,3*cm,3*cm]),
-      img(os.path.join(DOCS,"concentration_pred.png"), 15*cm),
-      Paragraph("predicted vs true µM (log-log). 두 방법 다 대각선을 못 따라감.", CAP),
-      Paragraph("<b>두 방법 다 실패</b> (R²<0, within-2× 6~20%). DL도 물리역산을 못 이김. <b>원인</b>: 절대 µM는 신호 크기(magnitude)=gain에 의존하는데, 서로 다른 측정 세션(Binary/Ratio_mix)은 gain이 달라 magnitude→µM 매핑이 불일치. 조성 <b>비율</b>은 gain-무관이라 잘 되지만(R² 0.69), 절대 µM는 <b>internal standard</b> 또는 단일 세션 gain 일관성이 필요. (drawable ink 재현성이 관건)", BODY)]
+S += [Paragraph("4. 절대농도(µM) — order-of-magnitude(자릿수)만 가능 (정직한 결론)", H2),
+      Paragraph("<b>왜 단일성분 검량선(standard curve)은 혼합물에 틀리나</b>: 순수물질 검량선은 자기 혼자만의 흡착 θ=KC/(1+KC)를 따르지만, 혼합물에선 경쟁흡착 θ_i=K_iC_i/(1+Σ K_jC_j)라 같은 농도라도 다른 성분이 표면을 뺏어 커버리지가 달라짐. 그래서 <b>검량선 R²이 아무리 좋아도 혼합물 농도는 틀림</b>(모델 자체가 competition을 무시). → <b>혼합물로 학습해야</b> competition이 담김. DL에게 검량선 역할은 혼합물 데이터 자체이고, 단일성분 표준곡선은 선택적 보조.", BODY),
+      Paragraph("Binary + Tertiary + Ratio_mix 합쳐 <b>69개 혼합물, 0.1~1000µM 전 범위</b> leave-one-out 검증:", BODY),
+      tbl([["방법 / 지표","R²(log µM)","within-2×","within-order"],
+           ["물리역산 (검량선 기반)","−0.6 ~ −19.6","6~20%","45~64%"],
+           ["DL 회귀 (혼합물 학습)","−0.6 ~ −1.3","8~40%","45~80%"]],
+          [4.2*cm,3.6*cm,3*cm,3*cm]),
+      img(os.path.join(DOCS,"concentration_pred.png"), 14*cm),
+      Paragraph("predicted vs true µM (log-log, 합친 세트). 대각선(이상값)을 잘 못 따라감.", CAP),
+      Paragraph("<b>단일 측정 세트 내</b>에서는 DL이 <b>within-order ~70%</b>(median ~3×)로 준정량 가능. <b>세트를 합치면 붕괴</b>(48%)하는데, 이는 단순 gain 차이가 아님 — 기판 피크(~2100 cm⁻¹)가 세션 간 거의 동일(1.09×)하고, 그걸로 정규화해도 안 나아짐. <b>정밀 µM(2배 이내)는 물리적 한계</b>(competition + magnitude=gain 의존). 정직한 제공물 = <b>order-of-magnitude 준정량 농도</b>('~10 vs ~100 vs ~1000µM'), 묻힌 성분 포함 — 고전기법은 이걸 아예 잃음.", BODY)]
 
-S += [Paragraph("5. 종합 · 다음", H2),
-      Paragraph("• 조성 정량: <b>full-spectrum MLP</b>가 고전기법·CNN 모두 압도, 해석성까지 확보. THI 지배 혼합물의 묻힌 성분 복원.", BODY),
-      Paragraph("• 범용성: pure+calibration+소수 mixture 워크플로는 시스템 무관 재사용, 모델은 시스템별 재보정. ink 재현성이 전이 담보.", BODY),
-      Paragraph("• 다음: (1) Ratio_mix 농도축으로 µM·경쟁 재검증, (2) 독립 배치 blind 검증, (3) internal standard.", BODY),
-      Spacer(1,5),
-      Paragraph("코드: dl_quantify.py · dl_recovery.py · dl_explain.py · experiments/dl/ · 상세: docs/dl_quantification_findings.md · docs/dl_interpretability.md", CAP)]
+S += [Paragraph("5. 앱(UNMIXR)에 반영된 기능", H2),
+      Paragraph("• <b>Recovery 탭</b>: response factor(응답계수)를 <b>평균±표준오차</b>로 표시(추정치라 불확실성 있음), 보정 solution ratio, 정확도 컬러 드리프트 삼각형, recovery±SE(미량<3% 제외). <b>DL predict</b>(leave-one-out 조성 + order-of-magnitude µM) · <b>DL explain</b>(attribution/permutation/ablation) 앱 내장. <b>Save DL model</b>(로드한 혼합물로 학습·저장).", BODY),
+      Paragraph("• <b>Real data 탭</b>: <b>Load DL model</b>로 그 모델을 미지 시료 맵에 적용 → NNLS unmix 위에 <b>DL 조성 + 근사 µM</b> 표시.", BODY),
+      Paragraph("• 범용성: pure+혼합물 워크플로는 시스템 무관 재사용, 모델은 시스템별 재학습. 잉크 재현성이 절대농도 전이의 관건.", BODY),
+      Paragraph("• 다음: (1) 독립 배치 blind 검증, (2) 정밀 µM은 internal standard 필요.", BODY)]
+
+# ---- Glossary (spell out abbreviations) ----
+GL = ParagraphStyle("GL", fontName="KR", fontSize=8.5, leading=12, textColor=colors.HexColor("#5b6673"), spaceAfter=2)
+S += [Paragraph("6. 용어 (약어 풀이)", H2),
+      Paragraph("<b>DL</b> deep learning(딥러닝) · <b>MLP</b> multilayer perceptron(다층 퍼셉트론, 완전연결 신경망) · <b>1D-CNN</b> 1차원 합성곱 신경망 · <b>NNLS</b> non-negative least squares(비음수 최소제곱 unmixing) · <b>PLS</b> partial least squares regression · <b>SVR</b> support vector regression · <b>RF(RandomForest)</b> 랜덤포레스트", GL),
+      Paragraph("<b>LOO</b> leave-one-out(하나 빼고 학습, 뺀 것으로 검증하는 교차검증) · <b>R²</b> 결정계수(1=완벽) · <b>RMSE</b> root-mean-square error · <b>ROC-AUC</b> receiver-operating-characteristic area under curve(검출 성능, 1=완벽·0.5=무작위) · <b>PR-AUC</b> precision-recall AUC · <b>F1</b> 정밀도·재현율 조화평균 · <b>SE</b> standard error(표준오차) · <b>SD</b> standard deviation(표준편차)", GL),
+      Paragraph("<b>IG</b> Integrated Gradients(적분 기울기 — 각 파수의 예측 기여도) · <b>permutation importance</b> 특정 구간을 섞어 정확도 하락으로 중요도 측정 · <b>ligand ablation</b> 성분 마커밴드를 지워 예측 붕괴로 인과 확인 · <b>VIP</b> variable-importance-in-projection(판별 마커밴드) · <b>SERS</b> surface-enhanced Raman spectroscopy", GL),
+      Paragraph("<b>µM</b> 마이크로몰(농도) · <b>order-of-magnitude / within-order</b> 자릿수 정확도(예측/실제가 10배 이내) · <b>within-2×</b> 2배 이내 · <b>recovery</b> 복원율=측정/실제×100% · <b>response factor(응답계수)</b> 단위 농도당 표면 신호 세기(THI가 크면 표면 지배) · <b>gain</b> 기판/장비 신호 배율 · <b>competition(경쟁흡착)</b> 성분들이 표면 자리를 다투는 것", GL),
+      Spacer(1,4),
+      Paragraph("코드: dl_quantify.py · dl_recovery.py · dl_explain.py · dl_model.py · experiments/dl/ · 상세: docs/dl_quantification_findings.md · docs/dl_interpretability.md", CAP)]
 
 SimpleDocTemplate(OUT, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm, topMargin=1.6*cm, bottomMargin=1.6*cm).build(S)
 print("wrote", OUT)

@@ -191,8 +191,52 @@ data augmentation, and more extreme-ratio / distinct compositions.
 Per-mixture predictions: `mixture_predictions.csv`. An independent same-substrate batch (blind)
 is the needed next validation before claiming real-sample performance.
 
+## Interpretability — the model uses chemically meaningful bands
+
+Three independent checks (write-up + figure in `dl_interpretability.md`) all point at the
+same wavenumbers, which are the compounds' known marker bands: Integrated-Gradients
+attribution concentrates on them (THI sharply at 1368 / 550 cm⁻¹), band permutation
+importance peaks on them, and ablating them collapses the prediction (THI −100 %, TBZ −38 %,
+DQ −22 %). So the network learned the real SERS fingerprint, not a dataset artefact.
+
+## Absolute concentration (µM) — order-of-magnitude only
+
+Why single-component standard curves are the wrong tool for mixtures: a pure-compound
+calibration follows θ = KC/(1+KC), but in a mixture the coverage is competitive,
+θ_i = K_i C_i /(1 + Σ_j K_j C_j). The same concentration gives a different coverage because
+the co-adsorbates take surface sites, so a single-component curve — however good its R² — is
+systematically wrong for mixtures. This is exactly why physics inversion explodes on THI and
+why the model must **learn from mixtures**, not from single-component curves. The mixtures
+themselves are the calibration; the single-component curve is only an optional pretrain aid.
+
+Result (leave-one-out; combined 0.1–1000 µM, 69 mixtures):
+
+| | R²(log µM) | within 2× | within an order of magnitude |
+|---|---|---|---|
+| physics inversion | −0.6 … −19.6 | 6–20 % | 45–64 % |
+| DL regression | −0.6 … −1.3 | 8–40 % | 45–80 % |
+
+- **Within a single measurement set** the DL reaches ~70 % within an order of magnitude
+  (median ~3×); classical physics inversion is worse and unstable.
+- **Across sets it collapses** — and this is *not* a simple gain difference: the ink substrate
+  peak (~2100 cm⁻¹) is near-identical between sets (1.09×) and normalising by it does not help.
+- **Precise µM (within 2×) is not achievable** — competitive adsorption + signal-magnitude
+  (gain) dependence are physical limits, not fit-quality issues. The honest deliverable is
+  **semi-quantitative, order-of-magnitude concentration** ("~10 vs ~100 vs ~1000 µM"), for all
+  components including the ones THI buries — which classical methods lose entirely.
+
+## In the app (UNMIXR)
+
+- **Recovery tab**: known-ratio mixtures → response factors (now reported as **mean ± SE**,
+  since they are estimated from the mixtures), corrected solution ratio, drift triangle
+  (accuracy-coloured), recovery ± SE (trace <3 % excluded so the ratio metric doesn't blow up).
+  **DL predict** (leave-one-map-out composition + order-of-magnitude µM) and **DL explain**
+  (attribution / permutation / ablation) run in-app. **Save DL model** trains on the loaded
+  mixtures and pickles a portable model.
+- **Real-data tab**: **Load DL model** applies that model to an unknown map — DL composition +
+  approximate µM on top of the NNLS unmix.
+
 ---
 
-*Reproduce:* `python dl_quantify.py` (synthetic self-test). Real-data validation scripts
-live in the session scratchpad (`dl_validate_real.py`, `dl_validate_B.py`,
-`dl_validate_B_pixel.py`).
+*Reproduce:* `python dl_quantify.py` (synthetic self-test). Real-data validation, benchmark,
+interpretability and concentration scripts live in `experiments/dl/` (see its README).
