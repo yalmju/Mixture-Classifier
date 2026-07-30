@@ -209,21 +209,23 @@ systematically wrong for mixtures. This is exactly why physics inversion explode
 why the model must **learn from mixtures**, not from single-component curves. The mixtures
 themselves are the calibration; the single-component curve is only an optional pretrain aid.
 
-Result (leave-one-out; combined 0.1–1000 µM, 69 mixtures):
+Result (leave-one-out on the consolidated **Ratio_mix** set — 34 mixtures, one measurement
+session, 10–1000 µM; different sessions must NOT be pooled, as gain/batch differences break
+the absolute scale):
 
-| | R²(log µM) | within 2× | within an order of magnitude |
-|---|---|---|---|
-| physics inversion | −0.6 … −19.6 | 6–20 % | 45–64 % |
-| DL regression | −0.6 … −1.3 | 8–40 % | 45–80 % |
+| within an order of magnitude | DQ | TBZ | THI | mean |
+|---|---|---|---|---|
+| physics inversion | 44 % | **20 %** | 80 % | ~48 % |
+| DL regression | **68 %** | **60 %** | 80 % | **~69 %** |
 
-- **Within a single measurement set** the DL reaches ~70 % within an order of magnitude
-  (median ~3×); classical physics inversion is worse and unstable.
-- **Across sets it collapses** — and this is *not* a simple gain difference: the ink substrate
-  peak (~2100 cm⁻¹) is near-identical between sets (1.09×) and normalising by it does not help.
-- **Precise µM (within 2×) is not achievable** — competitive adsorption + signal-magnitude
-  (gain) dependence are physical limits, not fit-quality issues. The honest deliverable is
-  **semi-quantitative, order-of-magnitude concentration** ("~10 vs ~100 vs ~1000 µM"), for all
-  components including the ones THI buries — which classical methods lose entirely.
+- The **DL reaches ~70 % within an order of magnitude** (median ~3×) and clearly beats physics
+  inversion — most on the competition-buried TBZ (60 % vs 20 %), whose concentration classical
+  inversion cannot recover at all.
+- **Precise µM (within 2×) is not achievable** (8–36 %, R²(log)<0) — competitive adsorption +
+  signal-magnitude (gain) dependence are physical limits, not fit-quality issues.
+- The honest deliverable is **semi-quantitative, order-of-magnitude concentration**
+  ("~10 vs ~100 vs ~1000 µM"), for all components including the ones THI buries — which
+  classical methods lose entirely. Keep to one consistent measurement session per model.
 
 ## In the app (UNMIXR)
 

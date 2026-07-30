@@ -67,14 +67,14 @@ S += [Paragraph("3. 해석성 — 화학적으로 타당한 모델인가", H2),
 
 S += [Paragraph("4. 절대농도(µM) — order-of-magnitude(자릿수)만 가능 (정직한 결론)", H2),
       Paragraph("<b>왜 단일성분 검량선(standard curve)은 혼합물에 틀리나</b>: 순수물질 검량선은 자기 혼자만의 흡착 θ=KC/(1+KC)를 따르지만, 혼합물에선 경쟁흡착 θ_i=K_iC_i/(1+Σ K_jC_j)라 같은 농도라도 다른 성분이 표면을 뺏어 커버리지가 달라짐. 그래서 <b>검량선 R²이 아무리 좋아도 혼합물 농도는 틀림</b>(모델 자체가 competition을 무시). → <b>혼합물로 학습해야</b> competition이 담김. DL에게 검량선 역할은 혼합물 데이터 자체이고, 단일성분 표준곡선은 선택적 보조.", BODY),
-      Paragraph("Binary + Tertiary + Ratio_mix 합쳐 <b>69개 혼합물, 0.1~1000µM 전 범위</b> leave-one-out 검증:", BODY),
-      tbl([["방법 / 지표","R²(log µM)","within-2×","within-order"],
-           ["물리역산 (검량선 기반)","−0.6 ~ −19.6","6~20%","45~64%"],
-           ["DL 회귀 (혼합물 학습)","−0.6 ~ −1.3","8~40%","45~80%"]],
-          [4.2*cm,3.6*cm,3*cm,3*cm]),
-      img(os.path.join(DOCS,"concentration_pred.png"), 14*cm),
-      Paragraph("predicted vs true µM (log-log, 합친 세트). 대각선(이상값)을 잘 못 따라감.", CAP),
-      Paragraph("<b>단일 측정 세트 내</b>에서는 DL이 <b>within-order ~70%</b>(median ~3×)로 준정량 가능. <b>세트를 합치면 붕괴</b>(48%)하는데, 이는 단순 gain 차이가 아님 — 기판 피크(~2100 cm⁻¹)가 세션 간 거의 동일(1.09×)하고, 그걸로 정규화해도 안 나아짐. <b>정밀 µM(2배 이내)는 물리적 한계</b>(competition + magnitude=gain 의존). 정직한 제공물 = <b>order-of-magnitude 준정량 농도</b>('~10 vs ~100 vs ~1000µM'), 묻힌 성분 포함 — 고전기법은 이걸 아예 잃음.", BODY)]
+      Paragraph("정리된 <b>Ratio_mix 세트 (34개, 단일 세션, 10~1000µM)</b> leave-one-out 검증. (세션이 다르면 gain/배치 차이로 절대 스케일이 깨지므로 합치지 않음):", BODY),
+      tbl([["within-order 정확도","DQ","TBZ","THI","평균"],
+           ["물리역산 (검량선 기반)","44%","20%","80%","~48%"],
+           ["DL 회귀 (혼합물 학습)","68%","60%","80%","~69%"]],
+          [4.6*cm,2.3*cm,2.3*cm,2.3*cm,2.3*cm]),
+      img(os.path.join(DOCS,"concentration_pred.png"), 14.5*cm),
+      Paragraph("predicted vs true µM (log-log, Ratio_mix 34개). DL이 대각선을 더 잘 따라감.", CAP),
+      Paragraph("<b>DL이 within-order ~69%</b>(median ~3×)로 준정량 가능하고 물리역산(~48%)을 확실히 이김 — 특히 <b>경쟁에 묻히는 TBZ를 60% vs 20%</b>로 살림(고전 역산은 못 함). <b>정밀 µM(2배 이내)는 8~36%로 불가</b> — competition + magnitude=gain 의존의 물리적 한계. 정직한 제공물 = <b>order-of-magnitude 준정량 농도</b>('~10 vs ~100 vs ~1000µM'), 묻힌 성분 포함. 모델은 단일 측정 세션 단위로 유지.", BODY)]
 
 S += [Paragraph("5. 앱(UNMIXR)에 반영된 기능", H2),
       Paragraph("• <b>Recovery 탭</b>: response factor(응답계수)를 <b>평균±표준오차</b>로 표시(추정치라 불확실성 있음), 보정 solution ratio, 정확도 컬러 드리프트 삼각형, recovery±SE(미량<3% 제외). <b>DL predict</b>(leave-one-out 조성 + order-of-magnitude µM) · <b>DL explain</b>(attribution/permutation/ablation) 앱 내장. <b>Save DL model</b>(로드한 혼합물로 학습·저장).", BODY),
