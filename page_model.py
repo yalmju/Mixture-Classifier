@@ -13,12 +13,13 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QSpinBox, QComboBox, QCheckBox, QFileDialog, QProgressBar, QScrollArea,
-    QFrame,
+    QFrame, QStackedWidget,
 )
 
 from ui_common import *
 from model_training import train_model, TrainResult
 from real_data import PEST_DEFAULT
+from page_compose import ComposePanel
 from dataset import load_preprocess
 from io_utils import write_csv
 
@@ -60,14 +61,27 @@ class ModelPage(QWidget):
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Model training"); h1.setObjectName("h1")
-        sub = QLabel("Step 2 — train. Uses the train/test division and "
-                     "preprocessing you already set in Samples (split = manual). "
-                     "Pick an algorithm; read the learning curve, confusion matrix, "
-                     "per-class F1, PCA and discriminative bands. The other splits "
-                     "(spatial / random / batch-CV) are there for comparison only.")
+        sub = QLabel("Step 2 — train the model used downstream. Composition (the model "
+                     "Recovery / Real-data apply) or a pixel classifier for the reference maps.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
+
+        # ---- mode: composition model (Step 2) vs pixel classifier ----
+        self._compose = ComposePanel()
+        seg = QHBoxLayout(); seg.setSpacing(6)
+        self.btn_comp = QPushButton("Composition model"); self.btn_comp.setObjectName("ghost")
+        self.btn_comp.setCheckable(True); self.btn_comp.setChecked(True)
+        self.btn_clf = QPushButton("Pixel classifier"); self.btn_clf.setObjectName("ghost")
+        self.btn_clf.setCheckable(True)
+        self.btn_comp.clicked.connect(lambda: self._set_mode(0))
+        self.btn_clf.clicked.connect(lambda: self._set_mode(1))
+        seg.addWidget(self.btn_comp); seg.addWidget(self.btn_clf); seg.addStretch(1)
+        root.addLayout(seg)
+
+        # classify content lives in its own container so the mode switch can swap it
+        classify_box = QWidget(); cbody = QVBoxLayout(classify_box)
+        cbody.setContentsMargins(0, 0, 0, 0); cbody.setSpacing(14)
 
         # ---- controls: row 1 = model + data + actions ----
         ctl = QHBoxLayout(); ctl.setSpacing(10)
@@ -94,7 +108,7 @@ class ModelPage(QWidget):
         self.btn.clicked.connect(self._train)
         ctl.addWidget(save_b); ctl.addWidget(load_b); ctl.addWidget(exp_b)
         ctl.addWidget(self.btn)
-        root.addLayout(ctl)
+        cbody.addLayout(ctl)
 
         # ---- controls: row 2 = split only (preprocessing comes from Samples) ----
         ctl2 = QHBoxLayout(); ctl2.setSpacing(10)
@@ -117,13 +131,13 @@ class ModelPage(QWidget):
         self.prep_lbl = QLabel(""); self.prep_lbl.setObjectName("field")
         ctl2.addSpacing(8); ctl2.addWidget(self.prep_lbl)
         ctl2.addStretch(1)
-        root.addLayout(ctl2)
+        cbody.addLayout(ctl2)
         self._refresh_prep()
 
         # progress bar — visible (busy) only while training, so it never reads as frozen
         self.pbar = QProgressBar(); self.pbar.setTextVisible(False)
         self.pbar.setFixedHeight(6); self.pbar.setVisible(False)
-        root.addWidget(self.pbar)
+        cbody.addWidget(self.pbar)
 
         # KPI row
         kpis = QHBoxLayout(); kpis.setSpacing(12)
@@ -131,7 +145,7 @@ class ModelPage(QWidget):
         self.k_tr = Kpi("train pixels"); self.k_te = Kpi("test pixels")
         for k in (self.k_acc, self.k_f1, self.k_tr, self.k_te):
             kpis.addWidget(k)
-        root.addLayout(kpis)
+        cbody.addLayout(kpis)
 
         # plot grid: 2x2 + a full-width discriminative-band row
         grid = QGridLayout(); grid.setSpacing(12)
@@ -167,7 +181,13 @@ class ModelPage(QWidget):
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(gridw)
         scroll.setStyleSheet("QScrollArea{background:transparent;}")
-        root.addWidget(scroll, 1)
+        cbody.addWidget(scroll, 1)
+
+        # stack the two modes; composition is the default (Step 2 of the workflow)
+        self._mstack = QStackedWidget()
+        self._mstack.addWidget(self._compose)     # index 0 — composition model
+        self._mstack.addWidget(classify_box)      # index 1 — pixel classifier
+        root.addWidget(self._mstack, 1)
 
         for cv, msg in [(self.c_curve, "Train to watch the learning curve"),
                         (self.c_cm, "Train to compute confusion matrix"),
@@ -185,6 +205,12 @@ class ModelPage(QWidget):
     def set_data_dir(self, path):
         """Adopt the dataset folder chosen in Samples (single source of truth)."""
         self.pest_dir = path; self.src.setText(self._short(path)); self._refresh_prep()
+        self._compose.set_data_dir(path)
+
+    def _set_mode(self, idx):
+        """Switch between the composition-model panel (0) and the pixel classifier (1)."""
+        self._mstack.setCurrentIndex(idx)
+        self.btn_comp.setChecked(idx == 0); self.btn_clf.setChecked(idx == 1)
 
     def _spin(self, spin, lo, hi, val, label, step=1):
         col = QVBoxLayout(); col.setSpacing(2)
