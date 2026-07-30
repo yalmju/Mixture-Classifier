@@ -50,6 +50,23 @@ class ValidateWorker(QObject):
             self.fail.emit(traceback.format_exc())
 
 
+class ExplainWorker(QObject):
+    done = pyqtSignal(object)
+    fail = pyqtSignal(str)
+    progress = pyqtSignal(str)
+
+    def __init__(self, params):
+        super().__init__()
+        self.params = params
+
+    def run(self):
+        try:
+            from dl_explain import dl_explain
+            self.done.emit(dl_explain(progress=self.progress.emit, **self.params))
+        except Exception:
+            self.fail.emit(traceback.format_exc())
+
+
 class ValidatePage(QWidget):
     def __init__(self):
         super().__init__()
@@ -89,13 +106,19 @@ class ValidatePage(QWidget):
         self.dl_chk.setToolTip("physics-informed DL composition (leave-one-map-out over the "
                                "loaded mixtures). The composition view (triangle · recovery · "
                                "drift) then shows the DL prediction instead of NNLS. Slower.")
+        self.explain_btn = QPushButton("DL explain"); self.explain_btn.setObjectName("ghost")
+        self.explain_btn.setToolTip("train the DL on the loaded mixtures and show which "
+                                    "spectral bands it uses (Integrated Gradients + band "
+                                    "permutation importance + ligand ablation)")
+        self.explain_btn.clicked.connect(self._run_explain)
         clr_b = QPushButton("Clear"); clr_b.setObjectName("ghost"); clr_b.clicked.connect(self._clear)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost"); exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Validate"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(self.ref_lbl); ctl.addStretch(1)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.dl_chk)
-        ctl.addWidget(add_b); ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
+        ctl.addWidget(add_b); ctl.addWidget(self.explain_btn)
+        ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
         # collapsible input detail (fixed components · VIP · mixture table) — collapse it
@@ -187,7 +210,7 @@ class ValidatePage(QWidget):
 
         # ---- composition view (drift · recovery) ----
         self.c_tri = Canvas()
-        self.c_rel = Canvas(); self.c_rec = Canvas()
+        self.c_rel = Canvas(); self.c_rec = Canvas(); self.c_explain = Canvas()
         crow = QHBoxLayout(); crow.setSpacing(12)
         for cv, title in [
             (self.c_tri, "Composition recovery (drift triangle)"),
@@ -199,6 +222,10 @@ class ValidatePage(QWidget):
         dcard, dlay = _card("Relative drift — predicted vs real, grouped by dominant substance")
         dlay.addWidget(self.c_rel); self.c_rel.setMinimumHeight(300)
         body.addWidget(dcard)
+        ecard, elay = _card("DL interpretability — IG attribution · band importance · ligand "
+                            "ablation  (run 'DL explain')")
+        elay.addWidget(self.c_explain); self.c_explain.setMinimumHeight(430)
+        body.addWidget(ecard)
 
         bodyw = QWidget(); bodyw.setLayout(body)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
@@ -210,7 +237,9 @@ class ValidatePage(QWidget):
                       (self.c_resp, "Response factors appear here"),
                       (self.c_tri, "Drift triangle appears here"),
                       (self.c_rec, "Recovery appears here"),
-                      (self.c_rel, "Relative drift appears here")]:
+                      (self.c_rel, "Relative drift appears here"),
+                      (self.c_explain, "Run 'DL explain' → which bands the model uses (IG · "
+                                       "permutation · ablation)")]:
             cv.placeholder(m)
 
         self.readout = QLabel(""); self.readout.setObjectName("sub")
@@ -389,6 +418,88 @@ class ValidatePage(QWidget):
         self._worker.done.connect(self._thread.quit)
         self._worker.fail.connect(self._thread.quit)
         self._thread.start()
+
+    # ---- DL explain (interpretability) ----
+    def _run_explain(self):
+        items = self._items()
+        if len(items) < 3:
+            self.status.setText("add ≥3 mixtures for DL explain")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        cfg = load_preprocess(self.data_dir)
+        params = dict(data_dir=self.data_dir, items=items, calib_path=self.calib_path,
+                      baseline=cfg["baseline"], trim=cfg["trim"])
+        self.explain_btn.setEnabled(False); self.explain_btn.setText("Explaining…")
+        self.progbar.setRange(0, 0); self.progbar.setVisible(True)
+        self.status.setText("● DL explain — training…"); self.status.setStyleSheet(f"color:{MUTE};")
+        self._ethread = QThread(); self._eworker = ExplainWorker(params)
+        self._eworker.moveToThread(self._ethread)
+        self._ethread.started.connect(self._eworker.run)
+        self._eworker.progress.connect(lambda m: self.status.setText("● " + m))
+        self._eworker.done.connect(self._apply_explain)
+        self._eworker.fail.connect(self._error_explain)
+        self._eworker.done.connect(self._ethread.quit)
+        self._eworker.fail.connect(self._ethread.quit)
+        self._ethread.start()
+
+    def _apply_explain(self, r):
+        self.explain_btn.setEnabled(True); self.explain_btn.setText("DL explain")
+        self.progbar.setVisible(False)
+        self.status.setText("done (DL explain)"); self.status.setStyleSheet(f"color:{MUTE};")
+        self._plot_explain(r)
+
+    def _error_explain(self, tb):
+        self.explain_btn.setEnabled(True); self.explain_btn.setText("DL explain")
+        self.progbar.setVisible(False)
+        self.status.setText("DL explain failed — " + tb.strip().splitlines()[-1][:80])
+        self.status.setStyleSheet(f"color:{RED};")
+        print(tb, file=sys.stderr)
+
+    def _plot_explain(self, r):
+        """3-panel interpretability: IG attribution per compound · band permutation
+        importance · ligand ablation (drawn into the c_explain canvas)."""
+        wnv = r["wn"]; subs = r["subs"]; attr = r["attr"]; vip = r["vip"]
+        perm = r["perm"]; abl = r["abl"]
+        col = {s: substance_color(s, SUBSTANCES.index(s)) for s in subs}
+        fig = self.c_explain.fig; fig.clear()
+        n = len(subs)
+        gs = fig.add_gridspec(n, 2, width_ratios=[1.1, 1], hspace=0.55, wspace=0.28)
+        for c, name in enumerate(subs):
+            ax = fig.add_subplot(gs[c, 0])
+            ax.plot(wnv, attr[name], color=col[name], lw=0.8)
+            ax.fill_between(wnv, attr[name], color=col[name], alpha=0.25)
+            for wv in vip.get(name, []):
+                ax.axvline(wv, color="#555", ls=":", lw=0.9)
+            ax.set_ylabel(name, color=col[name], fontweight="bold", fontsize=9)
+            ax.set_xlim(wnv.min(), wnv.max()); ax.set_yticks([])
+            if c < n - 1:
+                ax.set_xticklabels([])
+            for s in ("top", "right"):
+                ax.spines[s].set_visible(False)
+        fig.axes[0].set_title("IG attribution  (dotted = VIP bands)", fontsize=9, fontweight="bold")
+        fig.axes[n - 1].set_xlabel("wavenumber (cm-1)")
+        axp = fig.add_subplot(gs[0:max(1, n - 1), 1])
+        if len(perm):
+            axp.plot(perm[:, 0], np.clip(perm[:, 1], 0, None) * 100, color=INK, lw=1.1)
+            axp.fill_between(perm[:, 0], np.clip(perm[:, 1], 0, None) * 100, color="#8b95a1", alpha=0.3)
+        for name in subs:
+            for wv in vip.get(name, []):
+                axp.axvline(wv, color=col[name], ls=":", lw=0.9)
+        axp.set_title("band permutation importance", fontsize=9, fontweight="bold")
+        axp.set_ylabel("Δ error %"); axp.set_xlim(wnv.min(), wnv.max())
+        for s in ("top", "right"):
+            axp.spines[s].set_visible(False)
+        axa = fig.add_subplot(gs[n - 1, 1])
+        x = np.arange(len(subs)); w = 0.38
+        axa.bar(x - w / 2, [abl[s][0] for s in subs], w, color=[col[s] for s in subs],
+                alpha=0.9, label="full")
+        axa.bar(x + w / 2, [abl[s][1] for s in subs], w, color=[col[s] for s in subs],
+                alpha=0.35, hatch="//", label="VIP ablated")
+        axa.set_xticks(x); axa.set_xticklabels(subs)
+        axa.set_title("ligand ablation", fontsize=9, fontweight="bold")
+        axa.legend(fontsize=7, framealpha=0.0)
+        for s in ("top", "right"):
+            axa.spines[s].set_visible(False)
+        fig.tight_layout(); self.c_explain.draw_idle()
 
     def _error(self, tb):
         self.btn.setEnabled(True); self.btn.setText("Validate")
