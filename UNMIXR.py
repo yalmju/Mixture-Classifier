@@ -16,6 +16,13 @@ from __future__ import annotations
 import os
 import sys
 
+# macOS: torch (libomp) and numpy/sklearn (MKL libiomp5) can each load their own OpenMP
+# runtime; the duplicate abort crashes the app the moment a model trains. Allow it, and
+# keep OpenMP single-threaded so torch inside a Qt worker thread stays stable. Set before
+# numpy/torch import below.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QColor
 from PyQt6.QtWidgets import (

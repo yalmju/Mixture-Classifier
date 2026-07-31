@@ -82,17 +82,12 @@ class ComposePanel(QWidget):
         self.ref_lbl = QLabel(self._short(self.data_dir)); self.ref_lbl.setObjectName("field")
         add_b = QPushButton("Add mixtures…"); add_b.setObjectName("ghost")
         add_b.clicked.connect(self._add)
-        cal_b = QPushButton("Calibration… (opt)"); cal_b.setObjectName("ghost")
-        cal_b.setToolTip("optional dilution-series CSV — enables the MLP physics pretrain")
-        cal_b.clicked.connect(self._browse_calib)
-        self.cal_lbl = QLabel("no calib"); self.cal_lbl.setObjectName("field")
         self.chk_uM = QCheckBox("ratios are µM"); self.chk_uM.setObjectName("field")
         self.chk_uM.setToolTip("treat the ratio numbers as absolute concentrations in µM "
                                "(e.g. DQ1000 → 1000 µM) — also trains an order-of-magnitude "
                                "concentration head, so Real-data can report a µM range")
         clr_b = QPushButton("Clear"); clr_b.setObjectName("ghost"); clr_b.clicked.connect(self._clear)
         frow.addWidget(pure_b); frow.addWidget(self.ref_lbl, 1)
-        frow.addWidget(cal_b); frow.addWidget(self.cal_lbl)
         frow.addWidget(self.chk_uM); frow.addWidget(add_b); frow.addWidget(clr_b)
         root.addLayout(frow)
 
@@ -119,21 +114,16 @@ class ComposePanel(QWidget):
         mrow.addStretch(1)
         self.train_b = QPushButton("Train"); self.train_b.setObjectName("primary")
         self.train_b.clicked.connect(self._train)
+        self.cancel_b = QPushButton("Cancel"); self.cancel_b.setObjectName("ghost")
+        self.cancel_b.setVisible(False); self.cancel_b.clicked.connect(self._cancel)
         self.save_b = QPushButton("Save model…"); self.save_b.setObjectName("ghost")
         self.save_b.setEnabled(False); self.save_b.clicked.connect(self._save)
-        mrow.addWidget(self.save_b); mrow.addWidget(self.train_b)
+        mrow.addWidget(self.save_b); mrow.addWidget(self.cancel_b); mrow.addWidget(self.train_b)
         root.addLayout(mrow)
         self._update_params()
 
         self.pbar = QProgressBar(); self.pbar.setTextVisible(False)
         self.pbar.setFixedHeight(6); self.pbar.setVisible(False); root.addWidget(self.pbar)
-
-        kp = QHBoxLayout(); kp.setSpacing(12)
-        self.k_err = Kpi("train composition error"); self.k_n = Kpi("mixtures")
-        self.k_m = Kpi("method")
-        for k in (self.k_err, self.k_n, self.k_m):
-            kp.addWidget(k)
-        root.addLayout(kp)
 
         # editable table: file | true ratio  (top) + result triangle (below)
         self.table = QTableWidget(0, 2)
@@ -163,11 +153,6 @@ class ComposePanel(QWidget):
         d = QFileDialog.getExistingDirectory(self, "Pure references folder", self.data_dir)
         if d:
             self.set_data_dir(d)
-
-    def _browse_calib(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Calibration spectra CSV", "", "CSV (*.csv)")
-        if p:
-            self.calib_path = p; self.cal_lbl.setText("calib: " + os.path.basename(p))
 
     def _ref_names(self):
         try:
@@ -246,7 +231,7 @@ class ComposePanel(QWidget):
             self.status.setStyleSheet(f"color:{RED};"); return
         params = self._opts(); params["items"] = items
         self.train_b.setEnabled(False); self.train_b.setText("Training…")
-        self.save_b.setEnabled(False)
+        self.save_b.setEnabled(False); self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
         self.status.setText("● training…"); self.status.setStyleSheet(f"color:{MUTE};")
         self._thread = QThread(); self._worker = TrainComposeWorker(params)
@@ -259,18 +244,30 @@ class ComposePanel(QWidget):
         self._worker.fail.connect(self._thread.quit)
         self._thread.start()
 
+    def _cancel(self):
+        th = getattr(self, "_thread", None)
+        self._cancelled = True
+        if th is not None and th.isRunning():
+            th.quit()
+            if not th.wait(300):
+                th.terminate(); th.wait()
+        self.cancel_b.setVisible(False); self.pbar.setVisible(False)
+        self.train_b.setEnabled(True); self.train_b.setText("Train")
+        self.status.setText("cancelled"); self.status.setStyleSheet(f"color:{MUTE};")
+
     def _done(self, res):
+        if getattr(self, "_cancelled", False):
+            return
         model, err, rows = res
         self._model = model
         self.train_b.setEnabled(True); self.train_b.setText("Train")
-        self.save_b.setEnabled(True); self.pbar.setVisible(False)
-        self.k_err.set(f"{err:.0%}" if err == err else "—")
-        self.k_n.set(str(model.get("n_train", 0)))
-        self.k_m.set(model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else ""))
+        self.save_b.setEnabled(True); self.pbar.setVisible(False); self.cancel_b.setVisible(False)
         self._plot_triangle(rows)
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")   # → Recovery / Real adopt it
-        self.status.setText("done — trained. Recovery & Real-data now use this model; "
-                            "Save to keep it.")
+        m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
+        errtxt = f"{err:.0%}" if err == err else "—"
+        self.status.setText(f"done — {m} · {model.get('n_train', 0)} mixtures · train error {errtxt}. "
+                            "Recovery & Real-data now use this model; Save to keep it.")
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _plot_triangle(self, rows):
@@ -301,7 +298,7 @@ class ComposePanel(QWidget):
     def _fail(self, tb):
         import sys
         self.train_b.setEnabled(True); self.train_b.setText("Train")
-        self.pbar.setVisible(False)
+        self.pbar.setVisible(False); self.cancel_b.setVisible(False)
         self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)

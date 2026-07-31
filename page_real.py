@@ -379,14 +379,14 @@ class RealDataPage(QWidget):
             self.cmb_method.itemAt(1).widget().setCurrentIndex(2)   # switch to model
 
     def _adopt_model(self):
-        """Adopt the composition model trained in the Model tab (Step 2), if any."""
+        """Adopt the composition model trained in the Model tab (Step 2), if any. Just
+        stash it + label — do NOT re-run analysis here (that would block the GUI on the
+        main thread the moment training finishes); the next Analyze picks it up."""
         if MODEL_BUS.model is None:
             return
         self.dl_model = MODEL_BUS.model
         self.dlm_lbl.setText("DL: " + (MODEL_BUS.origin or "trained model"))
         self.dlm_lbl.setStyleSheet("")
-        if getattr(self, "_res", None) is not None:
-            self._apply(self._res)
 
     def _browse_dl(self):
         p, _ = QFileDialog.getOpenFileName(self, "DL model (.dlm from Recovery)", "",
