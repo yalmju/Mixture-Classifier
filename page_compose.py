@@ -375,6 +375,7 @@ class ComposePanel(QWidget):
             ax.set_xticks(x); ax.set_xticklabels([f"fold {i + 1}" for i in x], fontsize=8.5)
             ax.set_ylabel("composition error (%)  — held out")
         self.c_err.fig.tight_layout(); self.c_err.draw_idle()
+        self._kfold_res = res; self.export_b.setEnabled(True)
         meth = self.cmb.currentData().upper()
         self.status.setText(f"5-fold ({meth}) — " + " · ".join(f"{e:.0%}" for e in errs)
                             + f"   → mean {res['mean']:.1%} ± {res['sd']:.1%}")
@@ -450,6 +451,9 @@ class ComposePanel(QWidget):
         axr.set_xlim(-0.02, 1.02); axr.set_ylim(-0.02, 1.02); axr.set_aspect("equal")
         axr.legend(fontsize=8, framealpha=0, loc="lower right")
         self.c_roc.fig.tight_layout(); self.c_roc.draw_idle()
+        self._bench_err = dict(zip(methods, errs))
+        self._bench_auc = {m: aucs[m][2] for m in methods}
+        self.export_b.setEnabled(True)
         best = methods[int(_np.argmin(errs))]
         self.status.setText("leave-one-out benchmark — " + " · ".join(
             f"{label[m]} {e:.0%}" for m, e in zip(methods, errs)) + f"   → best: {label[best]}")
@@ -610,7 +614,7 @@ class ComposePanel(QWidget):
     def _export(self):
         """Write the plots + the numbers behind them (so every figure is redrawable)."""
         if self._model is None or not getattr(self, "_rows", None):
-            return
+            return self._export_eval_only()
         import numpy as _np
         from collections import OrderedDict
         from composition import SUBSTANCES
@@ -713,6 +717,43 @@ class ComposePanel(QWidget):
              ("composition_triangle_rgb", "ternary with the interior coloured by "
                                           "composition itself (RGB blend).")])
         self.status.setText(f"exported {n} PNG + CSVs + README → {os.path.basename(d)}")
+        self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _export_eval_only(self):
+        """Save a Benchmark / 5-fold result when no model has been trained in this session."""
+        import numpy as _np
+        from composition import SUBSTANCES
+        from io_utils import write_csv
+        bench = getattr(self, "_bench", None); kf = getattr(self, "_kfold_res", None)
+        if not bench and not kf:
+            self.status.setText("run Benchmark, 5-fold or Train first")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        d = QFileDialog.getExistingDirectory(self, "Export evaluation", self.data_dir)
+        if not d:
+            return
+        n = 0
+        if bench:
+            write_csv(os.path.join(d, "benchmark_metrics.csv"),
+                      ["method", "composition_error", "detection_auc"],
+                      [[m, f"{self._bench_err[m]:.4f}",
+                        f"{self._bench_auc.get(m, float('nan')):.4f}"] for m in bench])
+            rows_out = []
+            for m, rws in bench.items():
+                for nm, tv, pv in rws:
+                    rows_out.append([m, nm] + [f"{v:.4f}" for v in tv]
+                                    + [f"{v:.4f}" for v in pv])
+            write_csv(os.path.join(d, "benchmark_predictions.csv"),
+                      ["method", "mixture"] + [f"true_{s}" for s in SUBSTANCES]
+                      + [f"pred_{s}" for s in SUBSTANCES], rows_out)
+            n += _save_figs([("benchmark_error", self.c_err),
+                             ("benchmark_roc", self.c_roc)], d)
+        if kf:
+            write_csv(os.path.join(d, "kfold_errors.csv"), ["fold", "composition_error"],
+                      [[i + 1, f"{e:.4f}"] for i, e in enumerate(kf.get("errors", []))]
+                      + [["mean", f"{kf.get('mean', float('nan')):.4f}"],
+                         ["sd", f"{kf.get('sd', float('nan')):.4f}"]])
+            n += _save_figs([("kfold_errors", self.c_err)], d)
+        self.status.setText(f"exported evaluation ({n} PNG + CSV) → {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _save(self):
