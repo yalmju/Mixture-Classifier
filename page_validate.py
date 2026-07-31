@@ -943,12 +943,14 @@ class ValidatePage(QWidget):
                 members.sort(key=lambda k: -norm[k])
                 start = cursor
                 for k in members:
-                    ci = si if si is not None else dom[k]   # ungrouped: colour by its own max
-                    col = substance_color(SUBSTANCES[ci], ci)
+                    if si is None:                          # 3-component panel: no single
+                        col = "#3f4650"                     # dominant substance → neutral dark
+                    else:
+                        col = substance_color(SUBSTANCES[si], si)
                     ax.barh(cursor, norm[k], height=0.66, alpha=0.85, color=col)
                     ypos.append(cursor)
                     ynames.append(recs[k]["name"].replace("_corrected", ""))
-                    ycols.append(col)
+                    ycols.append(col)          # label matches its bar (neutral for ternaries)
                     cursor -= 1.0
                 if si is not None:
                     spans.append((si, (start + cursor + 1.0) / 2))
