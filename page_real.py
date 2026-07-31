@@ -642,7 +642,20 @@ class RealDataPage(QWidget):
                 from dl_model import apply_model
                 from real_data import load_map
                 wn, cube, _mn, _c = load_map(self.test)
-                d = apply_model(self.dl_model, wn, cube)
+                cube = np.asarray(cube, float)
+                # Feed the model the pixels that actually carry signal. On a map that is
+                # mostly bare substrate the whole-map mean is dominated by background the
+                # model was never trained on, and it has to force that onto the substances
+                # (this map: NNLS read THI 80 from its hit pixels while the DL read TBZ 89).
+                hit = getattr(r, "hit", None)
+                sel = None
+                if hit is not None and np.asarray(hit).size == len(cube) and np.asarray(hit).sum() >= 5:
+                    sel = np.asarray(hit).reshape(-1).astype(bool)
+                else:
+                    tot = cube.sum(1)
+                    k = max(5, int(0.2 * len(cube)))       # else the brightest fifth
+                    sel = np.zeros(len(cube), bool); sel[np.argsort(-tot)[:k]] = True
+                d = apply_model(self.dl_model, wn, cube[sel])
                 comp = "  ·  ".join(f"{k} {v * 100:.0f}%" for k, v in d["composition"].items())
                 txt += f"<br><b style='color:{BLUE}'>DL composition</b> (physics-informed): {comp}"
                 if d["uM"]:
