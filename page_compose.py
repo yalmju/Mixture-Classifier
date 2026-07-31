@@ -199,6 +199,11 @@ class ComposePanel(QWidget):
         self.c_err = Canvas(); self.c_err.setMinimumHeight(300)
         self.c_err.placeholder("Train to see the per-substance error")
         elay.addWidget(self.c_err); plots2.addWidget(ecard, 1)
+        rcard, rlay = _card("Detection ROC — is each substance present? "
+                            "(threshold the predicted fraction)")
+        self.c_roc = Canvas(); self.c_roc.setMinimumHeight(300)
+        self.c_roc.placeholder("Train to see the detection ROC / AUC")
+        rlay.addWidget(self.c_roc); plots2.addWidget(rcard, 1)
         root.addLayout(plots2, 1)
 
         self.status = QLabel(""); self.status.setObjectName("sub"); root.addWidget(self.status)
@@ -305,7 +310,7 @@ class ComposePanel(QWidget):
         self._rows = rows
         self._plot_triangle(rows)
         self._plot_loss(model.get("train_eval", {}).get("loss", []))
-        self._plot_parity(rows); self._plot_error(rows)
+        self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
         self.export_b.setEnabled(True)
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
@@ -353,6 +358,38 @@ class ComposePanel(QWidget):
         ax.set_xticks(x); ax.set_xticklabels(SUBSTANCES)
         ax.set_ylabel("mean |predicted − true| fraction")
         self.c_err.fig.tight_layout(); self.c_err.draw_idle()
+
+    def _roc(self, rows, thr=0.05):
+        """Detection framing of the regression: 'substance present' = true fraction > thr,
+        score = predicted fraction. Returns (fpr, tpr, auc) micro-averaged over substances."""
+        import numpy as _np
+        from composition import SUBSTANCES
+        y = _np.concatenate([[1 if r[1][j] > thr else 0 for r in rows]
+                             for j in range(len(SUBSTANCES))]) if rows else _np.zeros(0)
+        s = _np.concatenate([[r[2][j] for r in rows] for j in range(len(SUBSTANCES))]) \
+            if rows else _np.zeros(0)
+        if len(y) == 0 or y.min() == y.max():
+            return None, None, float("nan")
+        try:
+            from sklearn.metrics import roc_curve, auc
+            fpr, tpr, _t = roc_curve(y, s)
+            return fpr, tpr, float(auc(fpr, tpr))
+        except Exception:
+            return None, None, float("nan")
+
+    def _plot_roc(self, rows):
+        ax = self.c_roc.new_ax()                           # app's cnsplots style
+        fpr, tpr, a = self._roc(rows)
+        if fpr is None:
+            ax.text(0.5, 0.5, "needs both present and absent components", ha="center",
+                    va="center", color=MUTE, transform=ax.transAxes); ax.axis("off")
+        else:
+            ax.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0)
+            ax.plot(fpr, tpr, color=TEAL, lw=2.0, label=f"AUC {a:.3f}")
+            ax.set_xlabel("false positive rate"); ax.set_ylabel("true positive rate")
+            ax.set_xlim(-0.02, 1.02); ax.set_ylim(-0.02, 1.02); ax.set_aspect("equal")
+            ax.legend(fontsize=9, framealpha=0, loc="lower right")
+        self.c_roc.fig.tight_layout(); self.c_roc.draw_idle()
 
     def _plot_loss(self, loss):
         ax = self.c_loss.new_ax()                          # app's cnsplots style
@@ -428,10 +465,27 @@ class ComposePanel(QWidget):
         if loss:
             write_csv(os.path.join(d, "composition_learning_curve.csv"), ["epoch", "loss"],
                       [[i + 1, f"{v:.5f}"] for i, v in enumerate(loss)])
+        fpr, tpr, auc_v = self._roc(rows)                  # detection ROC (present/absent)
+        if fpr is not None:
+            write_csv(os.path.join(d, "composition_roc.csv"), ["fpr", "tpr"],
+                      [[f"{a:.5f}", f"{b:.5f}"] for a, b in zip(fpr, tpr)])
         n = _save_figs([("composition_learning_curve", self.c_loss),
                         ("composition_triangle", self.c_tri),
                         ("composition_parity", self.c_parity),
-                        ("composition_error", self.c_err)], d)
+                        ("composition_error", self.c_err),
+                        ("composition_roc", self.c_roc)], d)
+        # the same publication-style ternaries the Recovery export writes
+        try:
+            from triangle_figs import accuracy_triangle, rgb_triangle
+            cols = [substance_color(s, j) for j, s in enumerate(SUBSTANCES)]
+            for fn, name in ((accuracy_triangle, "composition_triangle_accuracy"),
+                             (rgb_triangle, "composition_triangle_rgb")):
+                fn(rows, list(SUBSTANCES), cols).savefig(
+                    os.path.join(d, name + ".png"), dpi=130, facecolor="white",
+                    bbox_inches="tight")
+                n += 1
+        except Exception as e:
+            import sys as _s; print(e, file=_s.stderr)
         err = float(_np.mean([0.5 * sum(abs(r[2][j] - r[1][j]) for j in range(len(SUBSTANCES)))
                               for r in rows]))
         write_readme(d, "UNMIXR — Composition model (Step 2)", OrderedDict([
@@ -450,6 +504,9 @@ class ComposePanel(QWidget):
                 f"- Spectral window: {m.get('lo')}–{m.get('hi')} cm⁻¹"]),
             ("Results", [
                 f"- Mean composition error: {err:.1%} (½·Σ|pred − true|, 0 = perfect)",
+                f"- Detection ROC-AUC: {auc_v:.3f} (is each substance present? score = "
+                "predicted fraction, present = true fraction > 5%)"
+                if auc_v == auc_v else "- Detection ROC-AUC: n/a",
                 "- Per-substance error / RMSE / R²: `composition_metrics.csv`",
                 "- Every figure is redrawable from the CSVs next to it."]),
         ]), [("composition_learning_curve", "training loss vs epoch (MLP / CNN only)."),
@@ -457,7 +514,13 @@ class ComposePanel(QWidget):
                                       "colour = accuracy."),
              ("composition_parity", "predicted vs true fraction per substance; on the "
                                     "diagonal = exact."),
-             ("composition_error", "mean |predicted − true| fraction per substance (± SD).")])
+             ("composition_error", "mean |predicted − true| fraction per substance (± SD)."),
+             ("composition_roc", "detection ROC — present/absent per substance, scored by "
+                                 "the predicted fraction."),
+             ("composition_triangle_accuracy", "ternary with the interior shaded by "
+                                               "accuracy and per-corner recovery ± SE."),
+             ("composition_triangle_rgb", "ternary with the interior coloured by "
+                                          "composition itself (RGB blend).")])
         self.status.setText(f"exported {n} PNG + CSVs + README → {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
 

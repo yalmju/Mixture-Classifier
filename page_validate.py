@@ -794,8 +794,10 @@ class ValidatePage(QWidget):
             ax.scatter(xs, ys, color=col, s=42, edgecolors="white", linewidths=0.6,
                        label=n, zorder=3)
         ax.plot([0, 1], [0, 1], color=MUTE, ls="--", lw=1.0, zorder=1)
-        ax.set_xlim(-0.02, 1.02); ax.set_ylim(-0.02, 1.02)   # fill panel (uniform export size)
-        ax.set_xlabel("true fraction"); ax.set_ylabel(f"{title_obs} fraction")
+        ax.set_xlim(-0.02, 1.02); ax.set_ylim(-0.02, 1.02)
+        ax.set_aspect("equal")                    # fraction-vs-fraction → square, like the
+        ax.set_xlabel("true fraction")            # other parity plots in the app
+        ax.set_ylabel(f"{title_obs} fraction")
         ax.legend(fontsize=10, framealpha=0.0, labelcolor="black")
         cv.fig.tight_layout(); cv.draw_idle()
 
@@ -1039,10 +1041,37 @@ class ValidatePage(QWidget):
         n = _save_figs(figs, d)
         if self._cres:
             self._plot_triangle(self._cres)                   # restore clean in-app view
+            n += self._export_pub_triangles(d)                # publication-style variants
         self._export_readme(d, res, [f[0] for f in figs], is_dl=getattr(self, "_is_dl", False))
         self.status.setText(f"exported README + response_factors.csv + table + {n} PNG "
                             f"→ {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _export_pub_triangles(self, d):
+        """Also write the publication-style ternaries (accuracy field + RGB composition)
+        from the same composition data the in-app drift triangle uses."""
+        import os as _os
+        try:
+            from triangle_figs import accuracy_triangle, rgb_triangle
+        except Exception as e:
+            print(e, file=sys.stderr); return 0
+        recs = [r for r in self._cres if r.get("nominal") is not None]
+        if not recs:
+            return 0
+        rows = [(r["name"], list(np.asarray(r["nominal"], float)),
+                 list(np.asarray(r["mean"], float))) for r in recs]
+        cols = [substance_color(s, i) for i, s in enumerate(SUBSTANCES)]
+        n = 0
+        for fn, name in ((accuracy_triangle, "drift_triangle_accuracy"),
+                         (rgb_triangle, "drift_triangle_rgb")):
+            try:
+                fig = fn(rows, list(SUBSTANCES), cols)
+                fig.savefig(_os.path.join(d, name + ".png"), dpi=130, facecolor="white",
+                            bbox_inches="tight")
+                n += 1
+            except Exception as e:
+                print(e, file=sys.stderr)
+        return n
 
     def _export_readme(self, d, res, fig_names, is_dl=False):
         """Write README.md describing WHAT the export is, HOW it was produced (settings),
