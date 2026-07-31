@@ -354,10 +354,18 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
             progress("composition model — per-pixel concentration")
         um, unames = apply_uM_pixels(dl_model, wn, spectra)
         if um is not None:
-            conc = np.zeros((len(spectra), len(nonbg)))
+            # The composition head and the µM head are separate networks with nothing
+            # tying them together, so they could disagree outright — one calling a pixel
+            # 61% THI while the other put THI at 0.1 µM. Take only the TOTAL from the µM
+            # head and split it by the composition the model just reported, so the two
+            # readouts describe the same pixel by construction.
+            per = np.zeros((len(spectra), len(nonbg)))
             for k, j in enumerate(nonbg):
                 if names[j] in unames:
-                    conc[:, k] = um[:, unames.index(names[j])] * 1e-6      # µM -> M
+                    per[:, k] = um[:, unames.index(names[j])]
+            total = per.sum(axis=1, keepdims=True)                 # µM, all substances
+            frac = ratio_nb                                        # model's composition
+            conc = frac * total * 1e-6                             # µM -> M
             conc[~hit] = 0.0
             conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
             calibrated = True
