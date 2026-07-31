@@ -23,6 +23,24 @@ from real_data import PEST_DEFAULT
 from dataset import load_mixture_list
 
 
+def _train_subprocess(params, q):
+    """Run the heavy training in a SEPARATE process (own GIL) so the GUI never freezes.
+    Progress + result travel back over a multiprocessing Queue. Module-level so it is
+    importable by the spawned interpreter on Windows."""
+    try:
+        import sys as _sys
+        _here = os.path.dirname(os.path.abspath(__file__))
+        if _here not in _sys.path:                        # spawn may not inherit sys.path
+            _sys.path.insert(0, _here)
+        from dl_model import train_model
+        params = dict(params); items = params.pop("items")
+        model = train_model(items=items, progress=lambda s: q.put(("progress", s)), **params)
+        q.put(("done", model))
+    except Exception:
+        import traceback
+        q.put(("error", traceback.format_exc()))
+
+
 class TrainComposeWorker(QObject):
     done = pyqtSignal(object)
     fail = pyqtSignal(str)
@@ -34,10 +52,23 @@ class TrainComposeWorker(QObject):
 
     def run(self):
         try:
-            from dl_model import train_model
+            import multiprocessing as mp
             from composition import SUBSTANCES
-            params = dict(self.params); items = params.pop("items")
-            model = train_model(items=items, progress=self.progress.emit, **params)
+            ctx = mp.get_context("spawn")
+            q = ctx.Queue()
+            proc = ctx.Process(target=_train_subprocess, args=(self.params, q), daemon=True)
+            self.proc = proc                              # so Cancel can terminate it
+            proc.start()
+            model = None
+            while True:                                   # q.get releases the GIL → GUI free
+                tag, payload = q.get()
+                if tag == "progress":
+                    self.progress.emit(payload)
+                elif tag == "error":
+                    proc.join(timeout=2); self.fail.emit(payload); return
+                else:                                     # "done"
+                    model = payload; break
+            proc.join(timeout=5)
             # train-set recovery is computed IN-MEMORY inside train_model (no map reload,
             # which was holding the GIL and freezing the GUI). Reorder to SUBSTANCES.
             subs = model["subs"]; sidx = {s: j for j, s in enumerate(subs)}
@@ -227,8 +258,11 @@ class ComposePanel(QWidget):
         self._thread.start()
 
     def _cancel(self):
-        th = getattr(self, "_thread", None)
         self._cancelled = True
+        proc = getattr(getattr(self, "_worker", None), "proc", None)
+        if proc is not None and proc.is_alive():          # kill the training subprocess
+            proc.terminate(); proc.join(timeout=2)
+        th = getattr(self, "_thread", None)
         if th is not None and th.isRunning():
             th.quit()
             if not th.wait(300):
