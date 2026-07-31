@@ -567,6 +567,15 @@ class ValidatePage(QWidget):
         self.status.setText("cancelled"); self.status.setStyleSheet(f"color:{MUTE};")
 
     # ---- DL explain (interpretability) ----
+    def _busy(self, what):
+        """A job is already in flight — say so and put the buttons back. Rebinding the
+        thread instead is what made a second click abort the whole app."""
+        self.status.setText(f"already running — wait for it to finish before {what}")
+        self.status.setStyleSheet(f"color:{RED};")
+        self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
+        self.explain_btn.setEnabled(True); self.explain_btn.setText("Band importance")
+        self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
+
     def _run_explain(self):
         items = self._items()
         if len(items) < 3:
@@ -579,15 +588,10 @@ class ValidatePage(QWidget):
         self._cancelled = False; self.cancel_btn.setVisible(True)
         self.progbar.setRange(0, 0); self.progbar.setVisible(True)
         self.status.setText("● band importance — training…"); self.status.setStyleSheet(f"color:{MUTE};")
-        self._ethread = QThread(); self._eworker = ExplainWorker(params)
-        self._eworker.moveToThread(self._ethread)
-        self._ethread.started.connect(self._eworker.run)
-        self._eworker.progress.connect(lambda m: self.status.setText("● " + m))
-        self._eworker.done.connect(self._apply_explain)
-        self._eworker.fail.connect(self._error_explain)
-        self._eworker.done.connect(self._ethread.quit)
-        self._eworker.fail.connect(self._ethread.quit)
-        self._ethread.start()
+        if not start_worker(self, ExplainWorker(params), done=self._apply_explain,
+                            fail=self._error_explain,
+                            progress=lambda m: self.status.setText("● " + m)):
+            self._busy("band importance")          # another job already running
 
     def _apply_explain(self, r):
         if getattr(self, "_cancelled", False):
@@ -620,15 +624,10 @@ class ValidatePage(QWidget):
         self._cancelled = False; self.cancel_btn.setVisible(True)
         self.progbar.setRange(0, 0); self.progbar.setVisible(True)
         self.status.setText("● training DL model…"); self.status.setStyleSheet(f"color:{MUTE};")
-        self._sthread = QThread(); self._sworker = SaveModelWorker(params)
-        self._sworker.moveToThread(self._sthread)
-        self._sthread.started.connect(self._sworker.run)
-        self._sworker.progress.connect(lambda m: self.status.setText("● " + m))
-        self._sworker.done.connect(self._saved_model)
-        self._sworker.fail.connect(self._error_save)
-        self._sworker.done.connect(self._sthread.quit)
-        self._sworker.fail.connect(self._sthread.quit)
-        self._sthread.start()
+        if not start_worker(self, SaveModelWorker(params), done=self._saved_model,
+                            fail=self._error_save,
+                            progress=lambda m: self.status.setText("● " + m)):
+            self._busy("saving the DL model")      # another job already running
 
     def _saved_model(self, info):
         if getattr(self, "_cancelled", False):

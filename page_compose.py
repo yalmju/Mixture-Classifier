@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import traceback
 
+import matplotlib
 import numpy as np
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -213,13 +214,17 @@ class ComposePanel(QWidget):
         self.train_b.clicked.connect(self._train)
         self.cancel_b = QPushButton("Cancel"); self.cancel_b.setObjectName("ghost")
         self.cancel_b.setVisible(False); self.cancel_b.clicked.connect(self._cancel)
+        self.load_b = QPushButton("Load model…"); self.load_b.setObjectName("ghost")
+        self.load_b.setToolTip("re-open a .dlm trained earlier and publish it to Recovery "
+                               "and Real-data — train once, keep using it across restarts")
+        self.load_b.clicked.connect(self._load)
         self.save_b = QPushButton("Save model…"); self.save_b.setObjectName("ghost")
         self.save_b.setEnabled(False); self.save_b.clicked.connect(self._save)
         self.export_b = QPushButton("Export…"); self.export_b.setObjectName("ghost")
         self.export_b.setEnabled(False); self.export_b.clicked.connect(self._export)
         self.export_b.setToolTip("write the plots (PNG), the per-mixture predictions and the "
                                  "per-substance metrics (CSV) + a README to a folder")
-        mrow.addWidget(self.export_b); mrow.addWidget(self.save_b)
+        mrow.addWidget(self.load_b); mrow.addWidget(self.export_b); mrow.addWidget(self.save_b)
         mrow.addWidget(self.cancel_b); mrow.addWidget(self.train_b)
         root.addLayout(mrow)
         self._update_params()
@@ -590,7 +595,6 @@ class ComposePanel(QWidget):
     def _plot_triangle(self, rows):
         """Ternary simplex: true (open) → predicted (filled, green=accurate) per mixture."""
         from composition import bary
-        from matplotlib import cm
         ax = self.c_tri.new_ax()                           # app's cnsplots style
         fig = self.c_tri.fig
         A, B, C = bary([1, 0, 0]), bary([0, 0, 1]), bary([0, 1, 0])   # DQ · THI · TBZ corners
@@ -603,7 +607,8 @@ class ComposePanel(QWidget):
             p = bary(f)
             ax.text(p[0] + dx, p[1] + dy, s, ha=ha, va=va, fontsize=11,
                     fontweight="bold", color=col)
-        cmap = cm.get_cmap("RdYlGn")
+        # matplotlib.cm.get_cmap was removed in 3.9 — the registry is the API now
+        cmap = matplotlib.colormaps["RdYlGn"]
         for _name, tv, pv in rows:
             p0 = bary(tv); p1 = bary(pv); e = 0.5 * sum(abs(pv[j] - tv[j]) for j in range(len(tv)))
             if (p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2 > 1e-5:
@@ -732,6 +737,48 @@ class ComposePanel(QWidget):
                          ["sd", f"{kf.get('sd', float('nan')):.4f}"]])
             n += _save_figs([("kfold_errors", self.c_err)], d)
         self.status.setText(f"exported evaluation ({n} PNG + CSV) → {os.path.basename(d)}")
+        self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _load(self):
+        """Re-open a saved .dlm and publish it, so a model trained in an earlier session
+        is usable everywhere without retraining. Its stored held-out evaluation is
+        redrawn when present, so the plots describe the model you just loaded."""
+        p, _ = QFileDialog.getOpenFileName(self, "Composition model (.dlm)", "",
+                                           "DL model (*.dlm);;all (*)")
+        if not p:
+            return
+        try:
+            from dl_model import load_model
+            model = load_model(p)
+            if not isinstance(model, dict) or "subs" not in model:
+                raise ValueError("not a composition model")
+        except Exception as e:
+            self.status.setText(f"could not load {os.path.basename(p)} — {e}")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        self._model = model
+        self.save_b.setEnabled(True)
+        from composition import SUBSTANCES
+        subs = model["subs"]; sidx = {s: j for j, s in enumerate(subs)}
+        te = model.get("test_eval") or model.get("loo_eval") or model.get("train_eval") or {}
+        tvs = te.get("true", []); pvs = te.get("pred", [])
+        rows = []
+        for i in range(min(len(tvs), len(pvs))):
+            tv = [float(tvs[i][sidx[s]]) if s in sidx else 0.0 for s in SUBSTANCES]
+            pv = [float(pvs[i][sidx[s]]) if s in sidx else 0.0 for s in SUBSTANCES]
+            rows.append((f"mix {i + 1}", tv, pv))
+        if rows:
+            self._rows = rows
+            self._plot_triangle(rows); self._plot_parity(rows)
+            self._plot_error(rows); self._plot_roc(rows)
+            self._plot_loss(model.get("train_eval", {}).get("loss", []))
+            self.export_b.setEnabled(True)
+        blank = model.get("blank")
+        MODEL_BUS.set(model, origin=f"loaded · {os.path.basename(p)}")
+        self.status.setText(
+            f"loaded {os.path.basename(p)} — {model.get('method', 'mlp').upper()} · "
+            f"{len(subs)} classes ({', '.join(subs)})"
+            + (f" · blank class {blank}" if blank else " · no blank class")
+            + f" · {model.get('n_train', 0)} training rows. Recovery and Real-data now use it.")
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _save(self):
