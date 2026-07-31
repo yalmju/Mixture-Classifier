@@ -188,6 +188,7 @@ class ModelPage(QWidget):
         self._mstack.addWidget(self._compose)     # index 0 — composition model
         self._mstack.addWidget(classify_box)      # index 1 — pixel classifier
         root.addWidget(self._mstack, 1)
+        self._set_mode(0)                          # composition default + active-button colour
 
         for cv, msg in [(self.c_curve, "Train to watch the learning curve"),
                         (self.c_cm, "Train to compute confusion matrix"),
@@ -210,7 +211,9 @@ class ModelPage(QWidget):
     def _set_mode(self, idx):
         """Switch between the composition-model panel (0) and the pixel classifier (1)."""
         self._mstack.setCurrentIndex(idx)
-        self.btn_comp.setChecked(idx == 0); self.btn_clf.setChecked(idx == 1)
+        on = "background:%s; color:white; border-radius:7px; padding:6px 16px;" % TEAL
+        for b, active in ((self.btn_comp, idx == 0), (self.btn_clf, idx == 1)):
+            b.setChecked(active); b.setStyleSheet(on if active else "")
 
     def _spin(self, spin, lo, hi, val, label, step=1):
         col = QVBoxLayout(); col.setSpacing(2)
