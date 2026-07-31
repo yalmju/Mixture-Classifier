@@ -653,9 +653,14 @@ class ValidatePage(QWidget):
         col = {s: substance_color(s, SUBSTANCES.index(s)) for s in subs}
         fig = self.c_explain.fig; fig.clear()
         n = len(subs)
-        gs = fig.add_gridspec(n, 2, width_ratios=[1.1, 1], hspace=0.55, wspace=0.28)
+        # Constrained layout, not tight_layout: column 1 holds ONE axes spanning the
+        # rows that column 0 splits per compound, and tight_layout cannot solve a grid
+        # with spanning axes — it warned and then laid the panels out wrongly anyway.
+        fig.set_layout_engine("constrained")
+        rows_r = max(2, n)                  # n=1 put both right-hand panels in one cell
+        gs = fig.add_gridspec(rows_r, 2, width_ratios=[1.1, 1])
         for c, name in enumerate(subs):
-            ax = fig.add_subplot(gs[c, 0])
+            ax = fig.add_subplot(gs[c if n > 1 else slice(0, rows_r), 0])
             ax.plot(wnv, attr[name], color=col[name], lw=0.8)
             ax.fill_between(wnv, attr[name], color=col[name], alpha=0.25)
             for wv in vip.get(name, []):
@@ -668,7 +673,7 @@ class ValidatePage(QWidget):
                 ax.spines[s].set_visible(False)
         fig.axes[0].set_title("IG attribution  (dotted = VIP bands)", fontsize=9, fontweight="bold")
         fig.axes[n - 1].set_xlabel("wavenumber (cm-1)")
-        axp = fig.add_subplot(gs[0:max(1, n - 1), 1])
+        axp = fig.add_subplot(gs[0:rows_r - 1, 1])
         if len(perm):
             axp.plot(perm[:, 0], np.clip(perm[:, 1], 0, None) * 100, color=INK, lw=1.1)
             axp.fill_between(perm[:, 0], np.clip(perm[:, 1], 0, None) * 100, color="#8b95a1", alpha=0.3)
@@ -679,7 +684,7 @@ class ValidatePage(QWidget):
         axp.set_ylabel("Δ error %"); axp.set_xlim(wnv.min(), wnv.max())
         for s in ("top", "right"):
             axp.spines[s].set_visible(False)
-        axa = fig.add_subplot(gs[n - 1, 1])
+        axa = fig.add_subplot(gs[rows_r - 1, 1])
         x = np.arange(len(subs)); w = 0.38
         axa.bar(x - w / 2, [abl[s][0] for s in subs], w, color=[col[s] for s in subs],
                 alpha=0.9, label="full")
@@ -690,7 +695,7 @@ class ValidatePage(QWidget):
         axa.legend(fontsize=7, framealpha=0.0)
         for s in ("top", "right"):
             axa.spines[s].set_visible(False)
-        fig.tight_layout(); self.c_explain.draw_idle()
+        self.c_explain.draw_idle()          # constrained engine lays it out
 
     def _error(self, tb):
         self.btn.setEnabled(True); self.btn.setText("Validate")
