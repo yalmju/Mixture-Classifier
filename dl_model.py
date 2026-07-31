@@ -107,7 +107,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     subs, wn, mask, P, lo, hi = _refs(data_dir, baseline, trim)
     if len(subs) < 2:
         raise ValueError("need ≥2 reference substances.")
-    X, Xabs, Y, Cabs = [], [], [], []
+    X, Xabs, Y, Cabs, paths = [], [], [], [], []
     for k, it in enumerate(items):
         if progress and (k % 3 == 0 or k == len(items) - 1):   # breathe during map loading
             progress(f"loading maps {k + 1}/{len(items)}")
@@ -118,6 +118,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         _w, cube, _m, _c = load_map(it[0])
         ya = _mean_spectrum(cube, mask)
         X.append(ya / (np.linalg.norm(ya) + 1e-12)); Xabs.append(ya); Y.append(vec)
+        paths.append(it[0])
         Cabs.append([float(conc.get(s, 0.0)) for s in subs] if conc else None)
     X = np.array(X, np.float32); Xabs = np.array(Xabs); Y = np.array(Y, np.float32)
     if len(X) < 3:
@@ -192,7 +193,8 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             P_loo[i] = _fit_predict(method, X[tr], Y[tr], X[i], pre=pre, epochs=epochs,
                                     seed=seed + i, n_components=n_components,
                                     n_trees=n_trees, P_ref=P)[0]
-        loo_eval = {"true": np.asarray(Y, float).tolist(), "pred": P_loo.tolist()}
+        loo_eval = {"true": np.asarray(Y, float).tolist(), "pred": P_loo.tolist(),
+                    "paths": list(paths)}
 
     uM = None
     have = [i for i in range(len(X)) if Cabs[i] is not None and any(c > 0 for c in Cabs[i])]
@@ -322,14 +324,28 @@ def apply_recovery(model, items, progress=None):
     from real_data import load_map
     from composition import SUBSTANCES
     subs = model["subs"]
+    # A mixture the model TRAINED on must not be scored by that model — it would just
+    # recite its own answer (recovery collapses to ~100%). Training already computed a
+    # held-out prediction for each of those maps, so reuse it and only run the model on
+    # mixtures it has genuinely never seen.
+    lo_ = model.get("loo_eval") or {}
+    held = {}
+    if lo_.get("paths"):
+        for pth, pred in zip(lo_["paths"], lo_["pred"]):
+            held[os.path.normcase(os.path.normpath(pth))] = pred
     out = []
     for k, it in enumerate(items):
         if progress:
             progress(f"applying model — {k + 1}/{len(items)}")
         path, ratio = it[0], it[1]
         conc = it[2] if len(it) > 2 else None
-        wn, cube, _m, _c = load_map(path)
-        res = apply_model(model, wn, cube); comp = res["composition"]
+        key = os.path.normcase(os.path.normpath(path))
+        if key in held:                                  # held-out prediction from training
+            comp = {subs[j]: float(held[key][j]) for j in range(len(subs))}
+            res = {"uM": None}
+        else:
+            wn, cube, _m, _c = load_map(path)
+            res = apply_model(model, wn, cube); comp = res["composition"]
         s = sum(float(ratio.get(sn, 0)) for sn in subs)
         nom = np.zeros(len(SUBSTANCES)); mn = np.zeros(len(SUBSTANCES))
         for sn in subs:
