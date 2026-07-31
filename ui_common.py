@@ -205,22 +205,33 @@ EXPORT_DPI = 600      # print-quality; every exported PNG is ≥300 dpi
 def _save_figs(named_canvases, folder):
     """Save each (name, Canvas) to folder/<name>.png at a *deterministic* size
     derived from its subplot grid — not the arbitrary on-screen (stretched)
-    window size. Returns count."""
+    window size. Returns count.
+
+    Exports are publication-style: NO background (the figure and every axes patch
+    go transparent, so the PNG drops onto any journal/slide background) and the
+    layout is squeezed to the ink — tight_layout at minimal pad plus a hairline
+    bbox margin. The on-screen canvas keeps its card background; only the saved
+    file is stripped."""
     n = 0
     for name, cv in named_canvases:
         fig = cv.fig
         prev = fig.get_size_inches().copy()
         nr, nc = _grid_shape(fig)
         pw, ph = getattr(cv, "export_panel", (_PANEL_W, _PANEL_H))
+        axes_bg = [(ax, ax.get_facecolor()) for ax in fig.get_axes()]
         try:
             fig.set_size_inches(nc * pw, nr * ph, forward=False)
+            for ax, _bg in axes_bg:
+                ax.set_facecolor("none")          # no card behind the panels either
             try:
-                fig.tight_layout()
+                fig.tight_layout(pad=0.15, w_pad=0.25, h_pad=0.25)
             except Exception:
                 pass
             fig.savefig(os.path.join(folder, name + ".png"), dpi=EXPORT_DPI,
-                        facecolor=CARD, bbox_inches="tight", pad_inches=0.02)
+                        transparent=True, bbox_inches="tight", pad_inches=0.01)
         finally:
+            for ax, bg in axes_bg:
+                ax.set_facecolor(bg)
             fig.set_size_inches(prev, forward=True)
             cv.draw_idle()
         n += 1
@@ -299,7 +310,7 @@ __all__ = [
     "APP_NAME", "VERSION", "BASE_DIR", "ICON_PATH", "QSS",
     "PAGE", "PANEL", "CARD", "LINE", "INK", "MUTE", "FAINT", "TEAL", "BLUE",
     "AMBER", "CORAL", "PURPLE", "PINK", "GREEN", "RED", "TNGRAY",
-    "SERIES", "CM_CMAP", "Canvas", "Kpi", "_card", "_save_figs",
+    "SERIES", "CM_CMAP", "Canvas", "Kpi", "_card", "_save_figs", "EXPORT_DPI",
     "COLOR_BUS", "MODEL_BUS", "MIXTURE_BUS", "set_substance_colors", "substance_colors",
     "substance_color",
 ]

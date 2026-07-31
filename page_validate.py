@@ -1051,11 +1051,11 @@ class ValidatePage(QWidget):
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _export_pub_triangles(self, d):
-        """Also write the publication-style ternaries (accuracy field + RGB composition)
-        from the same composition data the in-app drift triangle uses."""
+        """Write the ONE publication-style ternary (accuracy field) from the same
+        composition data the in-app drift triangle uses."""
         import os as _os
         try:
-            from triangle_figs import accuracy_triangle, rgb_triangle
+            from triangle_figs import accuracy_triangle
         except Exception as e:
             print(e, file=sys.stderr); return 0
         recs = [r for r in self._cres if r.get("nominal") is not None]
@@ -1065,29 +1065,15 @@ class ValidatePage(QWidget):
                  list(np.asarray(r["mean"], float))) for r in recs]
         cols = [substance_color(s, i) for i, s in enumerate(SUBSTANCES)]
         n = 0
-        nn_ = getattr(self, "_nnls_cres", None)     # NNLS beside the model, same mixtures
-        if nn_ and getattr(self, "_is_dl", False):
-            try:
-                from triangle_figs import compare_triangles
-                nrecs = [r for r in nn_ if r.get("nominal") is not None]
-                nrows = [(r["name"], list(np.asarray(r["nominal"], float)),
-                          list(np.asarray(r["mean"], float))) for r in nrecs]
-                compare_triangles(nrows, rows, list(SUBSTANCES), cols,
-                                  labels=("NNLS (classical)", "model")).savefig(
-                    _os.path.join(d, "drift_triangle_vs_nnls.png"), dpi=300,
-                    transparent=True, bbox_inches="tight")
-                n += 1
-            except Exception as e:
-                print(e, file=sys.stderr)
-        for fn, name in ((accuracy_triangle, "drift_triangle_accuracy"),
-                         (rgb_triangle, "drift_triangle_rgb")):
-            try:
-                fig = fn(rows, list(SUBSTANCES), cols)
-                fig.savefig(_os.path.join(d, name + ".png"), dpi=300, transparent=True,
-                            bbox_inches="tight")
-                n += 1
-            except Exception as e:
-                print(e, file=sys.stderr)
+        # ONE ternary only: the accuracy-shaded simplex. The vs-NNLS and RGB variants
+        # replotted the same points and tripled the export for no extra information.
+        try:
+            fig = accuracy_triangle(rows, list(SUBSTANCES), cols)
+            fig.savefig(_os.path.join(d, "drift_triangle_accuracy.png"), dpi=EXPORT_DPI,
+                        transparent=True, bbox_inches="tight", pad_inches=0.01)
+            n += 1
+        except Exception as e:
+            print(e, file=sys.stderr)
         return n
 
     def _export_readme(self, d, res, fig_names, is_dl=False):

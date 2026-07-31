@@ -662,32 +662,9 @@ class ComposePanel(QWidget):
                         ("composition_parity", self.c_parity),
                         ("composition_error", self.c_err),
                         ("composition_roc", self.c_roc)], d)
-        # NNLS baseline on the same mixtures, drawn beside the model (③ side-by-side)
-        try:
-            from triangle_figs import compare_triangles
-            bench = getattr(self, "_bench", None)
-            if bench and "nnls" in bench:
-                cols_ = [substance_color(s_, j) for j, s_ in enumerate(SUBSTANCES)]
-                compare_triangles(bench["nnls"], rows, list(SUBSTANCES), cols_,
-                                  labels=("NNLS (classical)",
-                                          m.get("method", "mlp").upper() + " (model)")).savefig(
-                    os.path.join(d, "composition_vs_nnls.png"), dpi=300, transparent=True,
-                    bbox_inches="tight")
-                n += 1
-        except Exception as e:
-            import sys as _s; print(e, file=_s.stderr)
-        # the same publication-style ternaries the Recovery export writes
-        try:
-            from triangle_figs import accuracy_triangle, rgb_triangle
-            cols = [substance_color(s, j) for j, s in enumerate(SUBSTANCES)]
-            for fn, name in ((accuracy_triangle, "composition_triangle_accuracy"),
-                             (rgb_triangle, "composition_triangle_rgb")):
-                fn(rows, list(SUBSTANCES), cols).savefig(
-                    os.path.join(d, name + ".png"), dpi=300, transparent=True,
-                    bbox_inches="tight")
-                n += 1
-        except Exception as e:
-            import sys as _s; print(e, file=_s.stderr)
+        # ONE ternary only — the on-screen `composition_triangle` above. The extra
+        # ternaries this used to write (vs-NNLS side-by-side, accuracy-shaded, RGB)
+        # said the same thing three more times and buried the rest of the export.
         err = float(_np.mean([0.5 * sum(abs(r[2][j] - r[1][j]) for j in range(len(SUBSTANCES)))
                               for r in rows]))
         write_readme(d, "UNMIXR — Composition model (Step 2)", OrderedDict([
@@ -718,11 +695,7 @@ class ComposePanel(QWidget):
                                     "diagonal = exact."),
              ("composition_error", "mean |predicted − true| fraction per substance (± SD)."),
              ("composition_roc", "detection ROC — present/absent per substance, scored by "
-                                 "the predicted fraction."),
-             ("composition_triangle_accuracy", "ternary with the interior shaded by "
-                                               "accuracy and per-corner recovery ± SE."),
-             ("composition_triangle_rgb", "ternary with the interior coloured by "
-                                          "composition itself (RGB blend).")])
+                                 "the predicted fraction.")])
         self.status.setText(f"exported {n} PNG + CSVs + README → {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
 
