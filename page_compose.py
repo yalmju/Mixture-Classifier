@@ -595,6 +595,20 @@ class ComposePanel(QWidget):
                         ("composition_parity", self.c_parity),
                         ("composition_error", self.c_err),
                         ("composition_roc", self.c_roc)], d)
+        # NNLS baseline on the same mixtures, drawn beside the model (③ side-by-side)
+        try:
+            from triangle_figs import compare_triangles
+            bench = getattr(self, "_bench", None)
+            if bench and "nnls" in bench:
+                cols_ = [substance_color(s_, j) for j, s_ in enumerate(SUBSTANCES)]
+                compare_triangles(bench["nnls"], rows, list(SUBSTANCES), cols_,
+                                  labels=("NNLS (classical)",
+                                          m.get("method", "mlp").upper() + " (model)")).savefig(
+                    os.path.join(d, "composition_vs_nnls.png"), dpi=300, transparent=True,
+                    bbox_inches="tight")
+                n += 1
+        except Exception as e:
+            import sys as _s; print(e, file=_s.stderr)
         # the same publication-style ternaries the Recovery export writes
         try:
             from triangle_figs import accuracy_triangle, rgb_triangle

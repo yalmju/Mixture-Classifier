@@ -306,6 +306,30 @@ def apply_model(model, wn, cube):
     return out
 
 
+def kfold_stability(data_dir, items, method="mlp", folds=5, progress=None, **kw):
+    """Repeat the held-out check over every fold of an even 1-in-``folds`` split (start
+    offsets 0..folds-1) so a single lucky/unlucky test set cannot set the headline number.
+    Returns {"errors": [...per fold], "mean", "sd"} of the composition error."""
+    order = sorted(range(len(items)), key=lambda i: os.path.basename(items[i][0]))
+    errs = []
+    for f in range(int(folds)):
+        te = [items[i] for pos, i in enumerate(order) if pos % folds == f]
+        tr = [items[i] for pos, i in enumerate(order) if pos % folds != f]
+        if len(tr) < 3 or not te:
+            continue
+        if progress:
+            progress(f"fold {f + 1}/{folds} — {len(tr)} train / {len(te)} test")
+        m = train_model(data_dir, tr, method=method, test_items=te, progress=None, **kw)
+        ev = m.get("test_eval")
+        if not ev:
+            continue
+        T = np.asarray(ev["true"], float); Pd = np.asarray(ev["pred"], float)
+        errs.append(float((0.5 * np.abs(Pd - T).sum(1)).mean()))
+    return {"errors": errs,
+            "mean": float(np.mean(errs)) if errs else float("nan"),
+            "sd": float(np.std(errs)) if errs else float("nan")}
+
+
 def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                   methods=("nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
                   use_pretrain=True,

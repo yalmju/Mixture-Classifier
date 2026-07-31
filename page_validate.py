@@ -715,6 +715,7 @@ class ValidatePage(QWidget):
         # composition view uses the DL prediction when it was requested, else NNLS
         comp = dres if dres else cres
         self._res = res; self._cres = comp; self._is_dl = bool(dres)
+        self._nnls_cres = cres            # keep the classical result for the side-by-side
         self.btn.setEnabled(True); self.btn.setText("Validate")
         self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
         self.tgl.setChecked(False)                          # auto-collapse inputs → show results
@@ -1062,6 +1063,20 @@ class ValidatePage(QWidget):
                  list(np.asarray(r["mean"], float))) for r in recs]
         cols = [substance_color(s, i) for i, s in enumerate(SUBSTANCES)]
         n = 0
+        nn_ = getattr(self, "_nnls_cres", None)     # NNLS beside the model, same mixtures
+        if nn_ and getattr(self, "_is_dl", False):
+            try:
+                from triangle_figs import compare_triangles
+                nrecs = [r for r in nn_ if r.get("nominal") is not None]
+                nrows = [(r["name"], list(np.asarray(r["nominal"], float)),
+                          list(np.asarray(r["mean"], float))) for r in nrecs]
+                compare_triangles(nrows, rows, list(SUBSTANCES), cols,
+                                  labels=("NNLS (classical)", "model")).savefig(
+                    _os.path.join(d, "drift_triangle_vs_nnls.png"), dpi=300,
+                    transparent=True, bbox_inches="tight")
+                n += 1
+            except Exception as e:
+                print(e, file=sys.stderr)
         for fn, name in ((accuracy_triangle, "drift_triangle_accuracy"),
                          (rgb_triangle, "drift_triangle_rgb")):
             try:

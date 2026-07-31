@@ -144,7 +144,8 @@ def accuracy_triangle(rows, subs, colors, fig=None):
                                ms=9, label="true composition"),
                         Line2D([], [], marker="o", mfc="#4a9e2a", mec="white", ls="",
                                ms=10, label="predicted (colour = accuracy)")],
-               loc="lower center", ncol=2, fontsize=11, framealpha=0)
+               loc="lower center", ncol=2, fontsize=11, framealpha=0,
+               bbox_to_anchor=(0.5, -0.06))
     return fig
 
 
@@ -186,5 +187,73 @@ def rgb_triangle(rows, subs, colors, fig=None):
                                ms=9, label="true (solution) composition"),
                         Line2D([], [], marker="o", mfc=INK, mec="white", ls="", ms=9,
                                label="predicted (measured) composition")],
-               loc="lower center", ncol=2, fontsize=11, framealpha=0)
+               loc="lower center", ncol=2, fontsize=11, framealpha=0,
+               bbox_to_anchor=(0.5, -0.06))
+    return fig
+
+
+def compare_triangles(rows_a, rows_b, subs, colors, labels=("NNLS", "model"), fig=None):
+    """Two accuracy ternaries side by side on ONE figure — the classical unmixing next to
+    the trained model, drawn from the same mixtures so the drift arrows are comparable."""
+    fig = fig or Figure(figsize=(13.0, 6.6))
+    fig.patch.set_alpha(0.0)
+    axes = fig.subplots(1, 2)
+    cmap = matplotlib.colormaps["RdYlGn"]
+    for ax, rows, lab in zip(axes, (rows_a, rows_b), labels):
+        BR, BL, TOP = _geom(len(subs))
+        pts = np.array([_bary(r[1], BR, BL, TOP) for r in rows]) if rows else np.zeros((0, 2))
+        acc = np.array([1 - min(0.5 * np.abs(np.asarray(r[2]) - np.asarray(r[1])).sum() / EMAX, 1.0)
+                        for r in rows])
+        if len(pts) >= 3:
+            res = 220
+            gx = np.linspace(-0.02, 1.02, res); gy = np.linspace(-0.02, TOP[1] + 0.02, res)
+            GX, GY = np.meshgrid(gx, gy)
+            det = (BL[1] - BR[1]) * (TOP[0] - BR[0]) + (BR[0] - BL[0]) * (TOP[1] - BR[1])
+            a = ((BL[1] - BR[1]) * (GX - BR[0]) + (BR[0] - BL[0]) * (GY - BR[1])) / det
+            b = ((BR[1] - TOP[1]) * (GX - BR[0]) + (TOP[0] - BR[0]) * (GY - BR[1])) / det
+            inside = (a >= -1e-9) & (b >= -1e-9) & ((1 - a - b) >= -1e-9)
+            gi = np.stack([GX.ravel(), GY.ravel()], 1)
+            d2 = ((gi[:, None, 0] - pts[None, :, 0]) ** 2
+                  + (gi[:, None, 1] - pts[None, :, 1]) ** 2) + 3e-3
+            w = 1.0 / d2 ** 0.9
+            Z = ((w * acc[None, :]).sum(1) / w.sum(1)).reshape(GX.shape)
+            try:
+                from scipy.ndimage import gaussian_filter
+                Z = gaussian_filter(Z, sigma=6)
+            except Exception:
+                pass
+            ax.pcolormesh(GX, GY, np.ma.masked_where(~inside, Z), cmap=cmap, vmin=0, vmax=1,
+                          alpha=0.42, shading="gouraud", zorder=0)
+        corner = []
+        for i in range(len(subs)):
+            rec, se = _recovery(rows, i)
+            corner.append("—" if rec != rec else f"{rec:.0f}±{se:.0f}%")
+        _frame(ax, BR, BL, TOP, subs, colors, corner_labels=corner)
+        for r in rows:
+            p0 = _bary(r[1], BR, BL, TOP); p1 = _bary(r[2], BR, BL, TOP)
+            e = 0.5 * np.abs(np.asarray(r[2]) - np.asarray(r[1])).sum()
+            if np.hypot(*(p1 - p0)) > 4e-3:
+                ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=15,
+                                             color="#3f4650", lw=1.6, alpha=0.9, zorder=3,
+                                             shrinkA=3, shrinkB=6))
+            ax.scatter(*p0, s=40, facecolors="white", edgecolors=MUTE, linewidths=1.1, zorder=4)
+            ax.scatter(*p1, s=70, color=cmap(1 - min(e / EMAX, 1.0)), edgecolors="white",
+                       linewidths=0.7, zorder=5)
+        err = float(np.mean([0.5 * np.abs(np.asarray(r[2]) - np.asarray(r[1])).sum()
+                             for r in rows])) if rows else float("nan")
+        ax.text(0.5, -0.20, f"{lab}   —   mean composition error {err:.0%}",
+                transform=ax.transAxes, ha="center", va="top", fontsize=13,
+                fontweight="bold", color=INK)
+    cb = fig.colorbar(ScalarMappable(norm=Normalize(0, 1), cmap=cmap), ax=axes,
+                      fraction=0.016, pad=0.02, shrink=0.5, aspect=22)
+    cb.set_label("accuracy (green = exact, red = poor)", fontsize=10)
+    cb.set_ticks([0, 0.5, 1.0]); cb.ax.tick_params(labelsize=9, colors="black",
+                                                   length=2, width=0.6)
+    cb.outline.set_linewidth(0.5); cb.outline.set_edgecolor("black")
+    fig.legend(handles=[Line2D([], [], marker="o", mfc="white", mec=MUTE, mew=1.2, ls="",
+                               ms=9, label="true composition"),
+                        Line2D([], [], marker="o", mfc="#4a9e2a", mec="white", ls="",
+                               ms=10, label="predicted (colour = accuracy)")],
+               loc="lower center", ncol=2, fontsize=11, framealpha=0,
+               bbox_to_anchor=(0.5, -0.06))
     return fig
