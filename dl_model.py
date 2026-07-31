@@ -14,6 +14,45 @@ import pickle
 import numpy as np
 
 
+def _ref_scales(data_dir, baseline, trim):
+    """Relative SERS response per molar for each compound, from the pure references.
+
+    Measured at a common concentration, a pure reference's total baseline-removed
+    intensity IS its response per molar up to one shared constant — THI's is ~8x DQ's
+    here, which is why an equimolar mixture reads THI-dominated at the surface."""
+    from unmix import _templates, _baseline_removed
+    from dataset import is_blank
+    from composition import SUBSTANCES
+    names, wn, means = _templates(data_dir, baseline, None)
+    lo, hi = trim if trim else (300.0, 1800.0)
+    mask = (np.asarray(wn) >= lo) & (np.asarray(wn) <= hi)
+    if mask.sum() < 10:
+        mask = np.ones(len(wn), bool)
+    idx = {n: i for i, n in enumerate(names)}
+    subs = [s for s in SUBSTANCES if s in idx and not is_blank(s)]
+    R = _baseline_removed(means[[idx[s] for s in subs]][:, mask], baseline)
+    return subs, np.linalg.norm(R, axis=1)
+
+
+def _simulate_simplex(P, scale, n, rng, noise=0.02):
+    """Spectra for random MOLAR compositions across the whole simplex, labelled with
+    that molar composition.
+
+    Real mixture sets cover a handful of binary ratios, so a ternary like 1:1:1 sits
+    outside them and the model extrapolates — it learns part of the response correction
+    and stops. Mixing the measured pure shapes in molar proportion, weighted by each
+    compound's measured response, produces the spectrum such a solution would give while
+    the LABEL stays the molar fraction, which is exactly the correction to be learned."""
+    out_X, out_Y = [], []
+    for _ in range(int(n)):
+        frac = rng.dirichlet(np.ones(len(scale)))
+        y = (frac * scale) @ P                      # response-weighted molar mixture
+        y = y * rng.uniform(0.5, 1.5)               # gain varies pixel to pixel
+        y = np.clip(y + rng.normal(0, noise * (y.max() or 1.0), y.shape), 0, None)
+        out_X.append(y / (np.linalg.norm(y) + 1e-12)); out_Y.append(frac)
+    return np.array(out_X, np.float32), np.array(out_Y, np.float32)
+
+
 def _refs(data_dir, baseline, trim):
     from unmix import _templates, _baseline_removed, _l2
     from dataset import is_blank
@@ -132,7 +171,7 @@ def _noisy_copies(y, k, rng, lo=0.25, hi=1.0):
 def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                 method="mlp", epochs=350, seed=0, use_pretrain=True,
                 n_components=8, n_trees=300, loo=False, test_items=None, px_per_map=0,
-                include_blank=False, noise_aug=0):
+                include_blank=False, noise_aug=0, sim_aug=0):
     """Train a composition model (+ µM if absolute concentrations given) on ALL mixtures.
     items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
 
@@ -198,6 +237,17 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                 if len(Y[i]) == len(subs):
                     Y[i] = list(Y[i]) + [0.0]
             subs = list(subs) + [blank_name]
+    if sim_aug:
+        # fill the composition simplex the measured mixtures leave empty
+        if progress:
+            progress(f"simulating {int(sim_aug)} mixtures across the simplex")
+        _ss, scale = _ref_scales(data_dir, baseline, trim)
+        Xs, Ys = _simulate_simplex(P, scale, sim_aug, np.random.default_rng(int(seed) + 1))
+        pad = len(Y[0]) - Xs.shape[0] * 0 - Ys.shape[1] if Y else 0
+        for k in range(len(Xs)):
+            X.append(Xs[k])
+            Y.append(list(Ys[k]) + [0.0] * max(0, pad))     # blank channel stays 0
+            paths.append(f"__sim__{k}")                     # own group: never a test fold
     X = np.array(X, np.float32); Xabs = np.array(Xabs); Y = np.array(Y, np.float32)
     paths = np.array(paths, object)
     if len(X) < 3:

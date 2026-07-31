@@ -193,6 +193,14 @@ class ComposePanel(QWidget):
         self.sp_seed.setObjectName("field")
         self.sp_nc = QSpinBox(); self.sp_nc.setRange(1, 20); self.sp_nc.setValue(8)
         self.sp_nc.setPrefix("components "); self.sp_nc.setObjectName("field")
+        self.sp_sim = QSpinBox(); self.sp_sim.setRange(0, 20000); self.sp_sim.setSingleStep(1000)
+        self.sp_sim.setValue(0); self.sp_sim.setPrefix("simulated "); self.sp_sim.setObjectName("field")
+        self.sp_sim.setToolTip("extra training mixtures simulated across the WHOLE composition "
+                               "simplex from the measured pure references, labelled with their "
+                               "molar ratio. Real mixture sets cover a handful of ratios, so a "
+                               "composition between them is extrapolated; this fills the gaps and "
+                               "teaches the response correction (a strong emitter dominates the "
+                               "spectrum of an equimolar mixture). 0 = off.")
         self.chk_blank = QCheckBox("learn background (BLK)"); self.chk_blank.setObjectName("field")
         self.chk_blank.setToolTip("add pixels from the blank reference map as a 4th class, so "
                                   "the model can answer 'nothing here' instead of spreading "
@@ -206,7 +214,7 @@ class ComposePanel(QWidget):
         self.sp_nt = QSpinBox(); self.sp_nt.setRange(20, 1000); self.sp_nt.setSingleStep(20)
         self.sp_nt.setValue(300); self.sp_nt.setPrefix("trees "); self.sp_nt.setObjectName("field")
         mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
-        for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px,
+        for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px, self.sp_sim,
                   self.chk_blank):
             mrow.addWidget(w)
         mrow.addStretch(1)
@@ -332,6 +340,7 @@ class ComposePanel(QWidget):
         self.sp_nc.setVisible(m == "pls")
         self.sp_nt.setVisible(m == "rf")
         self.sp_px.setVisible(True)          # applies to every method
+        self.sp_sim.setVisible(True)
         self.chk_blank.setVisible(True)
 
     def _opts(self):
@@ -342,7 +351,7 @@ class ComposePanel(QWidget):
                     method=self.cmb.currentData(), epochs=self.sp_ep.value(),
                     seed=self.sp_seed.value(), use_pretrain=False,
                     n_components=self.sp_nc.value(), n_trees=self.sp_nt.value(),
-                    px_per_map=self.sp_px.value(),
+                    px_per_map=self.sp_px.value(), sim_aug=self.sp_sim.value(),
                     include_blank=self.chk_blank.isChecked())
 
     def _train(self):
