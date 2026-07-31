@@ -75,6 +75,14 @@ class _ModelBus(QObject):
 MODEL_BUS = _ModelBus()
 
 
+# the known-ratio mixtures are prepared once in Samples (Step 1) and shared: Model /
+# Recovery reload from disk when this fires, so the list is entered in one place.
+class _MixtureBus(QObject):
+    changed = pyqtSignal()
+
+MIXTURE_BUS = _MixtureBus()
+
+
 def set_substance_colors(mapping):
     """Replace the global substance→colour overrides ({name: '#hex'})."""
     _SUB_COLORS.clear()
@@ -292,5 +300,6 @@ __all__ = [
     "PAGE", "PANEL", "CARD", "LINE", "INK", "MUTE", "FAINT", "TEAL", "BLUE",
     "AMBER", "CORAL", "PURPLE", "PINK", "GREEN", "RED", "TNGRAY",
     "SERIES", "CM_CMAP", "Canvas", "Kpi", "_card", "_save_figs",
-    "COLOR_BUS", "MODEL_BUS", "set_substance_colors", "substance_colors", "substance_color",
+    "COLOR_BUS", "MODEL_BUS", "MIXTURE_BUS", "set_substance_colors", "substance_colors",
+    "substance_color",
 ]

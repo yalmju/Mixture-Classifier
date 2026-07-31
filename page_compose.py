@@ -1,9 +1,9 @@
 """page_compose.py — the composition-model half of the Model tab.
 
-Load pure references + known-ratio mixtures, pick a composition method (MLP / PLS /
-RF / 1D-CNN — the best one is data-dependent), train ONCE, and save a portable .dlm
-that the Recovery report and Real-data prediction just APPLY (no retraining downstream).
-This is Step 2 of the workflow: Pure → train → recovery → calibration → sample predict.
+Pick a composition method (MLP / PLS / RF / 1D-CNN — the best one is data-dependent),
+train ONCE on the known-ratio mixtures you prepared in Samples (Step 1), and save a
+portable .dlm that Recovery and Real-data just APPLY (no retraining downstream).
+The mixture list is shared from Samples via MIXTURE_BUS — not re-entered here.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 
 from ui_common import *
 from real_data import PEST_DEFAULT
-from validate import parse_mixture_label
+from dataset import load_mixture_list
 
 
 class TrainComposeWorker(QObject):
@@ -36,9 +36,8 @@ class TrainComposeWorker(QObject):
         try:
             from dl_model import train_model, apply_model
             from real_data import load_map
-            params = dict(self.params); items = params.pop("items")
-            import os
             from composition import SUBSTANCES
+            params = dict(self.params); items = params.pop("items")
             model = train_model(items=items, progress=self.progress.emit, **params)
             subs = model["subs"]; errs = []; rows = []      # train-set composition recovery
             for k, it in enumerate(items):
@@ -65,30 +64,27 @@ class ComposePanel(QWidget):
         super().__init__()
         self.data_dir = PEST_DEFAULT
         self.calib_path = None
-        self._files = []
+        self._items_cache = []
         self._model = None
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(12)
 
-        sub = QLabel("Load your pure references and known-ratio mixtures, pick a method "
-                     "(the best one is data-dependent), and train once. Save the model so "
-                     "Recovery and Real-data just apply it — no retraining.")
+        sub = QLabel("Pick a method (the best one is data-dependent) and train once on the "
+                     "mixtures prepared in Samples. Save the model so Recovery and Real-data "
+                     "just apply it — no retraining.")
         sub.setObjectName("sub"); sub.setWordWrap(True); root.addWidget(sub)
 
-        # ---- files: pure refs + mixtures ----
+        # ---- files: pure refs + (mixtures come from Samples) ----
         frow = QHBoxLayout(); frow.setSpacing(8)
         pure_b = QPushButton("Pure refs…"); pure_b.setObjectName("ghost")
         pure_b.setToolTip("folder of pure reference maps (one class per substance)")
         pure_b.clicked.connect(self._browse_pure)
         self.ref_lbl = QLabel(self._short(self.data_dir)); self.ref_lbl.setObjectName("field")
-        add_b = QPushButton("Add mixtures…"); add_b.setObjectName("ghost")
-        add_b.clicked.connect(self._add)
-        self.chk_uM = QCheckBox("ratios are µM"); self.chk_uM.setObjectName("field")
-        self.chk_uM.setToolTip("treat the ratio numbers as absolute concentrations in µM "
-                               "(e.g. DQ1000 → 1000 µM) — also trains an order-of-magnitude "
-                               "concentration head, so Real-data can report a µM range")
-        clr_b = QPushButton("Clear"); clr_b.setObjectName("ghost"); clr_b.clicked.connect(self._clear)
+        self.mix_lbl = QLabel("mixtures: from Samples"); self.mix_lbl.setObjectName("field")
+        reload_b = QPushButton("Reload"); reload_b.setObjectName("ghost")
+        reload_b.setToolTip("re-read the known-ratio mixtures prepared in the Samples tab")
+        reload_b.clicked.connect(self._load_from_samples)
         frow.addWidget(pure_b); frow.addWidget(self.ref_lbl, 1)
-        frow.addWidget(self.chk_uM); frow.addWidget(add_b); frow.addWidget(clr_b)
+        frow.addWidget(self.mix_lbl); frow.addWidget(reload_b)
         root.addLayout(frow)
 
         # ---- method + per-method sub-parameters (auto-shown) ----
@@ -125,13 +121,13 @@ class ComposePanel(QWidget):
         self.pbar = QProgressBar(); self.pbar.setTextVisible(False)
         self.pbar.setFixedHeight(6); self.pbar.setVisible(False); root.addWidget(self.pbar)
 
-        # editable table: file | true ratio  (top) + result triangle (below)
+        # read-only view of the shared mixtures (managed in Samples)
         self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["mixture file", "true ratio  (e.g. DQ:1, TBZ:3)"])
+        self.table.setHorizontalHeaderLabels(["mixture file (from Samples)", "true ratio"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
-        self.table.setMaximumHeight(150)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setMaximumHeight(140)
         root.addWidget(self.table)
 
         card, lay = _card("Train-set recovery — true (○) vs predicted (●, colour = accuracy)")
@@ -141,9 +137,13 @@ class ComposePanel(QWidget):
 
         self.status = QLabel(""); self.status.setObjectName("sub"); root.addWidget(self.status)
 
+        MIXTURE_BUS.changed.connect(self._load_from_samples)   # Samples edits → refresh here
+        self._load_from_samples()
+
     # ---- data dir shared with the Model tab / Samples ----
     def set_data_dir(self, path):
         self.data_dir = path; self.ref_lbl.setText(self._short(path))
+        self._load_from_samples()
 
     def _short(self, p):
         tail = "…" + p[-38:] if len(p) > 38 else p
@@ -154,58 +154,22 @@ class ComposePanel(QWidget):
         if d:
             self.set_data_dir(d)
 
-    def _ref_names(self):
-        try:
-            from dataset import discover_dataset, is_blank
-            return [c for c, _m in discover_dataset(self.data_dir) if not is_blank(c)]
-        except Exception:
-            return []
-
-    def _add(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Known-ratio mixture maps", "",
-                                                "maps (*.csv *.txt);;all files (*)")
-        if not paths:
-            return
-        refs = self._ref_names()
-        for p in paths:
-            if p in self._files:
-                continue
-            self._files.append(p)
+    def _load_from_samples(self):
+        """Pull the known-ratio mixtures prepared in Samples (Step 1)."""
+        self._items_cache = load_mixture_list(self.data_dir)
+        self.table.setRowCount(0)
+        for it in self._items_cache:
             row = self.table.rowCount(); self.table.insertRow(row)
-            it0 = QTableWidgetItem(os.path.basename(p))
-            it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(row, 0, it0)
-            g = parse_mixture_label(os.path.splitext(os.path.basename(p))[0], refs)
-            txt = ", ".join(f"{k}:{v:.3g}" for k, v in g.items()) if g else ""
-            self.table.setItem(row, 1, QTableWidgetItem(txt))
-        self.status.setText(f"{len(self._files)} mixtures — edit any ratio, then Train")
-        self.status.setStyleSheet(f"color:{MUTE};")
-
-    def _clear(self):
-        self._files = []; self.table.setRowCount(0); self._model = None
-        self.save_b.setEnabled(False)
-        self.status.setText("cleared"); self.status.setStyleSheet(f"color:{MUTE};")
-
-    def _items(self):
-        items = []
-        for row in range(self.table.rowCount()):
-            cell = self.table.item(row, 1)
-            ratio = {}
-            for tok in (cell.text() if cell else "").replace(";", ",").split(","):
-                if ":" not in tok:
-                    continue
-                k, v = tok.split(":", 1)
-                try:
-                    ratio[k.strip()] = float(v)
-                except ValueError:
-                    pass
-            if len(ratio) >= 2:
-                if self.chk_uM.isChecked():                  # ratio number = µM → concentration in M
-                    conc = {k: v * 1e-6 for k, v in ratio.items()}
-                    items.append((self._files[row], ratio, conc))
-                else:
-                    items.append((self._files[row], ratio))
-        return items
+            self.table.setItem(row, 0, QTableWidgetItem(os.path.basename(it[0])))
+            self.table.setItem(row, 1, QTableWidgetItem(
+                ", ".join(f"{k}:{v:.3g}" for k, v in it[1].items())))
+        n = len(self._items_cache)
+        has_uM = any(len(it) > 2 and it[2] for it in self._items_cache)
+        self.mix_lbl.setText(f"mixtures: {n} from Samples" + (" · µM" if has_uM else ""))
+        if not self.status.text().startswith("●"):
+            self.status.setText(f"{n} mixtures from Samples" if n
+                                else "no mixtures yet — add them in the Samples tab")
+            self.status.setStyleSheet(f"color:{MUTE};")
 
     def _update_params(self):
         m = self.cmb.currentData()
@@ -225,9 +189,9 @@ class ComposePanel(QWidget):
                     n_components=self.sp_nc.value(), n_trees=self.sp_nt.value())
 
     def _train(self):
-        items = self._items()
+        items = self._items_cache
         if len(items) < 3:
-            self.status.setText("add ≥3 mixtures with true ratios to train")
+            self.status.setText("prepare ≥3 known-ratio mixtures in the Samples tab first")
             self.status.setStyleSheet(f"color:{RED};"); return
         params = self._opts(); params["items"] = items
         self.train_b.setEnabled(False); self.train_b.setText("Training…")
@@ -263,16 +227,24 @@ class ComposePanel(QWidget):
         self.train_b.setEnabled(True); self.train_b.setText("Train")
         self.save_b.setEnabled(True); self.pbar.setVisible(False); self.cancel_b.setVisible(False)
         self._plot_triangle(rows)
-        MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")   # → Recovery / Real adopt it
+        MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
         errtxt = f"{err:.0%}" if err == err else "—"
         self.status.setText(f"done — {m} · {model.get('n_train', 0)} mixtures · train error {errtxt}. "
                             "Recovery & Real-data now use this model; Save to keep it.")
         self.status.setStyleSheet(f"color:{MUTE};")
 
+    def _fail(self, tb):
+        import sys
+        self.train_b.setEnabled(True); self.train_b.setText("Train")
+        self.pbar.setVisible(False); self.cancel_b.setVisible(False)
+        self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
+        self.status.setStyleSheet(f"color:{RED};")
+        print(tb, file=sys.stderr)
+
     def _plot_triangle(self, rows):
         """Ternary simplex: true (open) → predicted (filled, green=accurate) per mixture."""
-        from composition import bary, SUBSTANCES
+        from composition import bary
         from matplotlib import cm
         fig = self.c_tri.fig; fig.clear(); ax = fig.add_subplot(111)
         A, B, C = bary([1, 0, 0]), bary([0, 0, 1]), bary([0, 1, 0])   # DQ · THI · TBZ corners
@@ -294,14 +266,6 @@ class ComposePanel(QWidget):
         ax.set_aspect("equal"); ax.axis("off")
         ax.set_xlim(-0.12, 1.12); ax.set_ylim(-0.1, 1.05)
         fig.tight_layout(); self.c_tri.draw_idle()
-
-    def _fail(self, tb):
-        import sys
-        self.train_b.setEnabled(True); self.train_b.setText("Train")
-        self.pbar.setVisible(False); self.cancel_b.setVisible(False)
-        self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
-        self.status.setStyleSheet(f"color:{RED};")
-        print(tb, file=sys.stderr)
 
     def _save(self):
         if self._model is None:

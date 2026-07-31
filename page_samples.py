@@ -14,7 +14,8 @@ from ui_common import *
 from real_data import PEST_DEFAULT
 from dataset import (discover_references, base_and_batch, load_manifest,
                      save_manifest, map_pixel_count, load_preprocess,
-                     save_preprocess)
+                     save_preprocess, load_mixture_list, save_mixture_list)
+from validate import parse_mixture_label
 
 
 # --------------------------------------------------------------------------
@@ -80,13 +81,41 @@ class SamplingPage(QWidget):
             hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._on_edit)
-        root.addWidget(self.table, 1)
+        root.addWidget(self.table, 2)
+
+        # ---- known-ratio mixtures (shared with Model / Recovery) ----
+        mhead = QHBoxLayout(); mhead.setSpacing(8)
+        ml = QLabel("Mixtures — known-ratio maps for Step 2 (shared with Model / Recovery):")
+        ml.setObjectName("field")
+        self.chk_mix_uM = QCheckBox("ratios are µM"); self.chk_mix_uM.setObjectName("field")
+        self.chk_mix_uM.setToolTip("treat the ratio numbers as absolute µM (e.g. DQ1000 → "
+                                   "1000 µM) so the concentration head can be trained")
+        self.chk_mix_uM.stateChanged.connect(lambda _=0: self._save_mix())
+        mix_add = QPushButton("Add mixtures…"); mix_add.setObjectName("ghost")
+        mix_add.clicked.connect(self._add_mix)
+        mix_clr = QPushButton("Clear"); mix_clr.setObjectName("ghost")
+        mix_clr.clicked.connect(self._clear_mix)
+        mhead.addWidget(ml); mhead.addStretch(1)
+        mhead.addWidget(self.chk_mix_uM); mhead.addWidget(mix_add); mhead.addWidget(mix_clr)
+        root.addLayout(mhead)
+
+        self.mix_files = []
+        self.mix_table = QTableWidget(0, 2)
+        self.mix_table.setHorizontalHeaderLabels(["mixture file", "true ratio  (e.g. DQ:1, TBZ:3)"])
+        mh = self.mix_table.horizontalHeader()
+        mh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        mh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.mix_table.verticalHeader().setVisible(False)
+        self.mix_table.setMaximumHeight(150)
+        self.mix_table.itemChanged.connect(self._on_mix_edit)
+        root.addWidget(self.mix_table, 1)
 
         self.summary = QLabel(""); self.summary.setObjectName("sub")
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
 
         self._reload()
+        self._load_mix()
 
     def _short(self, p):
         return "data: " + ("…" + p[-42:] if len(p) > 42 else p)
@@ -115,6 +144,93 @@ class SamplingPage(QWidget):
                 "deriv": self.cmb_deriv.currentData(),
                 "norm": self.cmb_norm.currentData(), "trim": trim}
 
+    # ---- known-ratio mixtures (Step 1 prepares them; Model / Recovery share them) ----
+    def _mix_ref_names(self):
+        """Substance names to parse ratios against — the classes assigned above."""
+        from dataset import is_blank
+        names = []
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 2)
+            n = it.text().strip() if it else ""
+            if n and not is_blank(n) and n not in names:
+                names.append(n)
+        return names
+
+    def _add_mix(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Known-ratio mixture maps", self.data_dir,
+                                                "maps (*.csv *.txt);;all files (*)")
+        if not paths:
+            return
+        refs = self._mix_ref_names()
+        self._loading = True
+        for p in paths:
+            if p in self.mix_files:
+                continue
+            self.mix_files.append(p)
+            row = self.mix_table.rowCount(); self.mix_table.insertRow(row)
+            it0 = QTableWidgetItem(os.path.basename(p))
+            it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.mix_table.setItem(row, 0, it0)
+            g = parse_mixture_label(os.path.splitext(os.path.basename(p))[0], refs)
+            txt = ", ".join(f"{k}:{v:.3g}" for k, v in g.items()) if g else ""
+            self.mix_table.setItem(row, 1, QTableWidgetItem(txt))
+        self._loading = False
+        self._save_mix()
+
+    def _clear_mix(self):
+        self._loading = True
+        self.mix_files = []; self.mix_table.setRowCount(0)
+        self._loading = False
+        self._save_mix()
+
+    def _on_mix_edit(self, _item):
+        if not self._loading:
+            self._save_mix()
+
+    def _mix_items(self):
+        items = []
+        for row in range(self.mix_table.rowCount()):
+            cell = self.mix_table.item(row, 1); ratio = {}
+            for tok in (cell.text() if cell else "").replace(";", ",").split(","):
+                if ":" not in tok:
+                    continue
+                k, v = tok.split(":", 1)
+                try:
+                    ratio[k.strip()] = float(v)
+                except ValueError:
+                    pass
+            if len(ratio) >= 2:
+                if self.chk_mix_uM.isChecked():
+                    items.append((self.mix_files[row], ratio, {k: v * 1e-6 for k, v in ratio.items()}))
+                else:
+                    items.append((self.mix_files[row], ratio))
+        return items
+
+    def _save_mix(self):
+        try:
+            save_mixture_list(self.data_dir, self._mix_items())
+            MIXTURE_BUS.changed.emit()
+            n = self.mix_table.rowCount()
+            self.summary.setText(self.summary.text().split("  ·  mixtures")[0] +
+                                 (f"  ·  mixtures: {n}" if n else ""))
+        except Exception as e:
+            print(e, file=sys.stderr)
+
+    def _load_mix(self):
+        self._loading = True
+        self.mix_table.setRowCount(0); self.mix_files = []
+        items = load_mixture_list(self.data_dir)
+        self.chk_mix_uM.setChecked(any(len(it) > 2 and it[2] for it in items))
+        for it in items:
+            self.mix_files.append(it[0])
+            row = self.mix_table.rowCount(); self.mix_table.insertRow(row)
+            it0 = QTableWidgetItem(os.path.basename(it[0]))
+            it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.mix_table.setItem(row, 0, it0)
+            self.mix_table.setItem(row, 1, QTableWidgetItem(
+                ", ".join(f"{k}:{v:.3g}" for k, v in it[1].items())))
+        self._loading = False
+
     def _load_prep(self):
         """Set the preprocessing widgets from the folder's saved config."""
         cfg = load_preprocess(self.data_dir)
@@ -129,6 +245,7 @@ class SamplingPage(QWidget):
             self, "Data folder with your reference maps", self.data_dir)
         if d:
             self.data_dir = d; self.folder_lbl.setText(self._short(d)); self._reload()
+            self._load_mix()
 
     def _reload(self):
         self._loading = True

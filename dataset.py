@@ -176,7 +176,45 @@ def save_colors(data_dir, mapping):
     p = os.path.join(data_dir, _COLORS)
     with open(p, "w") as f:
         json.dump({str(k): str(v) for k, v in mapping.items()}, f, indent=2)
-    return p
+
+
+_MIXTURES = "mixtures.json"
+
+
+def load_mixture_list(data_dir):
+    """Read <data_dir>/mixtures.json → list of (path, ratio_dict[, conc_dict in M]).
+    The known-ratio mixtures are prepared once in Samples (Step 1); Model/Recovery read
+    them from here so the mixture list is shared, not re-entered per tab."""
+    try:
+        with open(os.path.join(data_dir, _MIXTURES)) as f:
+            raw = json.load(f)
+    except Exception:
+        return []
+    out = []
+    for m in raw:
+        path = m.get("path")
+        ratio = {str(k): float(v) for k, v in (m.get("ratio") or {}).items()}
+        if not path or not ratio:
+            continue
+        conc = m.get("conc")
+        if conc:
+            out.append((path, ratio, {str(k): float(v) for k, v in conc.items()}))
+        else:
+            out.append((path, ratio))
+    return out
+
+
+def save_mixture_list(data_dir, items):
+    """Persist the known-ratio mixtures (list of (path, ratio[, conc])) to
+    <data_dir>/mixtures.json."""
+    raw = []
+    for it in items:
+        rec = {"path": it[0], "ratio": {str(k): float(v) for k, v in it[1].items()}}
+        if len(it) > 2 and it[2]:
+            rec["conc"] = {str(k): float(v) for k, v in it[2].items()}
+        raw.append(rec)
+    with open(os.path.join(data_dir, _MIXTURES), "w") as f:
+        json.dump(raw, f, indent=2)
 
 
 def save_preprocess(data_dir, cfg):
