@@ -112,10 +112,27 @@ def _mean_spectrum(cube, mask):
     return np.clip(mean - als_baseline(mean), 0, None)
 
 
+def _noisy_copies(y, k, rng, lo=0.25, hi=1.0):
+    """``k`` low-SNR versions of one training spectrum, same label.
+
+    Mixture pixels are sampled brightest-first (a dim pixel in a mixture map may be bare
+    substrate, so labelling it with the map's ratio would be a lie), while blank pixels
+    are sampled across the whole intensity range. The model therefore only ever sees
+    BRIGHT substance and BOTH bright and dim blank — it learns "dim means background" and
+    calls a faint but real substance pixel blank. Scaling a genuine substance pixel down
+    and adding noise gives a dim substance example whose label is still true."""
+    out = []
+    ref = float(np.std(y)) or 1.0
+    for _ in range(int(k)):
+        g = rng.uniform(lo, hi)                       # weaker signal…
+        out.append(np.clip(g * y + rng.normal(0, (1.0 - g) * ref, y.shape), 0, None))
+    return out
+
+
 def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                 method="mlp", epochs=350, seed=0, use_pretrain=True,
                 n_components=8, n_trees=300, loo=False, test_items=None, px_per_map=0,
-                include_blank=False):
+                include_blank=False, noise_aug=0):
     """Train a composition model (+ µM if absolute concentrations given) on ALL mixtures.
     items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
 
@@ -131,6 +148,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     subs, wn, mask, P, lo, hi = _refs(data_dir, baseline, trim)
     if len(subs) < 2:
         raise ValueError("need ≥2 reference substances.")
+    aug_rng = np.random.default_rng(int(seed))
     X, Xabs, Y, Cabs, paths = [], [], [], [], []
     for k, it in enumerate(items):
         if progress and (k % 3 == 0 or k == len(items) - 1):   # breathe during map loading
@@ -143,6 +161,9 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         for j, ya in enumerate(_map_spectra(cube, mask, px_per_map)):
             X.append(ya / (np.linalg.norm(ya) + 1e-12)); Y.append(vec)
             paths.append(it[0])                       # group key: the MAP, not the row
+            for yn in (_noisy_copies(ya, noise_aug, aug_rng) if (noise_aug and j) else ()):
+                X.append(yn / (np.linalg.norm(yn) + 1e-12)); Y.append(vec)
+                paths.append(it[0])                   # same map → same split group
             if j == 0:                                # µM head stays on the map mean
                 Xabs.append(ya)
                 Cabs.append([float(conc.get(s, 0.0)) for s in subs] if conc else None)
@@ -166,6 +187,9 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                     X.append(ya / (np.linalg.norm(ya) + 1e-12))
                     Y.append([0.0] * len(subs) + [1.0])
                     paths.append(pth)
+                    for yn in _noisy_copies(ya, noise_aug, aug_rng):   # blank at low SNR too
+                        X.append(yn / (np.linalg.norm(yn) + 1e-12))
+                        Y.append([0.0] * len(subs) + [1.0]); paths.append(pth)
             for i in range(len(Y)):                      # widen the mixture labels
                 if len(Y[i]) == len(subs):
                     Y[i] = list(Y[i]) + [0.0]
