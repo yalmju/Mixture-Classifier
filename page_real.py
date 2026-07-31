@@ -858,8 +858,8 @@ class RealDataPage(QWidget):
             m = ~hit & ~excl
             ax.scatter(x[m], y[m], c=bg_col, marker="s", s=16, edgecolors="none")
         if excl.any():             # flagged pixels marked ON TOP of their pie (zorder),
-            ax.scatter(x[excl], y[excl], c="none", marker="x", s=22,   # never silent
-                       edgecolors=CORAL, linewidths=0.9, zorder=5)
+            ax.scatter(x[excl], y[excl], c=CORAL, marker="x", s=22,     # never silent
+                       linewidths=0.9, zorder=5)   # 'x' has no face: colour it directly
         if r.method == "model":                           # classifier → one class/pixel
             dom = r.ratio_nb.argmax(axis=1)
             if hit.any():

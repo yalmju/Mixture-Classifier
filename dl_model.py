@@ -274,17 +274,24 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         loo_eval = {"true": tv, "pred": pv, "paths": pl}
 
     uM = None
+    # The concentration head covers the COMPOUNDS only. A blank class has no
+    # concentration, but appending it to `subs` widened the head to 4 outputs while the
+    # labels in Cabs stayed 3 wide, so enabling "learn background" made training die with
+    # "size of tensor a (4) must match the size of tensor b (3)".
+    conc_subs = [s_ for s_ in subs if s_ != blank_name] if blank_name else list(subs)
     # Cabs/Xabs are per MAP (one row each); X may hold many pixel rows per map
     have = [i for i in range(len(Xabs)) if Cabs[i] is not None and any(c > 0 for c in Cabs[i])]
     if len(have) >= 3:
         if progress:
             progress("training concentration head")
-        hv = np.array(have); C = np.array([Cabs[i] if Cabs[i] is not None else [0.0] * len(subs)
-                                           for i in range(len(Xabs))], float)
+        hv = np.array(have)
+        C = np.array([list(Cabs[i])[:len(conc_subs)] if Cabs[i] is not None
+                      else [0.0] * len(conc_subs) for i in range(len(Xabs))], float)
         mu = Xabs[hv].mean(0); sd = Xabs[hv].std(0) + 1e-8
         torch.manual_seed(seed)
         net = nn.Sequential(nn.Linear(Xabs.shape[1], 256), nn.BatchNorm1d(256), nn.ReLU(),
-                            nn.Dropout(0.15), nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, len(subs)))
+                            nn.Dropout(0.15), nn.Linear(256, 64), nn.ReLU(),
+                            nn.Linear(64, len(conc_subs)))
         op = torch.optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-3)
         Xt = torch.tensor(((Xabs[hv] - mu) / sd).astype(np.float32))
         Yt = torch.tensor((np.log10(np.clip(C[hv], 1e-8, None)) + 6.0).astype(np.float32))
@@ -294,7 +301,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                 progress(f"concentration head — epoch {ep + 1}/{epochs}")
         net.eval()
         uM = {"state": {k: v.detach().numpy() for k, v in net.state_dict().items()},
-              "mu": mu, "sd": sd}
+              "mu": mu, "sd": sd, "subs": list(conc_subs)}
 
     return {"subs": subs, "lo": lo, "hi": hi, "n_feat": int(mask.sum()), "P": P,
             "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None,
@@ -328,13 +335,16 @@ def apply_model(model, wn, cube):
     if model.get("uM"):
         import torch.nn as nn
         u = model["uM"]
+        usubs = u.get("subs") or subs          # older models: head spans every class
         net2 = nn.Sequential(nn.Linear(model["n_feat"], 256), nn.BatchNorm1d(256), nn.ReLU(),
-                             nn.Dropout(0.15), nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, len(subs)))
+                             nn.Dropout(0.15), nn.Linear(256, 64), nn.ReLU(),
+                             nn.Linear(64, len(usubs)))
         net2.load_state_dict({k: torch.tensor(v) for k, v in u["state"].items()}); net2.eval()
         xe = ((ya - u["mu"]) / u["sd"]).astype(np.float32)
         with torch.no_grad():
             logv = net2(torch.tensor(xe[None, :])).numpy()[0]
-        out["uM"] = {subs[k]: float(10.0 ** np.clip(logv[k], -3.0, 6.0)) for k in range(len(subs))}
+        out["uM"] = {usubs[k]: float(10.0 ** np.clip(logv[k], -3.0, 6.0))
+                     for k in range(len(usubs))}
     return out
 
 
