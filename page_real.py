@@ -154,16 +154,6 @@ class RealDataPage(QWidget):
         relrow = QHBoxLayout(); relrow.setSpacing(4)
         relrow.addWidget(self.chk_rel); relrow.addWidget(self.rel_thr)
         relcol.addWidget(_rl); relcol.addLayout(relrow)
-        self.pres_thr = QDoubleSpinBox(); self.pres_thr.setDecimals(2)
-        self.pres_thr.setSingleStep(0.01); self.pres_thr.setRange(0.0, 0.5)
-        self.pres_thr.setValue(0.05)
-        self.pres_thr.setToolTip("a substance present at less than this overall fraction "
-                                 "is treated as ABSENT (a spectral-leakage phantom) and "
-                                 "removed from the composition — set 0 to keep all")
-        self.pres_thr.valueChanged.connect(lambda _=0: self._on_corr())
-        prescol = QVBoxLayout(); prescol.setSpacing(2)
-        _pl = QLabel("min substance %"); _pl.setObjectName("field")
-        prescol.addWidget(_pl); prescol.addWidget(self.pres_thr)
         corr_b = QPushButton("Load correction…"); corr_b.setObjectName("ghost")
         corr_b.setToolTip("response_factors.csv from the Validate tab → convert the "
                           "surface ratio to the solution ratio")
@@ -209,7 +199,7 @@ class RealDataPage(QWidget):
         obl.addLayout(srow)
         trow = QHBoxLayout(); trow.setSpacing(10)
         trow.addLayout(hitcol); trow.addLayout(self.thr); trow.addLayout(flipcol)
-        trow.addLayout(relcol); trow.addLayout(prescol)
+        trow.addLayout(relcol)
         trow.addStretch(1)
         obl.addLayout(trow)
         root.addWidget(self.optbox)
@@ -575,29 +565,18 @@ class RealDataPage(QWidget):
             return None
         return np.array([self.rf.get(r.comps[j], 1.0) for j in r.nonbg], float)
 
-    def _present_mask(self, r):
-        """Which substances are really present: those whose RAW overall fraction (over
-        reliable hit pixels) is at least 'min substance %'. Substances below it are
-        spectral-leakage phantoms (e.g. a trace TBZ when only DQ+THI were loaded) and
-        get dropped from the composition. Always keeps at least the strongest."""
-        thr = float(self.pres_thr.value())
-        hit = self._hit(r)
-        raw = r.ratio_nb[hit].mean(axis=0) if hit.any() else r.ratio_nb.mean(axis=0)
-        keep = raw >= thr
-        if not keep.any():
-            keep = raw == raw.max()
-        return keep
-
     def _ratio_nb(self, r):
         """Per-pixel non-bg composition — response-corrected to the solution ratio when
-        that toggle is on (else raw surface), with leakage-phantom substances (below
-        'min substance %') dropped and the rest renormalised."""
+        that toggle is on, else the raw surface ratio. Nothing is deleted: a substance
+        that reads low reads low. (A 'min substance %' control used to zero out any
+        substance whose MAP-WIDE mean fell below 5% and renormalise the rest — which
+        erased exactly the trace levels this instrument exists to find, and erased them
+        map-wide even where they were locally strong.)"""
         rf = self._rf_vec(r)
         if rf is None:
             rn = r.ratio_nb.astype(float).copy()
         else:
             rn = r.A[:, r.nonbg] / np.where(rf > 0, rf, 1.0)
-        rn = rn * self._present_mask(r)                    # drop phantom substances
         s = rn.sum(axis=1, keepdims=True)
         return np.divide(rn, s, out=np.zeros_like(rn), where=s > 0)
 
@@ -722,30 +701,40 @@ class RealDataPage(QWidget):
                 txt += (f"<br><span style='color:{FAINT}'>calibration fit: {r2s}{tag}"
                         "  ·  click a pixel for its µM</span>")
         if getattr(self, "dl_model", None) is not None and self.test:
+            # ONE model run feeds both readouts. The composition shown here IS the mean
+            # of the per-pixel model output already drawn in the pie — recomputing it
+            # from a map-level mean over a separately chosen pixel set (what this used
+            # to do) let the summary line contradict the map beside it.
             try:
-                from dl_model import apply_model
-                from real_data import load_map
-                wn, cube, _mn, _c = load_map(self.test)
-                cube = np.asarray(cube, float)
-                # Feed the model the pixels that actually carry signal. On a map that is
-                # mostly bare substrate the whole-map mean is dominated by background the
-                # model was never trained on, and it has to force that onto the substances
-                # (this map: NNLS read THI 80 from its hit pixels while the DL read TBZ 89).
-                hit = getattr(r, "hit", None)
-                sel = None
-                if hit is not None and np.asarray(hit).size == len(cube) and np.asarray(hit).sum() >= 5:
-                    sel = np.asarray(hit).reshape(-1).astype(bool)
+                sel = eff_hit if eff_hit.any() else None
+                if self._method() == "dlpx":
+                    comp = "  ·  ".join(f"{nm} {mr[i] * 100:.0f}%"
+                                        for i, nm in enumerate(nb))
+                    src = "mean of the per-pixel map"
                 else:
-                    tot = cube.sum(1)
-                    k = max(5, int(0.2 * len(cube)))       # else the brightest fifth
-                    sel = np.zeros(len(cube), bool); sel[np.argsort(-tot)[:k]] = True
-                d = apply_model(self.dl_model, wn, cube[sel])
-                comp = "  ·  ".join(f"{k} {v * 100:.0f}%" for k, v in d["composition"].items())
-                txt += f"<br><b style='color:{BLUE}'>DL composition</b> (physics-informed): {comp}"
-                if d["uM"]:
-                    um = "  ·  ".join(f"{k} ≈{v:.0f} µM" for k, v in d["uM"].items())
-                    txt += (f"<br><b style='color:{BLUE}'>DL concentration</b> "
-                            f"(order-of-magnitude, semi-quantitative): {um}")
+                    from dl_model import apply_model_pixels
+                    P = apply_model_pixels(self.dl_model, r.wn,
+                                           r.spectra if sel is None else r.spectra[sel])
+                    subs = self.dl_model.get("subs", [])
+                    v = P.mean(axis=0)
+                    comp = "  ·  ".join(f"{s} {v[k] * 100:.0f}%"
+                                        for k, s in enumerate(subs))
+                    src = ("per-pixel model over the hit pixels" if sel is not None
+                           else "per-pixel model over every pixel")
+                txt += (f"<br><b style='color:{BLUE}'>DL composition</b> "
+                        f"<span style='color:{FAINT}'>({src})</span>: {comp}")
+                if self.dl_model.get("uM"):   # µM head has no per-pixel form — same pixels
+                    from dl_model import apply_model
+                    from real_data import load_map
+                    wn, cube, _mn, _c = load_map(self.test)
+                    cube = np.asarray(cube, float)
+                    px = (sel if sel is not None and len(sel) == len(cube)
+                          else np.ones(len(cube), bool))
+                    d = apply_model(self.dl_model, wn, cube[px])
+                    if d["uM"]:
+                        um = "  ·  ".join(f"{k} ≈{v:.0f} µM" for k, v in d["uM"].items())
+                        txt += (f"<br><b style='color:{BLUE}'>DL concentration</b> "
+                                f"(order-of-magnitude, semi-quantitative): {um}")
             except Exception as e:
                 print("DL apply failed:", e, file=sys.stderr)
         self.readout.setText(txt)
