@@ -170,17 +170,38 @@ class RealDataPage(QWidget):
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
+        # main row: only what you touch on every run
         ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x)
         ctl.addLayout(self.cmb_method)
-        ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
-        ctl.addWidget(dlm_b); ctl.addWidget(self.dlm_lbl)
-        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.cal_x)
-        ctl.addLayout(hitcol); ctl.addLayout(self.thr); ctl.addLayout(flipcol)
-        ctl.addLayout(relcol); ctl.addLayout(prescol)
-        ctl.addWidget(corr_b); ctl.addLayout(corrcol)
+        ctl.addWidget(self.dlm_lbl)
         ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
+
+        # everything else folds away — sources (models / calibration / correction) and the
+        # per-pixel thresholds are set once and then just sit there cluttering the header
+        self.opt_tgl = QPushButton(); self.opt_tgl.setObjectName("ghost")
+        self.opt_tgl.setCheckable(True); self.opt_tgl.setChecked(False)
+        self.opt_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
+        self.opt_tgl.toggled.connect(self._toggle_opts)
+        root.addWidget(self.opt_tgl)
+
+        self.optbox = QWidget(); obl = QVBoxLayout(self.optbox)
+        obl.setContentsMargins(0, 0, 0, 0); obl.setSpacing(8)
+        srow = QHBoxLayout(); srow.setSpacing(8)
+        srow.addWidget(model_b); srow.addWidget(self.model_lbl)
+        srow.addWidget(dlm_b)
+        srow.addWidget(cal_b); srow.addWidget(self.cal_lbl); srow.addWidget(self.cal_x)
+        srow.addWidget(corr_b); srow.addLayout(corrcol)
+        srow.addStretch(1)
+        obl.addLayout(srow)
+        trow = QHBoxLayout(); trow.setSpacing(10)
+        trow.addLayout(hitcol); trow.addLayout(self.thr); trow.addLayout(flipcol)
+        trow.addLayout(relcol); trow.addLayout(prescol)
+        trow.addStretch(1)
+        obl.addLayout(trow)
+        root.addWidget(self.optbox)
+        self._toggle_opts(False)
 
         self.status = QLabel(""); self.status.setObjectName("sub")
         root.addWidget(self.status)
@@ -377,6 +398,11 @@ class RealDataPage(QWidget):
         if p:
             self.model_path = p; self.model_lbl.setText(os.path.basename(p))
             self.cmb_method.itemAt(1).widget().setCurrentIndex(2)   # switch to model
+
+    def _toggle_opts(self, on):
+        self.optbox.setVisible(on)
+        self.opt_tgl.setText(("▾  " if on else "▸  ")
+                             + "Options  (model · calibration · correction · thresholds)")
 
     def _adopt_model(self):
         """Adopt the composition model trained in the Model tab (Step 2), if any. Just
