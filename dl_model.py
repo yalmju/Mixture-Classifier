@@ -164,9 +164,13 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             for yn in (_noisy_copies(ya, noise_aug, aug_rng) if (noise_aug and j) else ()):
                 X.append(yn / (np.linalg.norm(yn) + 1e-12)); Y.append(vec)
                 paths.append(it[0])                   # same map → same split group
-            if j == 0:                                # µM head stays on the map mean
-                Xabs.append(ya)
-                Cabs.append([float(conc.get(s, 0.0)) for s in subs] if conc else None)
+            # The µM head trains on the SAME rows as the composition head. It used to
+            # see one mean spectrum per map — a few dozen examples, none of them a
+            # pixel — and was then asked for a per-pixel concentration, which is the
+            # out-of-distribution case that returned ~0 µM for a substance the
+            # composition head was calling 61%.
+            Xabs.append(ya)
+            Cabs.append([float(conc.get(s, 0.0)) for s in subs] if conc else None)
     # Optionally learn BACKGROUND as its own class: pixels from the blank reference map
     # labelled "100% blank". Without it the model must spread every spectrum — even bare
     # substrate — across the substances, so it can never say "nothing here".

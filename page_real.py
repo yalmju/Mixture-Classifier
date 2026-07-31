@@ -917,10 +917,15 @@ class RealDataPage(QWidget):
         meas = np.asarray(r.spectra[i], float)
         mm = meas.max() or 1.0
         ax.plot(axis, meas / mm, lw=1.3, color=INK, label="measured")
-        if r.templates is not None:                       # NNLS/MCR: overlay the fit
+        if r.templates is not None:
+            # A@templates rebuilt from the abundances. Under NNLS/MCR those ARE the fit
+            # coefficients, so this is the fit; under the composition model A holds
+            # probabilities, so the curve only shows which references the model picked —
+            # say so rather than letting it be read as a goodness-of-fit.
             recon = r.A[i] @ r.templates
+            lab = ("model's reference mix" if r.method == "dlpx" else "reconstructed")
             ax.plot(axis, recon / (recon.max() or 1.0), lw=1.1, color=TEAL,
-                    ls="--", label="reconstructed")
+                    ls="--", label=lab)
         xp, yp = r.coords[i]
         ratio_nb = self._ratio_nb(r)                      # corrected when toggle on
         rat = "  ·  ".join(f"{r.comps[j]} {ratio_nb[i, k] * 100:.0f}%"
