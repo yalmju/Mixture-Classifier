@@ -224,7 +224,13 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     ``bg_map`` (path or list of paths to MEASURED blank/background maps, e.g. Pest/BLk)
     judges each pixel background vs substance directly: pixels whose spectrum is
     explained by the measured-background subspace are background no matter what the
-    unmix says — so the hit decision no longer leans on NNLS abundances."""
+    unmix says — so the hit decision no longer leans on NNLS abundances.
+
+    NOTE: the measured substrate is deliberately NOT subtracted from the spectra the
+    composition model reads. That was tried and measurably hurt (see the commit that
+    reverted it): the model is trained on spectra that still carry their own substrate,
+    so handing it background-subtracted input is a fresh distribution mismatch, and the
+    background basis shaves real substance signal along with the substrate."""
     names, wn, means = _templates(data_dir, baseline, progress)
     wn_u, cube_u, _mean_u, coord = load_map(test_path)
 
