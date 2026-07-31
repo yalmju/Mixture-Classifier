@@ -37,17 +37,22 @@ class TrainComposeWorker(QObject):
             from dl_model import train_model, apply_model
             from real_data import load_map
             params = dict(self.params); items = params.pop("items")
+            import os
+            from composition import SUBSTANCES
             model = train_model(items=items, progress=self.progress.emit, **params)
-            errs = []                                        # train-set composition recovery
+            subs = model["subs"]; errs = []; rows = []      # train-set composition recovery
             for k, it in enumerate(items):
                 self.progress.emit(f"scoring {k + 1}/{len(items)}")
                 wn, cube, _m, _c = load_map(it[0])
                 comp = apply_model(model, wn, cube)["composition"]
-                tr = it[1]; s = sum(float(tr.get(n, 0)) for n in comp)
+                tr = it[1]; s = sum(float(tr.get(n, 0)) for n in subs)
                 if s <= 0:
                     continue
-                errs.append(0.5 * sum(abs(comp[n] - float(tr.get(n, 0)) / s) for n in comp))
-            self.done.emit((model, float(np.mean(errs)) if errs else float("nan")))
+                true = [float(tr.get(n, 0)) / s for n in SUBSTANCES]
+                pred = [comp.get(n, 0.0) for n in SUBSTANCES]
+                errs.append(0.5 * sum(abs(pred[j] - true[j]) for j in range(len(SUBSTANCES))))
+                rows.append((os.path.basename(it[0]), true, pred))
+            self.done.emit((model, float(np.mean(errs)) if errs else float("nan"), rows))
         except Exception:
             self.fail.emit(traceback.format_exc())
 
@@ -130,13 +135,19 @@ class ComposePanel(QWidget):
             kp.addWidget(k)
         root.addLayout(kp)
 
-        # editable table: file | true ratio
+        # editable table: file | true ratio  (top) + result triangle (below)
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["mixture file", "true ratio  (e.g. DQ:1, TBZ:3)"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
-        root.addWidget(self.table, 1)
+        self.table.setMaximumHeight(150)
+        root.addWidget(self.table)
+
+        card, lay = _card("Train-set recovery — true (○) vs predicted (●, colour = accuracy)")
+        self.c_tri = Canvas(); self.c_tri.setMinimumHeight(300)
+        self.c_tri.placeholder("Train to see composition recovery on the simplex")
+        lay.addWidget(self.c_tri); root.addWidget(card, 1)
 
         self.status = QLabel(""); self.status.setObjectName("sub"); root.addWidget(self.status)
 
@@ -249,17 +260,43 @@ class ComposePanel(QWidget):
         self._thread.start()
 
     def _done(self, res):
-        model, err = res
+        model, err, rows = res
         self._model = model
         self.train_b.setEnabled(True); self.train_b.setText("Train")
         self.save_b.setEnabled(True); self.pbar.setVisible(False)
         self.k_err.set(f"{err:.0%}" if err == err else "—")
         self.k_n.set(str(model.get("n_train", 0)))
         self.k_m.set(model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else ""))
+        self._plot_triangle(rows)
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")   # → Recovery / Real adopt it
         self.status.setText("done — trained. Recovery & Real-data now use this model; "
                             "Save to keep it.")
         self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _plot_triangle(self, rows):
+        """Ternary simplex: true (open) → predicted (filled, green=accurate) per mixture."""
+        from composition import bary, SUBSTANCES
+        from matplotlib import cm
+        fig = self.c_tri.fig; fig.clear(); ax = fig.add_subplot(111)
+        A, B, C = bary([1, 0, 0]), bary([0, 0, 1]), bary([0, 1, 0])   # DQ · THI · TBZ corners
+        ax.plot([A[0], B[0], C[0], A[0]], [A[1], B[1], C[1], A[1]], color=INK, lw=1.0, zorder=1)
+        for f, s, col in [([1, 0, 0], "DQ", substance_color("DQ", 0)),
+                          ([0, 0, 1], "THI", substance_color("THI", 2)),
+                          ([0, 1, 0], "TBZ", substance_color("TBZ", 1))]:
+            p = bary(f); ax.text(p[0], p[1], s, ha="center", va="center", fontsize=10,
+                                 fontweight="bold", color=col)
+        cmap = cm.get_cmap("RdYlGn")
+        for _name, tv, pv in rows:
+            p0 = bary(tv); p1 = bary(pv); e = 0.5 * sum(abs(pv[j] - tv[j]) for j in range(len(tv)))
+            if (p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2 > 1e-5:
+                ax.annotate("", xy=p1, xytext=p0,
+                            arrowprops=dict(arrowstyle="-|>", color="#b6bcc4", lw=0.8))
+            ax.scatter(*p0, s=26, facecolors="none", edgecolors=MUTE, linewidths=1.0, zorder=3)
+            ax.scatter(*p1, s=42, color=cmap(1 - min(e / 0.6, 1.0)), edgecolors="white",
+                       linewidths=0.5, zorder=4)
+        ax.set_aspect("equal"); ax.axis("off")
+        ax.set_xlim(-0.12, 1.12); ax.set_ylim(-0.1, 1.05)
+        fig.tight_layout(); self.c_tri.draw_idle()
 
     def _fail(self, tb):
         import sys
