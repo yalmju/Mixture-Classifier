@@ -145,21 +145,13 @@ class ComposePanel(QWidget):
                               "the GUI is busy while it trains — raise for a final model.")
         self.sp_seed = QSpinBox(); self.sp_seed.setRange(0, 999); self.sp_seed.setPrefix("seed ")
         self.sp_seed.setObjectName("field")
-        self.chk_pre = QCheckBox("physics pretrain"); self.chk_pre.setChecked(True)
-        self.chk_pre.setObjectName("field")
         self.sp_nc = QSpinBox(); self.sp_nc.setRange(1, 20); self.sp_nc.setValue(8)
         self.sp_nc.setPrefix("components "); self.sp_nc.setObjectName("field")
         self.sp_nt = QSpinBox(); self.sp_nt.setRange(20, 1000); self.sp_nt.setSingleStep(20)
         self.sp_nt.setValue(300); self.sp_nt.setPrefix("trees "); self.sp_nt.setObjectName("field")
-        self.chk_loo = QCheckBox("leave-one-out metrics"); self.chk_loo.setObjectName("field")
-        self.chk_loo.setToolTip("score each mixture with a model that did NOT see it. The "
-                                "honest number — without this the plots show how well the "
-                                "model reproduces its own training data. Slower (refits per "
-                                "mixture).")
         mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
-        for w in (self.sp_ep, self.sp_seed, self.chk_pre, self.sp_nc, self.sp_nt):
+        for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt):
             mrow.addWidget(w)
-        mrow.addWidget(self.chk_loo)
         mrow.addStretch(1)
         self.train_b = QPushButton("Train"); self.train_b.setObjectName("primary")
         self.train_b.clicked.connect(self._train)
@@ -204,9 +196,9 @@ class ComposePanel(QWidget):
         self.c_loss = Canvas(); self.c_loss.setMinimumHeight(300)
         self.c_loss.placeholder("Train an MLP or CNN to see the loss curve")
         llay.addWidget(self.c_loss); plots.addWidget(lcard, 1)
-        tcard, tlay = _card("Train-set recovery — true (○) vs predicted (●, colour = accuracy)")
+        tcard, tlay = _card("Held-out recovery (leave-one-out) — true (○) vs predicted (●, colour = accuracy)")
         self.c_tri = Canvas(); self.c_tri.setMinimumHeight(300)
-        self.c_tri.placeholder("Train to see composition recovery on the simplex")
+        self.c_tri.placeholder("Train to see held-out composition recovery")
         tlay.addWidget(self.c_tri); plots.addWidget(tcard, 1)
         root.addLayout(plots, 1)
 
@@ -275,7 +267,6 @@ class ComposePanel(QWidget):
         m = self.cmb.currentData()
         self.sp_ep.setVisible(m in ("mlp", "cnn"))
         self.sp_seed.setVisible(m in ("mlp", "cnn", "rf"))
-        self.chk_pre.setVisible(m == "mlp")
         self.sp_nc.setVisible(m == "pls")
         self.sp_nt.setVisible(m == "rf")
 
@@ -285,7 +276,7 @@ class ComposePanel(QWidget):
         return dict(data_dir=self.data_dir, calib_path=self.calib_path,
                     baseline=cfg["baseline"], trim=cfg["trim"],
                     method=self.cmb.currentData(), epochs=self.sp_ep.value(),
-                    seed=self.sp_seed.value(), use_pretrain=self.chk_pre.isChecked(),
+                    seed=self.sp_seed.value(), use_pretrain=False,
                     n_components=self.sp_nc.value(), n_trees=self.sp_nt.value())
 
     def _train(self):
@@ -294,7 +285,7 @@ class ComposePanel(QWidget):
             self.status.setText("prepare ≥3 known-ratio mixtures in the Samples tab first")
             self.status.setStyleSheet(f"color:{RED};"); return
         params = self._opts(); params["items"] = items
-        params["loo"] = self.chk_loo.isChecked()
+        params["loo"] = True   # always score held-out: train-set numbers are meaningless here
         self.train_b.setEnabled(False); self.train_b.setText("Training…")
         self.save_b.setEnabled(False); self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
@@ -410,7 +401,7 @@ class ComposePanel(QWidget):
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
         errtxt = f"{err:.0%}" if err == err else "—"
-        self.status.setText(f"done — {m} · {model.get('n_train', 0)} mixtures · train error {errtxt}. "
+        self.status.setText(f"done — {m} · {model.get('n_train', 0)} mixtures · leave-one-out error {errtxt}. "
                             "Recovery & Real-data now use this model; Save to keep it.")
         self.status.setStyleSheet(f"color:{MUTE};")
 
@@ -538,7 +529,7 @@ class ComposePanel(QWidget):
             return
         rows = self._rows; m = self._model
         # per-mixture true vs predicted fraction
-        write_csv(os.path.join(d, "composition_train_predictions.csv"),
+        write_csv(os.path.join(d, "composition_loo_predictions.csv"),
                   ["mixture"] + [f"true_{s}" for s in SUBSTANCES]
                   + [f"pred_{s}" for s in SUBSTANCES] + ["composition_error"],
                   [[r[0]] + [f"{v:.4f}" for v in r[1]] + [f"{v:.4f}" for v in r[2]]
@@ -586,8 +577,8 @@ class ComposePanel(QWidget):
             ("What this is", [
                 "The composition model trained once on the known-ratio mixtures prepared in "
                 "Samples. Recovery and Real-data APPLY this model — they do not retrain. "
-                "Numbers here are TRAIN-set recovery (how well the model reproduces the "
-                "mixtures it learned from), not a held-out validation."]),
+                "Numbers here are LEAVE-ONE-OUT: every mixture was scored by a model that "
+                "never saw it. The saved model itself is fit on all of them."]),
             ("How it was produced", [
                 f"- Pure references: {self.data_dir}",
                 f"- Mixtures: {m.get('n_train', 0)} known-ratio maps (from Samples)",
@@ -604,7 +595,7 @@ class ComposePanel(QWidget):
                 "- Per-substance error / RMSE / R²: `composition_metrics.csv`",
                 "- Every figure is redrawable from the CSVs next to it."]),
         ]), [("composition_learning_curve", "training loss vs epoch (MLP / CNN only)."),
-             ("composition_triangle", "true (○) → predicted (●) composition on the simplex; "
+             ("composition_triangle", "leave-one-out true (○) → predicted (●) on the simplex; "
                                       "colour = accuracy."),
              ("composition_parity", "predicted vs true fraction per substance; on the "
                                     "diagonal = exact."),
