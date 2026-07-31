@@ -81,12 +81,20 @@ class SamplingPage(QWidget):
             hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._on_edit)
+        self.cls_tgl = QPushButton(); self.cls_tgl.setObjectName("ghost")
+        self.cls_tgl.setCheckable(True); self.cls_tgl.setChecked(True)
+        self.cls_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
+        self.cls_tgl.toggled.connect(self._toggle_cls)
+        root.addWidget(self.cls_tgl)
         root.addWidget(self.table, 2)
+        self._toggle_cls(True)
 
         # ---- known-ratio mixtures (shared with Model / Recovery) ----
         mhead = QHBoxLayout(); mhead.setSpacing(8)
-        ml = QLabel("Mixtures — known-ratio maps for Step 2 (shared with Model / Recovery):")
-        ml.setObjectName("field")
+        self.mix_tgl = QPushButton(); self.mix_tgl.setObjectName("ghost")
+        self.mix_tgl.setCheckable(True); self.mix_tgl.setChecked(True)
+        self.mix_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
+        self.mix_tgl.toggled.connect(self._toggle_mix)
         self.chk_mix_uM = QCheckBox("ratios are µM"); self.chk_mix_uM.setObjectName("field")
         self.chk_mix_uM.setToolTip("treat the ratio numbers as absolute µM (e.g. DQ1000 → "
                                    "1000 µM) so the concentration head can be trained")
@@ -95,7 +103,7 @@ class SamplingPage(QWidget):
         mix_add.clicked.connect(self._add_mix)
         mix_clr = QPushButton("Clear"); mix_clr.setObjectName("ghost")
         mix_clr.clicked.connect(self._clear_mix)
-        mhead.addWidget(ml); mhead.addStretch(1)
+        mhead.addWidget(self.mix_tgl, 1); mhead.addStretch(1)
         mhead.addWidget(self.chk_mix_uM); mhead.addWidget(mix_add); mhead.addWidget(mix_clr)
         root.addLayout(mhead)
 
@@ -109,6 +117,7 @@ class SamplingPage(QWidget):
         self.mix_table.setMaximumHeight(150)
         self.mix_table.itemChanged.connect(self._on_mix_edit)
         root.addWidget(self.mix_table, 1)
+        self._toggle_mix(True)
 
         self.summary = QLabel(""); self.summary.setObjectName("sub")
         self.summary.setWordWrap(True)
@@ -135,6 +144,15 @@ class SamplingPage(QWidget):
         lb = QLabel(label); lb.setObjectName("field")
         col.addWidget(lb); col.addWidget(spin)
         return col
+
+    def _toggle_cls(self, on):
+        self.table.setVisible(on)
+        self.cls_tgl.setText(("▾  " if on else "▸  ") + "Classes  (substance · batch · role)")
+
+    def _toggle_mix(self, on):
+        self.mix_table.setVisible(on)
+        self.mix_tgl.setText(("▾  " if on else "▸  ")
+                             + "Mixtures  (known-ratio, shared with Model / Recovery)")
 
     def _gather_prep(self):
         """Current preprocessing choices as a config dict (trim None if full range)."""

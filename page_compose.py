@@ -121,7 +121,12 @@ class ComposePanel(QWidget):
         self.pbar = QProgressBar(); self.pbar.setTextVisible(False)
         self.pbar.setFixedHeight(6); self.pbar.setVisible(False); root.addWidget(self.pbar)
 
-        # read-only view of the shared mixtures (managed in Samples)
+        # read-only view of the shared mixtures (managed in Samples) — collapsible
+        self.mix_tgl = QPushButton(); self.mix_tgl.setObjectName("ghost")
+        self.mix_tgl.setCheckable(True); self.mix_tgl.setChecked(True)
+        self.mix_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
+        self.mix_tgl.toggled.connect(self._toggle_table)
+        root.addWidget(self.mix_tgl)
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["mixture file (from Samples)", "true ratio"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -129,6 +134,7 @@ class ComposePanel(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setMaximumHeight(140)
         root.addWidget(self.table)
+        self._toggle_table(True)
 
         card, lay = _card("Train-set recovery — true (○) vs predicted (●, colour = accuracy)")
         self.c_tri = Canvas(); self.c_tri.setMinimumHeight(300)
@@ -166,10 +172,17 @@ class ComposePanel(QWidget):
         n = len(self._items_cache)
         has_uM = any(len(it) > 2 and it[2] for it in self._items_cache)
         self.mix_lbl.setText(f"mixtures: {n} from Samples" + (" · µM" if has_uM else ""))
+        if hasattr(self, "mix_tgl"):
+            self._toggle_table(self.mix_tgl.isChecked())
         if not self.status.text().startswith("●"):
             self.status.setText(f"{n} mixtures from Samples" if n
                                 else "no mixtures yet — add them in the Samples tab")
             self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _toggle_table(self, on):
+        self.table.setVisible(on)
+        n = self.table.rowCount()
+        self.mix_tgl.setText(("▾  " if on else "▸  ") + f"Mixtures from Samples ({n})")
 
     def _update_params(self):
         m = self.cmb.currentData()
