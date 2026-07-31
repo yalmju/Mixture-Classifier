@@ -6,6 +6,50 @@ from __future__ import annotations
 import os
 import sys
 
+# Pin matplotlib's Qt binding to the one the app itself uses. Left unset,
+# matplotlib picks whichever binding it finds first, so a machine that also has
+# PyQt5 / PySide6 installed can load a SECOND Qt library into the process —
+# which crashes at startup (most visibly on macOS). Must precede any matplotlib
+# import; the app is PyQt6-only, so there is nothing else to negotiate.
+os.environ.setdefault("QT_API", "PyQt6")
+
+
+def _ensure_qt_plugin_path():
+    """Point Qt at PyQt6's own plugins when nothing else has.
+
+    Startup otherwise dies with `Could not find the Qt platform plugin "cocoa"
+    in ""` on macOS (or "xcb" on Linux): the empty path means Qt was handed a
+    blank QT_QPA_PLATFORM_PLUGIN_PATH — usually exported by a stale Homebrew /
+    conda / PyQt5 Qt in the shell profile — and searched nowhere at all instead
+    of falling back to the wheel's own plugins.
+
+    A path that is set and actually usable is always left alone. One that is
+    blank, or that points somewhere with no platforms/ directory (a Qt5 or
+    Homebrew Qt left over in the shell profile — the reason this keeps coming
+    back after a reinstall "fixes" it), is replaced with the wheel's own.
+
+    Does nothing if the wheel has no plugins directory, which is the other cause
+    of this error (a broken PyQt6-Qt6 install) and needs a reinstall, not a path.
+    """
+    key = "QT_QPA_PLATFORM_PLUGIN_PATH"
+    current = os.environ.get(key)
+    if current and os.path.isdir(os.path.join(current, "platforms")):
+        return                               # set and usable: respect it
+    try:
+        import PyQt6
+    except ImportError:                      # nothing to point at yet
+        return
+    plugins = os.path.join(os.path.dirname(PyQt6.__file__), "Qt6", "plugins")
+    if os.path.isdir(os.path.join(plugins, "platforms")):
+        if current:
+            print(f"UNMIXR: ignoring unusable {key}={current!r} "
+                  f"(no platforms/ there); using PyQt6's own plugins",
+                  file=sys.stderr)
+        os.environ[key] = plugins
+
+
+_ensure_qt_plugin_path()
+
 import matplotlib
 matplotlib.use("QtAgg")
 from cycler import cycler
