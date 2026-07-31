@@ -101,6 +101,7 @@ class ValidatePage(QWidget):
         self._shared_model = MODEL_BUS.model         # model trained in the Model tab (Step 2)
         COLOR_BUS.changed.connect(self._recolor)     # top-bar picker → recolour
         MODEL_BUS.changed.connect(self._on_model_bus)
+        MIXTURE_BUS.changed.connect(lambda: self._load_from_samples(force=True))
         self._files = []                 # full paths, aligned with table rows
         self.data_dir = PEST_DEFAULT
         self.calib_path = None           # dilution-series CSV → recovery (measured µM)
@@ -323,6 +324,28 @@ class ValidatePage(QWidget):
 
     def set_data_dir(self, path):
         self.data_dir = path; self.ref_lbl.setText(self._short(path))
+        self._load_from_samples()
+
+    def _load_from_samples(self, force=False):
+        """Pull the known-ratio mixtures prepared in Samples (Step 1). Non-destructive:
+        fills only when the table is empty, unless ``force`` (a Samples edit)."""
+        from dataset import load_mixture_list
+        if self._files and not force:
+            return
+        items = load_mixture_list(self.data_dir)
+        if not items:
+            return
+        self._files = []; self.table.setRowCount(0)
+        for it in items:
+            self._files.append(it[0])
+            row = self.table.rowCount(); self.table.insertRow(row)
+            f_item = QTableWidgetItem(os.path.basename(it[0]))
+            f_item.setFlags(f_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(row, 0, f_item)
+            self.table.setItem(row, 1, QTableWidgetItem(
+                ", ".join(f"{k}:{v:.3g}" for k, v in it[1].items())))
+        self.status.setText(f"{len(items)} mixtures from Samples — Validate, or add more")
+        self.status.setStyleSheet(f"color:{MUTE};")
 
     def _toggle_inputs(self, on):
         """Show/hide the input detail (fixed components · VIP · mixture table)."""
