@@ -183,9 +183,11 @@ class SamplingPage(QWidget):
             return
         refs = self._mix_ref_names()
         self._loading = True
+        seen = {os.path.normcase(os.path.normpath(f)) for f in self.mix_files}
         for p in paths:
-            if p in self.mix_files:
+            if os.path.normcase(os.path.normpath(p)) in seen:   # dedupe across path spellings
                 continue
+            seen.add(os.path.normcase(os.path.normpath(p)))
             self.mix_files.append(p)
             row = self.mix_table.rowCount(); self.mix_table.insertRow(row)
             it0 = QTableWidgetItem(os.path.basename(p))
@@ -243,7 +245,12 @@ class SamplingPage(QWidget):
         self.mix_table.setRowCount(0); self.mix_files = []
         items = load_mixture_list(self.data_dir)
         self.chk_mix_uM.setChecked(any(len(it) > 2 and it[2] for it in items))
+        seen = set()
         for it in items:
+            key = os.path.normcase(os.path.normpath(it[0]))
+            if key in seen:                               # heal a previously doubled file
+                continue
+            seen.add(key)
             self.mix_files.append(it[0])
             row = self.mix_table.rowCount(); self.mix_table.insertRow(row)
             it0 = QTableWidgetItem(os.path.basename(it[0]))

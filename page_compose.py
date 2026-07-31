@@ -59,9 +59,15 @@ class TrainComposeWorker(QObject):
             proc = ctx.Process(target=_train_subprocess, args=(self.params, q), daemon=True)
             self.proc = proc                              # so Cancel can terminate it
             proc.start()
+            import queue as _queue
             model = None
             while True:                                   # q.get releases the GIL → GUI free
-                tag, payload = q.get()
+                try:
+                    tag, payload = q.get(timeout=0.5)
+                except _queue.Empty:
+                    if not proc.is_alive():               # killed (Cancel) or crashed child
+                        self.fail.emit("training stopped"); return
+                    continue
                 if tag == "progress":
                     self.progress.emit(payload)
                 elif tag == "error":
@@ -258,15 +264,15 @@ class ComposePanel(QWidget):
         self._thread.start()
 
     def _cancel(self):
+        """Non-blocking cancel: kill the child, DON'T wait on anything in the GUI thread.
+        (The old join/wait here blocked the main thread — Cancel itself froze the app.)"""
         self._cancelled = True
         proc = getattr(getattr(self, "_worker", None), "proc", None)
-        if proc is not None and proc.is_alive():          # kill the training subprocess
-            proc.terminate(); proc.join(timeout=2)
+        if proc is not None and proc.is_alive():
+            proc.terminate()                              # no join — the queue reader unblocks
         th = getattr(self, "_thread", None)
-        if th is not None and th.isRunning():
-            th.quit()
-            if not th.wait(300):
-                th.terminate(); th.wait()
+        if th is not None:
+            th.quit()                                     # no wait — it dies on its own
         self.cancel_b.setVisible(False); self.pbar.setVisible(False)
         self.train_b.setEnabled(True); self.train_b.setText("Train")
         self.status.setText("cancelled"); self.status.setStyleSheet(f"color:{MUTE};")
@@ -289,6 +295,8 @@ class ComposePanel(QWidget):
 
     def _fail(self, tb):
         import sys
+        if getattr(self, "_cancelled", False):            # cancel path already reset the UI
+            return
         self.train_b.setEnabled(True); self.train_b.setText("Train")
         self.pbar.setVisible(False); self.cancel_b.setVisible(False)
         self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
@@ -315,11 +323,14 @@ class ComposePanel(QWidget):
         fig = self.c_tri.fig; fig.clear(); ax = fig.add_subplot(111)
         A, B, C = bary([1, 0, 0]), bary([0, 0, 1]), bary([0, 1, 0])   # DQ · THI · TBZ corners
         ax.plot([A[0], B[0], C[0], A[0]], [A[1], B[1], C[1], A[1]], color=INK, lw=1.0, zorder=1)
-        for f, s, col in [([1, 0, 0], "DQ", substance_color("DQ", 0)),
-                          ([0, 0, 1], "THI", substance_color("THI", 2)),
-                          ([0, 1, 0], "TBZ", substance_color("TBZ", 1))]:
-            p = bary(f); ax.text(p[0], p[1], s, ha="center", va="center", fontsize=10,
-                                 fontweight="bold", color=col)
+        # corner labels OFFSET away from the vertex so they never sit on the lines/points
+        for f, s, col, dx, dy, ha, va in [
+                ([1, 0, 0], "DQ", substance_color("DQ", 0), 0, 0.05, "center", "bottom"),
+                ([0, 0, 1], "THI", substance_color("THI", 2), -0.03, -0.05, "right", "top"),
+                ([0, 1, 0], "TBZ", substance_color("TBZ", 1), 0.03, -0.05, "left", "top")]:
+            p = bary(f)
+            ax.text(p[0] + dx, p[1] + dy, s, ha=ha, va=va, fontsize=11,
+                    fontweight="bold", color=col)
         cmap = cm.get_cmap("RdYlGn")
         for _name, tv, pv in rows:
             p0 = bary(tv); p1 = bary(pv); e = 0.5 * sum(abs(pv[j] - tv[j]) for j in range(len(tv)))
@@ -330,7 +341,7 @@ class ComposePanel(QWidget):
             ax.scatter(*p1, s=42, color=cmap(1 - min(e / 0.6, 1.0)), edgecolors="white",
                        linewidths=0.5, zorder=4)
         ax.set_aspect("equal"); ax.axis("off")
-        ax.set_xlim(-0.12, 1.12); ax.set_ylim(-0.1, 1.05)
+        ax.set_xlim(-0.15, 1.15); ax.set_ylim(-0.18, 1.02)
         fig.tight_layout(); self.c_tri.draw_idle()
 
     def _save(self):
