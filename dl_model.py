@@ -91,7 +91,7 @@ def _mean_spectrum(cube, mask):
 
 def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                 method="mlp", epochs=350, seed=0, use_pretrain=True,
-                n_components=8, n_trees=300, loo=False):
+                n_components=8, n_trees=300, loo=False, test_items=None):
     """Train a composition model (+ µM if absolute concentrations given) on ALL mixtures.
     items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
 
@@ -183,8 +183,28 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     train_eval = {"true": np.asarray(Y, float).tolist(), "pred": np.asarray(tp, float).tolist(),
                   "loss": loss_curve}
 
+    # An INDEPENDENT batch (Role = test in Samples) beats leave-one-out: those maps were
+    # measured separately and never touched training, so scoring them is the real check.
+    test_eval = None
+    if test_items:
+        Xt_, Yt_, tp_paths = [], [], []
+        for k, it in enumerate(test_items):
+            if progress:
+                progress(f"scoring held-out batch {k + 1}/{len(test_items)}")
+            vec = _ratio([float(it[1].get(s_, 0.0)) for s_ in subs])
+            if vec.sum() <= 0:
+                continue
+            _w, cube, _m, _c = load_map(it[0])
+            ya = _mean_spectrum(cube, mask)
+            Xt_.append(ya / (np.linalg.norm(ya) + 1e-12)); Yt_.append(vec); tp_paths.append(it[0])
+        if Xt_:
+            Pt = _fit_predict(method, X, Y, np.array(Xt_, np.float32), pre=pre, epochs=epochs,
+                              seed=seed, n_components=n_components, n_trees=n_trees, P_ref=P)
+            test_eval = {"true": np.asarray(Yt_, float).tolist(),
+                         "pred": np.asarray(Pt, float).tolist(), "paths": tp_paths}
+
     loo_eval = None
-    if loo and len(X) >= 3:                     # honest metrics: predict each held-out mixture
+    if loo and test_eval is None and len(X) >= 3:                     # honest metrics: predict each held-out mixture
         P_loo = np.zeros_like(np.asarray(Y, float))
         for i in range(len(X)):
             if progress:
@@ -220,7 +240,8 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
 
     return {"subs": subs, "lo": lo, "hi": hi, "n_feat": int(mask.sum()), "P": P,
             "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None,
-            "train_eval": train_eval, "loo_eval": loo_eval, **comp_store}
+            "train_eval": train_eval, "loo_eval": loo_eval, "test_eval": test_eval,
+            **comp_store}
 
 
 def apply_model(model, wn, cube):

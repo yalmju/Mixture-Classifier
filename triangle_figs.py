@@ -69,10 +69,10 @@ def _frame(ax, BR, BL, TOP, subs, colors, corner_labels=None):
              (TOP, "center", "bottom", 0.0, 0.05)]
     for i, (p, ha, va, dx, dy) in enumerate(spots[:len(subs)]):
         txt = subs[i] if not corner_labels else f"{subs[i]}\n{corner_labels[i]}"
-        ax.text(p[0] + dx, p[1] + dy, txt, ha=ha, va=va, fontsize=11, fontweight="bold",
+        ax.text(p[0] + dx, p[1] + dy, txt, ha=ha, va=va, fontsize=15, fontweight="bold",
                 color=colors[i], linespacing=1.3)
     ax.set_aspect("equal"); ax.axis("off")
-    ax.set_xlim(-0.18, 1.18); ax.set_ylim(-0.22, 3 ** 0.5 / 2 + 0.14)
+    ax.set_xlim(-0.20, 1.20); ax.set_ylim(-0.26, 3 ** 0.5 / 2 + 0.18)
 
 
 def _recovery(rows, i):
@@ -87,7 +87,8 @@ def _recovery(rows, i):
 
 def accuracy_triangle(rows, subs, colors, fig=None):
     """Interior shaded by prediction accuracy; arrows true -> predicted; corner recovery."""
-    fig = fig or Figure(figsize=(7.2, 6.6), facecolor="white")
+    fig = fig or Figure(figsize=(7.2, 6.8))
+    fig.patch.set_alpha(0.0)
     ax = fig.add_subplot(111)
     BR, BL, TOP = _geom(len(subs))
     cmap = matplotlib.colormaps["RdYlGn"]
@@ -125,31 +126,32 @@ def accuracy_triangle(rows, subs, colors, fig=None):
     for r in rows:
         p0 = _bary(r[1], BR, BL, TOP); p1 = _bary(r[2], BR, BL, TOP)
         e = 0.5 * np.abs(np.asarray(r[2]) - np.asarray(r[1])).sum()
-        if np.hypot(*(p1 - p0)) > 1e-3:
-            ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=13,
-                                         color="#6b7280", lw=1.3, alpha=0.8, zorder=3,
-                                         shrinkA=3, shrinkB=5))
+        if np.hypot(*(p1 - p0)) > 4e-3:                 # skip only true zero-length
+            ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=16,
+                                         color="#3f4650", lw=1.8, alpha=0.9, zorder=3,
+                                         shrinkA=3, shrinkB=6))
         ax.scatter(*p0, s=44, facecolors="white", edgecolors=MUTE, linewidths=1.2, zorder=4)
         ax.scatter(*p1, s=76, color=cmap(1 - min(e / EMAX, 1.0)), edgecolors="white",
                    linewidths=0.7, zorder=5)
 
     cb = fig.colorbar(ScalarMappable(norm=Normalize(0, 1), cmap=cmap), ax=ax,
                       fraction=0.03, pad=0.02, shrink=0.5, aspect=22)
-    cb.set_label("accuracy (green = exact, red = poor)", fontsize=9)
-    cb.set_ticks([0, 0.5, 1.0]); cb.ax.tick_params(labelsize=8, colors="black",
+    cb.set_label("accuracy (green = exact, red = poor)", fontsize=10)
+    cb.set_ticks([0, 0.5, 1.0]); cb.ax.tick_params(labelsize=9, colors="black",
                                                    length=2, width=0.6)
     cb.outline.set_linewidth(0.5); cb.outline.set_edgecolor("black")
     fig.legend(handles=[Line2D([], [], marker="o", mfc="white", mec=MUTE, mew=1.2, ls="",
                                ms=9, label="true composition"),
                         Line2D([], [], marker="o", mfc="#4a9e2a", mec="white", ls="",
                                ms=10, label="predicted (colour = accuracy)")],
-               loc="lower center", ncol=2, fontsize=9, framealpha=0)
+               loc="lower center", ncol=2, fontsize=11, framealpha=0)
     return fig
 
 
 def rgb_triangle(rows, subs, colors, fig=None):
     """Interior coloured by composition itself; arrows true -> predicted."""
-    fig = fig or Figure(figsize=(7.0, 6.6), facecolor="white")
+    fig = fig or Figure(figsize=(7.0, 6.8))
+    fig.patch.set_alpha(0.0)
     ax = fig.add_subplot(111)
     BR, BL, TOP = _geom(len(subs))
     prim = [np.array(matplotlib.colors.to_rgb(c)) for c in colors]
@@ -174,15 +176,15 @@ def rgb_triangle(rows, subs, colors, fig=None):
     _frame(ax, BR, BL, TOP, subs, colors)
     for r in rows:
         p0 = _bary(r[1], BR, BL, TOP); p1 = _bary(r[2], BR, BL, TOP)
-        if np.hypot(*(p1 - p0)) > 1e-3:
-            ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=13,
-                                         color="#2b2f36", lw=1.2, alpha=0.8, zorder=3,
-                                         shrinkA=3, shrinkB=5))
+        if np.hypot(*(p1 - p0)) > 4e-3:
+            ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=16,
+                                         color="#1c2430", lw=1.7, alpha=0.9, zorder=3,
+                                         shrinkA=3, shrinkB=6))
         ax.scatter(*p0, s=48, facecolors="white", edgecolors=INK, linewidths=1.3, zorder=4)
         ax.scatter(*p1, s=72, facecolors=INK, edgecolors="white", linewidths=0.9, zorder=5)
     fig.legend(handles=[Line2D([], [], marker="o", mfc="white", mec=INK, mew=1.3, ls="",
                                ms=9, label="true (solution) composition"),
                         Line2D([], [], marker="o", mfc=INK, mec="white", ls="", ms=9,
                                label="predicted (measured) composition")],
-               loc="lower center", ncol=2, fontsize=9, framealpha=0)
+               loc="lower center", ncol=2, fontsize=11, framealpha=0)
     return fig

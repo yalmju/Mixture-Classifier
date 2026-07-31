@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 
 from ui_common import *
 from real_data import PEST_DEFAULT
-from dataset import load_mixture_list
+from dataset import load_mixture_list, load_mixture_roles
 from validate import simplify_ratio
 
 
@@ -88,7 +88,8 @@ class TrainComposeWorker(QObject):
             # which was holding the GIL and freezing the GUI). Reorder to SUBSTANCES.
             subs = model["subs"]; sidx = {s: j for j, s in enumerate(subs)}
             # prefer the leave-one-out predictions when they were computed — the honest number
-            te = model.get("loo_eval") or model.get("train_eval", {})
+            te = (model.get("test_eval") or model.get("loo_eval")
+                  or model.get("train_eval", {}))
             tvs = te.get("true", []); pvs = te.get("pred", [])
             errs = []; rows = []
             for i in range(len(tvs)):
@@ -110,6 +111,7 @@ class ComposePanel(QWidget):
         self.data_dir = PEST_DEFAULT
         self.calib_path = None
         self._items_cache = []
+        self._test_items = []
         self._model = None
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(12)
 
@@ -252,16 +254,20 @@ class ComposePanel(QWidget):
 
     def _load_from_samples(self):
         """Pull the known-ratio mixtures prepared in Samples (Step 1)."""
-        self._items_cache = load_mixture_list(self.data_dir)
+        roles = load_mixture_roles(self.data_dir)
+        allm = load_mixture_list(self.data_dir)
+        self._items_cache = [it for it in allm if roles.get(it[0], "train") != "test"]
+        self._test_items = [it for it in allm if roles.get(it[0], "train") == "test"]
         self.table.setRowCount(0)
-        for it in self._items_cache:
+        for it in self._items_cache + self._test_items:
             row = self.table.rowCount(); self.table.insertRow(row)
             self.table.setItem(row, 0, QTableWidgetItem(os.path.basename(it[0])))
             self.table.setItem(row, 1, QTableWidgetItem(
                 ", ".join(f"{k}:{v:.3g}" for k, v in simplify_ratio(it[1]).items())))
-        n = len(self._items_cache)
+        n = len(self._items_cache); nt = len(self._test_items)
         has_uM = any(len(it) > 2 and it[2] for it in self._items_cache)
-        self.mix_lbl.setText(f"mixtures: {n} from Samples" + (" · µM" if has_uM else ""))
+        self.mix_lbl.setText(f"mixtures: {n} train" + (f" · {nt} test" if nt else "")
+                             + " (Samples)" + (" · µM" if has_uM else ""))
         if hasattr(self, "mix_tgl"):
             self._toggle_table(self.mix_tgl.isChecked())
         if not self.status.text().startswith("●"):
@@ -296,6 +302,8 @@ class ComposePanel(QWidget):
             self.status.setText("prepare ≥3 known-ratio mixtures in the Samples tab first")
             self.status.setStyleSheet(f"color:{RED};"); return
         params = self._opts(); params["items"] = items
+        if self._test_items:
+            params["test_items"] = self._test_items
         params["loo"] = True   # always score held-out: train-set numbers are meaningless here
         self.train_b.setEnabled(False); self.train_b.setText("Training…")
         self.save_b.setEnabled(False); self._cancelled = False; self.cancel_b.setVisible(True)
@@ -419,7 +427,9 @@ class ComposePanel(QWidget):
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
         errtxt = f"{err:.0%}" if err == err else "—"
-        self.status.setText(f"done — {m} · {model.get('n_train', 0)} mixtures · leave-one-out error {errtxt}. "
+        kind = ("independent test batch" if model.get("test_eval")
+                else "leave-one-out" if model.get("loo_eval") else "train-set")
+        self.status.setText(f"done — {m} · {model.get('n_train', 0)} train mixtures · {kind} error {errtxt}. "
                             "Recovery & Real-data now use this model; Save to keep it.")
         self.status.setStyleSheet(f"color:{MUTE};")
 
@@ -584,7 +594,7 @@ class ComposePanel(QWidget):
             for fn, name in ((accuracy_triangle, "composition_triangle_accuracy"),
                              (rgb_triangle, "composition_triangle_rgb")):
                 fn(rows, list(SUBSTANCES), cols).savefig(
-                    os.path.join(d, name + ".png"), dpi=130, facecolor="white",
+                    os.path.join(d, name + ".png"), dpi=300, transparent=True,
                     bbox_inches="tight")
                 n += 1
         except Exception as e:

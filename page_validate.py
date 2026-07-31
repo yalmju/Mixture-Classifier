@@ -1066,7 +1066,7 @@ class ValidatePage(QWidget):
                          (rgb_triangle, "drift_triangle_rgb")):
             try:
                 fig = fn(rows, list(SUBSTANCES), cols)
-                fig.savefig(_os.path.join(d, name + ".png"), dpi=130, facecolor="white",
+                fig.savefig(_os.path.join(d, name + ".png"), dpi=300, transparent=True,
                             bbox_inches="tight")
                 n += 1
             except Exception as e:
