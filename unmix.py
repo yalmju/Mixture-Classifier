@@ -223,10 +223,19 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
             from dl_model import apply_model_pixels
             Pk = apply_model_pixels(dl_model, wn, spectra)          # (n_px, n_subs)
             sub_names = dl_model.get("subs", [])
-            tot = A[:, nonbg].sum(1, keepdims=True)                 # keep NNLS' substance mass
-            for j, nm in enumerate(sub_names):
-                if nm in names:
-                    A[:, names.index(nm)] = Pk[:, j] * tot[:, 0]
+            blank = dl_model.get("blank")
+            if blank and blank in sub_names:
+                # the model judges background itself: use its channels directly, including
+                # the blank one, so hit/background no longer depends on NNLS
+                for j, nm in enumerate(sub_names):
+                    tgt = nm if nm in names else next((c for c in names if is_blank(c)), None)
+                    if tgt in names:
+                        A[:, names.index(tgt)] = Pk[:, j]
+            else:
+                tot = A[:, nonbg].sum(1, keepdims=True)             # keep NNLS' substance mass
+                for j, nm in enumerate(sub_names):
+                    if nm in names:
+                        A[:, names.index(nm)] = Pk[:, j] * tot[:, 0]
 
     recon = A @ fit_T
     ss_res = np.sum((fit_X - recon) ** 2, axis=1)

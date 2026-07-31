@@ -81,7 +81,7 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
     return p / (p.sum(1, keepdims=True) + 1e-12)
 
 
-def _map_spectra(cube, mask, n_px=0):
+def _map_spectra(cube, mask, n_px=0, spread=False):
     """Spectra to train on for ONE map. ``n_px``=0 keeps the historic behaviour (a single
     intensity-weighted mean). ``n_px``>0 also returns that many individual pixels — the
     brightest ones, which carry the SERS signal rather than blank substrate — each
@@ -95,6 +95,9 @@ def _map_spectra(cube, mask, n_px=0):
     out = [np.clip(mean - als_baseline(mean), 0, None)]
     if n_px and len(cube) > 1:
         order = np.argsort(-w)                       # brightest first
+        if spread:                                   # background: sample the WHOLE intensity
+            k = max(1, len(order) // int(n_px))       # range, or the model only ever sees
+            order = order[::k][:int(n_px)]            # bright substrate and never dim pixels
         for i in order[:int(n_px)]:
             y = cube[i]
             out.append(np.clip(y - als_baseline(y), 0, None))
@@ -111,7 +114,8 @@ def _mean_spectrum(cube, mask):
 
 def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                 method="mlp", epochs=350, seed=0, use_pretrain=True,
-                n_components=8, n_trees=300, loo=False, test_items=None, px_per_map=0):
+                n_components=8, n_trees=300, loo=False, test_items=None, px_per_map=0,
+                include_blank=False):
     """Train a composition model (+ µM if absolute concentrations given) on ALL mixtures.
     items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
 
@@ -142,6 +146,30 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             if j == 0:                                # µM head stays on the map mean
                 Xabs.append(ya)
                 Cabs.append([float(conc.get(s, 0.0)) for s in subs] if conc else None)
+    # Optionally learn BACKGROUND as its own class: pixels from the blank reference map
+    # labelled "100% blank". Without it the model must spread every spectrum — even bare
+    # substrate — across the substances, so it can never say "nothing here".
+    blank_name = None
+    if include_blank:
+        from dataset import discover_references, is_blank, base_and_batch
+        blanks = [(base_and_batch(c)[0], pth)          # 'BLK-1' → class 'BLK'
+                  for c, pth in discover_references(data_dir)
+                  if is_blank(base_and_batch(c)[0])]
+        if blanks:
+            blank_name = blanks[0][0]
+            for c, pth in blanks:
+                try:
+                    _w, cube, _m, _c = load_map(pth)
+                except Exception:
+                    continue
+                for ya in _map_spectra(cube, mask, px_per_map or 60, spread=True):
+                    X.append(ya / (np.linalg.norm(ya) + 1e-12))
+                    Y.append([0.0] * len(subs) + [1.0])
+                    paths.append(pth)
+            for i in range(len(Y)):                      # widen the mixture labels
+                if len(Y[i]) == len(subs):
+                    Y[i] = list(Y[i]) + [0.0]
+            subs = list(subs) + [blank_name]
     X = np.array(X, np.float32); Xabs = np.array(Xabs); Y = np.array(Y, np.float32)
     paths = np.array(paths, object)
     if len(X) < 3:
@@ -271,7 +299,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     return {"subs": subs, "lo": lo, "hi": hi, "n_feat": int(mask.sum()), "P": P,
             "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None,
             "train_eval": train_eval, "loo_eval": loo_eval, "test_eval": test_eval,
-            **comp_store}
+            "blank": blank_name, **comp_store}
 
 
 def apply_model(model, wn, cube):

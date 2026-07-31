@@ -176,6 +176,10 @@ class ComposePanel(QWidget):
         self.sp_seed.setObjectName("field")
         self.sp_nc = QSpinBox(); self.sp_nc.setRange(1, 20); self.sp_nc.setValue(8)
         self.sp_nc.setPrefix("components "); self.sp_nc.setObjectName("field")
+        self.chk_blank = QCheckBox("learn background (BLK)"); self.chk_blank.setObjectName("field")
+        self.chk_blank.setToolTip("add pixels from the blank reference map as a 4th class, so "
+                                  "the model can answer 'nothing here' instead of spreading "
+                                  "every spectrum across the substances")
         self.sp_px = QSpinBox(); self.sp_px.setRange(0, 400); self.sp_px.setSingleStep(20)
         self.sp_px.setValue(0); self.sp_px.setPrefix("pixels/map "); self.sp_px.setObjectName("field")
         self.sp_px.setToolTip("extra training rows per map: 0 = one mean spectrum per map "
@@ -185,7 +189,8 @@ class ComposePanel(QWidget):
         self.sp_nt = QSpinBox(); self.sp_nt.setRange(20, 1000); self.sp_nt.setSingleStep(20)
         self.sp_nt.setValue(300); self.sp_nt.setPrefix("trees "); self.sp_nt.setObjectName("field")
         mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
-        for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px):
+        for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px,
+                  self.chk_blank):
             mrow.addWidget(w)
         mrow.addStretch(1)
         self.train_b = QPushButton("Train"); self.train_b.setObjectName("primary")
@@ -306,6 +311,7 @@ class ComposePanel(QWidget):
         self.sp_nc.setVisible(m == "pls")
         self.sp_nt.setVisible(m == "rf")
         self.sp_px.setVisible(True)          # applies to every method
+        self.chk_blank.setVisible(True)
 
     def _opts(self):
         from dataset import load_preprocess
@@ -315,7 +321,8 @@ class ComposePanel(QWidget):
                     method=self.cmb.currentData(), epochs=self.sp_ep.value(),
                     seed=self.sp_seed.value(), use_pretrain=False,
                     n_components=self.sp_nc.value(), n_trees=self.sp_nt.value(),
-                    px_per_map=self.sp_px.value())
+                    px_per_map=self.sp_px.value(),
+                    include_blank=self.chk_blank.isChecked())
 
     def _train(self):
         items = self._items_cache
