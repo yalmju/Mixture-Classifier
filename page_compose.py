@@ -92,7 +92,9 @@ class ComposePanel(QWidget):
             self.cmb.addItem(text, data)
         self.cmb.currentIndexChanged.connect(self._update_params)
         self.sp_ep = QSpinBox(); self.sp_ep.setRange(20, 3000); self.sp_ep.setSingleStep(50)
-        self.sp_ep.setValue(350); self.sp_ep.setPrefix("epochs "); self.sp_ep.setObjectName("field")
+        self.sp_ep.setValue(150); self.sp_ep.setPrefix("epochs "); self.sp_ep.setObjectName("field")
+        self.sp_ep.setToolTip("training iterations (MLP / CNN). Higher = better but slower; "
+                              "the GUI is busy while it trains — raise for a final model.")
         self.sp_seed = QSpinBox(); self.sp_seed.setRange(0, 999); self.sp_seed.setPrefix("seed ")
         self.sp_seed.setObjectName("field")
         self.chk_pre = QCheckBox("physics pretrain"); self.chk_pre.setChecked(True)

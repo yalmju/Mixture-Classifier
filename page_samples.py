@@ -85,8 +85,9 @@ class SamplingPage(QWidget):
         self.cls_tgl.setCheckable(True); self.cls_tgl.setChecked(True)
         self.cls_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
         self.cls_tgl.toggled.connect(self._toggle_cls)
+        self.table.setMaximumHeight(320)
         root.addWidget(self.cls_tgl)
-        root.addWidget(self.table, 2)
+        root.addWidget(self.table)
         self._toggle_cls(True)
 
         # ---- known-ratio mixtures (shared with Model / Recovery) ----
@@ -116,9 +117,10 @@ class SamplingPage(QWidget):
         self.mix_table.verticalHeader().setVisible(False)
         self.mix_table.setMaximumHeight(150)
         self.mix_table.itemChanged.connect(self._on_mix_edit)
-        root.addWidget(self.mix_table, 1)
+        root.addWidget(self.mix_table)
         self._toggle_mix(True)
 
+        root.addStretch(1)                                # absorb slack so collapsing stays tidy
         self.summary = QLabel(""); self.summary.setObjectName("sub")
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
@@ -225,6 +227,8 @@ class SamplingPage(QWidget):
         return items
 
     def _save_mix(self):
+        if self._loading:                                 # don't persist mid-(re)load — that
+            return                                        # once wiped mixtures.json to []
         try:
             save_mixture_list(self.data_dir, self._mix_items())
             MIXTURE_BUS.changed.emit()
