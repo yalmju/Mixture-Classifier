@@ -397,6 +397,19 @@ class RealDataPage(QWidget):
     def _method(self):
         return self.cmb_method.itemAt(1).widget().currentData()
 
+    def _blank_tag(self):
+        """Say on the label whether this model carries a blank class. Without one it
+        cannot answer 'nothing here', so NNLS still supplies the substance mass and the
+        background call — load a measured background map to take that over instead of
+        retraining."""
+        m = getattr(self, "dl_model", None)
+        if not m:
+            return ""
+        blank = m.get("blank")
+        if blank and blank in (m.get("subs") or []):
+            return f"  ·  {blank} class ✓"
+        return "  ·  no blank class"
+
     def _dl_judges_bg(self):
         """True when the loaded composition model carries a blank class AND the per-pixel
         model method is selected — then the model alone decides background."""
@@ -448,7 +461,8 @@ class RealDataPage(QWidget):
         if MODEL_BUS.model is None:
             return
         self.dl_model = MODEL_BUS.model
-        self.dlm_lbl.setText("DL: " + (MODEL_BUS.origin or "trained model"))
+        self.dlm_lbl.setText("DL: " + (MODEL_BUS.origin or "trained model")
+                             + self._blank_tag())
         self.dlm_lbl.setStyleSheet(""); self._sync_controls()
 
     def _browse_dl(self):
@@ -459,7 +473,7 @@ class RealDataPage(QWidget):
         try:
             from dl_model import load_model
             self.dl_model = load_model(p)
-            self.dlm_lbl.setText("DL: " + os.path.basename(p))
+            self.dlm_lbl.setText("DL: " + os.path.basename(p) + self._blank_tag())
             self.dlm_lbl.setStyleSheet(""); self._sync_controls()
             if self._res is not None:
                 self._apply(self._res)                    # refresh readout with the DL row
