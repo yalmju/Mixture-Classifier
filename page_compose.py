@@ -327,7 +327,7 @@ class ComposePanel(QWidget):
     def _plot_parity(self, rows):
         """Predicted vs true fraction, one series per substance (on the diagonal = exact)."""
         from composition import SUBSTANCES
-        fig = self.c_parity.fig; fig.clear(); ax = fig.add_subplot(111)
+        ax = self.c_parity.new_ax()                        # app's cnsplots style
         ax.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0, zorder=1)
         for j, s in enumerate(SUBSTANCES):
             tv = [r[1][j] for r in rows]; pv = [r[2][j] for r in rows]
@@ -335,17 +335,14 @@ class ComposePanel(QWidget):
                        color=substance_color(s, j), label=s, zorder=3)
         ax.set_xlabel("true fraction"); ax.set_ylabel("predicted fraction")
         ax.set_xlim(-0.03, 1.03); ax.set_ylim(-0.03, 1.03); ax.set_aspect("equal")
-        ax.grid(True, color=FAINT, lw=0.4, alpha=0.5)
         ax.legend(fontsize=8, framealpha=0, loc="upper left")
-        for sp in ("top", "right"):
-            ax.spines[sp].set_visible(False)
-        fig.tight_layout(); self.c_parity.draw_idle()
+        self.c_parity.fig.tight_layout(); self.c_parity.draw_idle()
 
     def _plot_error(self, rows):
         """Mean absolute fraction error per substance (with the spread as an error bar)."""
         import numpy as _np
         from composition import SUBSTANCES
-        fig = self.c_err.fig; fig.clear(); ax = fig.add_subplot(111)
+        ax = self.c_err.new_ax()                           # app's cnsplots style
         means, sds, cols = [], [], []
         for j, s in enumerate(SUBSTANCES):
             e = _np.array([abs(r[2][j] - r[1][j]) for r in rows]) if rows else _np.zeros(1)
@@ -355,29 +352,24 @@ class ComposePanel(QWidget):
         ax.bar(x, means, yerr=sds, capsize=4, color=cols, edgecolor="white", alpha=0.9)
         ax.set_xticks(x); ax.set_xticklabels(SUBSTANCES)
         ax.set_ylabel("mean |predicted − true| fraction")
-        ax.grid(True, axis="y", color=FAINT, lw=0.4, alpha=0.5)
-        for sp in ("top", "right"):
-            ax.spines[sp].set_visible(False)
-        fig.tight_layout(); self.c_err.draw_idle()
+        self.c_err.fig.tight_layout(); self.c_err.draw_idle()
 
     def _plot_loss(self, loss):
-        fig = self.c_loss.fig; fig.clear(); ax = fig.add_subplot(111)
+        ax = self.c_loss.new_ax()                          # app's cnsplots style
         if loss:
             ax.plot(range(1, len(loss) + 1), loss, color=TEAL, lw=1.5)
             ax.set_xlabel("epoch"); ax.set_ylabel("training loss")
-            ax.grid(True, color=FAINT, lw=0.4, alpha=0.5)
-            for s in ("top", "right"):
-                ax.spines[s].set_visible(False)
         else:
             ax.text(0.5, 0.5, "no epochs for this method (PLS / RF)", ha="center", va="center",
                     color=MUTE, transform=ax.transAxes); ax.axis("off")
-        fig.tight_layout(); self.c_loss.draw_idle()
+        self.c_loss.fig.tight_layout(); self.c_loss.draw_idle()
 
     def _plot_triangle(self, rows):
         """Ternary simplex: true (open) → predicted (filled, green=accurate) per mixture."""
         from composition import bary
         from matplotlib import cm
-        fig = self.c_tri.fig; fig.clear(); ax = fig.add_subplot(111)
+        ax = self.c_tri.new_ax()                           # app's cnsplots style
+        fig = self.c_tri.fig
         A, B, C = bary([1, 0, 0]), bary([0, 0, 1]), bary([0, 1, 0])   # DQ · THI · TBZ corners
         ax.plot([A[0], B[0], C[0], A[0]], [A[1], B[1], C[1], A[1]], color=INK, lw=1.0, zorder=1)
         # corner labels OFFSET away from the vertex so they never sit on the lines/points
