@@ -150,7 +150,12 @@ class ComposePanel(QWidget):
         self.cancel_b.setVisible(False); self.cancel_b.clicked.connect(self._cancel)
         self.save_b = QPushButton("Save model…"); self.save_b.setObjectName("ghost")
         self.save_b.setEnabled(False); self.save_b.clicked.connect(self._save)
-        mrow.addWidget(self.save_b); mrow.addWidget(self.cancel_b); mrow.addWidget(self.train_b)
+        self.export_b = QPushButton("Export…"); self.export_b.setObjectName("ghost")
+        self.export_b.setEnabled(False); self.export_b.clicked.connect(self._export)
+        self.export_b.setToolTip("write the plots (PNG), the per-mixture predictions and the "
+                                 "per-substance metrics (CSV) + a README to a folder")
+        mrow.addWidget(self.export_b); mrow.addWidget(self.save_b)
+        mrow.addWidget(self.cancel_b); mrow.addWidget(self.train_b)
         root.addLayout(mrow)
         self._update_params()
 
@@ -182,6 +187,19 @@ class ComposePanel(QWidget):
         self.c_tri.placeholder("Train to see composition recovery on the simplex")
         tlay.addWidget(self.c_tri); plots.addWidget(tcard, 1)
         root.addLayout(plots, 1)
+
+        plots2 = QHBoxLayout(); plots2.setSpacing(12)
+        pcard, play = _card("Parity per substance — predicted vs true fraction "
+                            "(on the line = exact)")
+        self.c_parity = Canvas(); self.c_parity.setMinimumHeight(300)
+        self.c_parity.placeholder("Train to see the per-substance parity")
+        play.addWidget(self.c_parity); plots2.addWidget(pcard, 1)
+        ecard, elay = _card("Per-substance error — mean |predicted − true| fraction "
+                            "(lower = better)")
+        self.c_err = Canvas(); self.c_err.setMinimumHeight(300)
+        self.c_err.placeholder("Train to see the per-substance error")
+        elay.addWidget(self.c_err); plots2.addWidget(ecard, 1)
+        root.addLayout(plots2, 1)
 
         self.status = QLabel(""); self.status.setObjectName("sub"); root.addWidget(self.status)
 
@@ -284,8 +302,11 @@ class ComposePanel(QWidget):
         self._model = model
         self.train_b.setEnabled(True); self.train_b.setText("Train")
         self.save_b.setEnabled(True); self.pbar.setVisible(False); self.cancel_b.setVisible(False)
+        self._rows = rows
         self._plot_triangle(rows)
         self._plot_loss(model.get("train_eval", {}).get("loss", []))
+        self._plot_parity(rows); self._plot_error(rows)
+        self.export_b.setEnabled(True)
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
         errtxt = f"{err:.0%}" if err == err else "—"
@@ -302,6 +323,42 @@ class ComposePanel(QWidget):
         self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
+
+    def _plot_parity(self, rows):
+        """Predicted vs true fraction, one series per substance (on the diagonal = exact)."""
+        from composition import SUBSTANCES
+        fig = self.c_parity.fig; fig.clear(); ax = fig.add_subplot(111)
+        ax.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0, zorder=1)
+        for j, s in enumerate(SUBSTANCES):
+            tv = [r[1][j] for r in rows]; pv = [r[2][j] for r in rows]
+            ax.scatter(tv, pv, s=34, alpha=0.8, edgecolors="white", linewidths=0.5,
+                       color=substance_color(s, j), label=s, zorder=3)
+        ax.set_xlabel("true fraction"); ax.set_ylabel("predicted fraction")
+        ax.set_xlim(-0.03, 1.03); ax.set_ylim(-0.03, 1.03); ax.set_aspect("equal")
+        ax.grid(True, color=FAINT, lw=0.4, alpha=0.5)
+        ax.legend(fontsize=8, framealpha=0, loc="upper left")
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        fig.tight_layout(); self.c_parity.draw_idle()
+
+    def _plot_error(self, rows):
+        """Mean absolute fraction error per substance (with the spread as an error bar)."""
+        import numpy as _np
+        from composition import SUBSTANCES
+        fig = self.c_err.fig; fig.clear(); ax = fig.add_subplot(111)
+        means, sds, cols = [], [], []
+        for j, s in enumerate(SUBSTANCES):
+            e = _np.array([abs(r[2][j] - r[1][j]) for r in rows]) if rows else _np.zeros(1)
+            means.append(float(e.mean())); sds.append(float(e.std()))
+            cols.append(substance_color(s, j))
+        x = _np.arange(len(SUBSTANCES))
+        ax.bar(x, means, yerr=sds, capsize=4, color=cols, edgecolor="white", alpha=0.9)
+        ax.set_xticks(x); ax.set_xticklabels(SUBSTANCES)
+        ax.set_ylabel("mean |predicted − true| fraction")
+        ax.grid(True, axis="y", color=FAINT, lw=0.4, alpha=0.5)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        fig.tight_layout(); self.c_err.draw_idle()
 
     def _plot_loss(self, loss):
         fig = self.c_loss.fig; fig.clear(); ax = fig.add_subplot(111)
@@ -343,6 +400,74 @@ class ComposePanel(QWidget):
         ax.set_aspect("equal"); ax.axis("off")
         ax.set_xlim(-0.15, 1.15); ax.set_ylim(-0.18, 1.02)
         fig.tight_layout(); self.c_tri.draw_idle()
+
+    def _export(self):
+        """Write the plots + the numbers behind them (so every figure is redrawable)."""
+        if self._model is None or not getattr(self, "_rows", None):
+            return
+        import numpy as _np
+        from collections import OrderedDict
+        from composition import SUBSTANCES
+        from io_utils import write_csv, write_readme
+        d = QFileDialog.getExistingDirectory(self, "Export composition-model results",
+                                             self.data_dir)
+        if not d:
+            return
+        rows = self._rows; m = self._model
+        # per-mixture true vs predicted fraction
+        write_csv(os.path.join(d, "composition_train_predictions.csv"),
+                  ["mixture"] + [f"true_{s}" for s in SUBSTANCES]
+                  + [f"pred_{s}" for s in SUBSTANCES] + ["composition_error"],
+                  [[r[0]] + [f"{v:.4f}" for v in r[1]] + [f"{v:.4f}" for v in r[2]]
+                   + [f"{0.5 * sum(abs(r[2][j] - r[1][j]) for j in range(len(SUBSTANCES))):.4f}"]
+                   for r in rows])
+        # per-substance metrics
+        mrows = []
+        for j, s in enumerate(SUBSTANCES):
+            e = _np.array([abs(r[2][j] - r[1][j]) for r in rows])
+            tv = _np.array([r[1][j] for r in rows]); pv = _np.array([r[2][j] for r in rows])
+            ss = float(((tv - tv.mean()) ** 2).sum())
+            r2 = 1 - float(((tv - pv) ** 2).sum()) / ss if ss > 1e-12 else float("nan")
+            mrows.append([s, f"{e.mean():.4f}", f"{e.std():.4f}",
+                          f"{float(_np.sqrt(((tv - pv) ** 2).mean())):.4f}", f"{r2:+.3f}"])
+        write_csv(os.path.join(d, "composition_metrics.csv"),
+                  ["substance", "mean_abs_error", "sd", "rmse", "r2"], mrows)
+        loss = m.get("train_eval", {}).get("loss", [])
+        if loss:
+            write_csv(os.path.join(d, "composition_learning_curve.csv"), ["epoch", "loss"],
+                      [[i + 1, f"{v:.5f}"] for i, v in enumerate(loss)])
+        n = _save_figs([("composition_learning_curve", self.c_loss),
+                        ("composition_triangle", self.c_tri),
+                        ("composition_parity", self.c_parity),
+                        ("composition_error", self.c_err)], d)
+        err = float(_np.mean([0.5 * sum(abs(r[2][j] - r[1][j]) for j in range(len(SUBSTANCES)))
+                              for r in rows]))
+        write_readme(d, "UNMIXR — Composition model (Step 2)", OrderedDict([
+            ("What this is", [
+                "The composition model trained once on the known-ratio mixtures prepared in "
+                "Samples. Recovery and Real-data APPLY this model — they do not retrain. "
+                "Numbers here are TRAIN-set recovery (how well the model reproduces the "
+                "mixtures it learned from), not a held-out validation."]),
+            ("How it was produced", [
+                f"- Pure references: {self.data_dir}",
+                f"- Mixtures: {m.get('n_train', 0)} known-ratio maps (from Samples)",
+                f"- Method: {m.get('method', 'mlp').upper()}"
+                + (f" · epochs {self.sp_ep.value()} · seed {self.sp_seed.value()}"
+                   if m.get('method') in ('mlp', 'cnn') else ""),
+                f"- Concentration (µM) head: {'trained' if m.get('has_uM') else 'not trained'}",
+                f"- Spectral window: {m.get('lo')}–{m.get('hi')} cm⁻¹"]),
+            ("Results", [
+                f"- Mean composition error: {err:.1%} (½·Σ|pred − true|, 0 = perfect)",
+                "- Per-substance error / RMSE / R²: `composition_metrics.csv`",
+                "- Every figure is redrawable from the CSVs next to it."]),
+        ]), [("composition_learning_curve", "training loss vs epoch (MLP / CNN only)."),
+             ("composition_triangle", "true (○) → predicted (●) composition on the simplex; "
+                                      "colour = accuracy."),
+             ("composition_parity", "predicted vs true fraction per substance; on the "
+                                    "diagonal = exact."),
+             ("composition_error", "mean |predicted − true| fraction per substance (± SD).")])
+        self.status.setText(f"exported {n} PNG + CSVs + README → {os.path.basename(d)}")
+        self.status.setStyleSheet(f"color:{MUTE};")
 
     def _save(self):
         if self._model is None:

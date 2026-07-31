@@ -320,6 +320,16 @@ class ValidatePage(QWidget):
 
     # ---- helpers ----
     def _short(self, p):
+        """Name the reference SUBSTANCES, not just the folder — the folder is only where
+        the pure maps live, which reads confusingly as 'refs = Pure'."""
+        names = []
+        try:
+            from dataset import discover_dataset, is_blank
+            names = [c for c, _m in discover_dataset(p) if not is_blank(c)]
+        except Exception:
+            pass
+        if names:
+            return "refs (from Samples): " + " · ".join(names)
         return "refs (from Samples): " + ("…" + p[-34:] if len(p) > 34 else p)
 
     def set_data_dir(self, path):
