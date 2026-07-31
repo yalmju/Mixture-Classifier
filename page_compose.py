@@ -135,10 +135,16 @@ class ComposePanel(QWidget):
         root.addWidget(self.table)
         self._toggle_table(True)
 
-        card, lay = _card("Train-set recovery — true (○) vs predicted (●, colour = accuracy)")
+        plots = QHBoxLayout(); plots.setSpacing(12)
+        lcard, llay = _card("Learning curve — training loss vs epoch (MLP / CNN)")
+        self.c_loss = Canvas(); self.c_loss.setMinimumHeight(300)
+        self.c_loss.placeholder("Train an MLP or CNN to see the loss curve")
+        llay.addWidget(self.c_loss); plots.addWidget(lcard, 1)
+        tcard, tlay = _card("Train-set recovery — true (○) vs predicted (●, colour = accuracy)")
         self.c_tri = Canvas(); self.c_tri.setMinimumHeight(300)
         self.c_tri.placeholder("Train to see composition recovery on the simplex")
-        lay.addWidget(self.c_tri); root.addWidget(card, 1)
+        tlay.addWidget(self.c_tri); plots.addWidget(tcard, 1)
+        root.addLayout(plots, 1)
 
         self.status = QLabel(""); self.status.setObjectName("sub"); root.addWidget(self.status)
 
@@ -239,6 +245,7 @@ class ComposePanel(QWidget):
         self.train_b.setEnabled(True); self.train_b.setText("Train")
         self.save_b.setEnabled(True); self.pbar.setVisible(False); self.cancel_b.setVisible(False)
         self._plot_triangle(rows)
+        self._plot_loss(model.get("train_eval", {}).get("loss", []))
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
         errtxt = f"{err:.0%}" if err == err else "—"
@@ -253,6 +260,19 @@ class ComposePanel(QWidget):
         self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
+
+    def _plot_loss(self, loss):
+        fig = self.c_loss.fig; fig.clear(); ax = fig.add_subplot(111)
+        if loss:
+            ax.plot(range(1, len(loss) + 1), loss, color=TEAL, lw=1.5)
+            ax.set_xlabel("epoch"); ax.set_ylabel("training loss")
+            ax.grid(True, color=FAINT, lw=0.4, alpha=0.5)
+            for s in ("top", "right"):
+                ax.spines[s].set_visible(False)
+        else:
+            ax.text(0.5, 0.5, "no epochs for this method (PLS / RF)", ha="center", va="center",
+                    color=MUTE, transform=ax.transAxes); ax.axis("off")
+        fig.tight_layout(); self.c_loss.draw_idle()
 
     def _plot_triangle(self, rows):
         """Ternary simplex: true (open) → predicted (filled, green=accurate) per mixture."""

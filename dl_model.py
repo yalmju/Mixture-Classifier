@@ -71,7 +71,9 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     if len(subs) < 2:
         raise ValueError("need ≥2 reference substances.")
     X, Xabs, Y, Cabs = [], [], [], []
-    for it in items:
+    for k, it in enumerate(items):
+        if progress and (k % 3 == 0 or k == len(items) - 1):   # breathe during map loading
+            progress(f"loading maps {k + 1}/{len(items)}")
         ratio = it[1]; conc = it[2] if len(it) > 2 else None
         vec = _ratio([float(ratio.get(s, 0.0)) for s in subs])
         if vec.sum() <= 0:
@@ -104,6 +106,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         progress(f"training composition head ({method})")
     def _norm_rows(p):
         p = np.clip(np.asarray(p, float), 0, None); return p / (p.sum(1, keepdims=True) + 1e-12)
+    loss_curve = []
     if method == "pls":
         from sklearn.cross_decomposition import PLSRegression
         nc = max(1, min(int(n_components), len(X) - 1, X.shape[1]))
@@ -119,9 +122,12 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         sm = torch.nn.LogSoftmax(dim=1)
         op = torch.optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-3)
         Xt = torch.tensor(X); Yt = torch.tensor(Y); w = 1.0 + 2.0 * (1.0 - Yt)   # up-weight buried
-        for _ in range(int(epochs)):
+        for ep in range(int(epochs)):
             net.train(); op.zero_grad()
-            (w * (sm(net(Xt)).exp() - Yt).abs()).sum(1).mean().backward(); op.step()
+            l = (w * (sm(net(Xt)).exp() - Yt).abs()).sum(1).mean(); l.backward(); op.step()
+            loss_curve.append(float(l.detach()))
+            if progress and (ep % 10 == 0 or ep == int(epochs) - 1):
+                progress(f"epoch {ep + 1}/{int(epochs)}  loss {loss_curve[-1]:.3f}")
         net.eval()
         with torch.no_grad():
             tp = torch.softmax(net(Xt), 1).numpy()
@@ -129,13 +135,15 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                       "comp_state": {k: v.detach().numpy() for k, v in net.state_dict().items()}}
     else:
         method = "mlp"
-        comp = train_composition(X, Y, len(subs), pretrain=pre, seed=seed, epochs_ft=epochs)
+        comp = train_composition(X, Y, len(subs), pretrain=pre, seed=seed, epochs_ft=epochs,
+                                 progress=progress)
         comp_store = {"method": "mlp",
                       "comp_state": {k: v.cpu().numpy() for k, v in comp["state"].items()},
                       "comp_hidden": (256, 64)}
         from dl_quantify import predict_composition
-        tp = predict_composition(comp, X)
-    train_eval = {"true": np.asarray(Y, float).tolist(), "pred": np.asarray(tp, float).tolist()}
+        tp = predict_composition(comp, X); loss_curve = comp.get("hist", [])
+    train_eval = {"true": np.asarray(Y, float).tolist(), "pred": np.asarray(tp, float).tolist(),
+                  "loss": loss_curve}
 
     uM = None
     have = [i for i in range(len(X)) if Cabs[i] is not None and any(c > 0 for c in Cabs[i])]
@@ -151,8 +159,10 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         op = torch.optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-3)
         Xt = torch.tensor(((Xabs[hv] - mu) / sd).astype(np.float32))
         Yt = torch.tensor((np.log10(np.clip(C[hv], 1e-8, None)) + 6.0).astype(np.float32))
-        for _ in range(epochs):
+        for ep in range(epochs):
             net.train(); op.zero_grad(); ((net(Xt) - Yt) ** 2).mean().backward(); op.step()
+            if progress and ep % 15 == 0:
+                progress(f"concentration head — epoch {ep + 1}/{epochs}")
         net.eval()
         uM = {"state": {k: v.detach().numpy() for k, v in net.state_dict().items()},
               "mu": mu, "sd": sd}

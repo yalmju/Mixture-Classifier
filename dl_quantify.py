@@ -287,9 +287,11 @@ def _spec_net(n_feat, n_comp, hidden=(256, 64)):
 
 
 def train_composition(X, Y, n_comp, *, pretrain=None, epochs_pre=25, epochs_ft=350,
-                      lr=3e-4, seed=0):
+                      lr=3e-4, seed=0, progress=None):
     """Fit spectrum → composition (softmax, L1 loss). ``pretrain=(Xp, Yp)`` warms up on
-    physics-simulated (spectrum, composition) first. Returns a portable model dict."""
+    physics-simulated (spectrum, composition) first. ``progress`` (called every few epochs
+    with a message) both lets a GUI worker breathe and reports the loss. The returned dict
+    carries ``hist`` (per-epoch fine-tune loss) for a learning curve."""
     import torch
     from torch.utils.data import TensorDataset, DataLoader
     X = np.asarray(X, np.float32); Y = np.asarray(Y, np.float32)
@@ -310,14 +312,18 @@ def train_composition(X, Y, n_comp, *, pretrain=None, epochs_pre=25, epochs_ft=3
             net.train()
             for xb, yb in dl:
                 opt.zero_grad(); loss(xb, yb).backward(); opt.step()
+    hist = []
     if len(X):
         opt = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=1e-3)
         Xt = torch.tensor(X); Yt = torch.tensor(Y)
-        for _ in range(epochs_ft):
-            net.train(); opt.zero_grad(); loss(Xt, Yt).backward(); opt.step()
+        for ep in range(epochs_ft):
+            net.train(); opt.zero_grad(); l = loss(Xt, Yt); l.backward(); opt.step()
+            hist.append(float(l.detach()))
+            if progress and (ep % 10 == 0 or ep == epochs_ft - 1):   # breathe + report
+                progress(f"epoch {ep + 1}/{epochs_ft}  loss {hist[-1]:.3f}")
     net.eval()
     return dict(state={k: v.clone() for k, v in net.state_dict().items()},
-                n_feat=n_feat, n_comp=n_comp)
+                n_feat=n_feat, n_comp=n_comp, hist=hist)
 
 
 def predict_composition(model, X):
