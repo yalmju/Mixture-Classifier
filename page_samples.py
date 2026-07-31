@@ -103,10 +103,16 @@ class SamplingPage(QWidget):
         self.chk_mix_uM.stateChanged.connect(lambda _=0: self._save_mix())
         mix_add = QPushButton("Add mixtures…"); mix_add.setObjectName("ghost")
         mix_add.clicked.connect(self._add_mix)
+        mix_split = QPushButton("Split 20% test"); mix_split.setObjectName("ghost")
+        mix_split.setToolTip("mark a fifth of the mixtures as an evenly spread test set "
+                             "(held out of training so the model can be scored on maps it "
+                             "never saw). Edit any Role cell to adjust.")
+        mix_split.clicked.connect(self._split_mix)
         mix_clr = QPushButton("Clear"); mix_clr.setObjectName("ghost")
         mix_clr.clicked.connect(self._clear_mix)
         mhead.addWidget(self.mix_tgl, 1); mhead.addStretch(1)
-        mhead.addWidget(self.chk_mix_uM); mhead.addWidget(mix_add); mhead.addWidget(mix_clr)
+        mhead.addWidget(self.chk_mix_uM); mhead.addWidget(mix_add)
+        mhead.addWidget(mix_split); mhead.addWidget(mix_clr)
         root.addLayout(mhead)
 
         self.mix_files = []
@@ -239,6 +245,25 @@ class SamplingPage(QWidget):
                 else:
                     items.append((self.mix_files[row], ratio))
         return items
+
+    def _split_mix(self, _=False):
+        """Mark every 5th mixture (sorted by name) as test — an even spread rather than a
+        random draw, so the held-out set covers the ratio range instead of clustering."""
+        n = self.mix_table.rowCount()
+        if n < 5:
+            self.status.setText("need ≥5 mixtures to hold out a fifth")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        order = sorted(range(n), key=lambda r: (self.mix_table.item(r, 0).text()
+                                                if self.mix_table.item(r, 0) else ""))
+        self._loading = True
+        for pos, row in enumerate(order):
+            self.mix_table.setItem(row, 2, QTableWidgetItem("test" if pos % 5 == 4 else "train"))
+        self._loading = False
+        self._save_mix()
+        ntest = sum(1 for r in range(n)
+                    if (self.mix_table.item(r, 2) or QTableWidgetItem("")).text() == "test")
+        self.status.setText(f"held out {ntest} of {n} mixtures as test")
+        self.status.setStyleSheet(f"color:{MUTE};")
 
     def _mix_roles(self):
         """{path: "train"|"test"} — 'test' mixtures are an INDEPENDENT batch held out of
