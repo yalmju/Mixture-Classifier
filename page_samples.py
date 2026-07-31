@@ -120,7 +120,8 @@ class SamplingPage(QWidget):
                                          # table can show a reduced ratio without losing scale
         self.mix_table = QTableWidget(0, 3)
         self.mix_table.setHorizontalHeaderLabels(
-            ["mixture file", "true ratio  (e.g. DQ:1, TBZ:3)", "Role (train/test)"])
+            ["mixture file", "true ratio  (e.g. DQ:1, TBZ:3)",
+             "Role — type train / test"])
         mh = self.mix_table.horizontalHeader()
         mh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         mh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -164,8 +165,11 @@ class SamplingPage(QWidget):
 
     def _toggle_mix(self, on):
         self.mix_table.setVisible(on)
+        n = self.mix_table.rowCount()
+        ntest = sum(1 for r in range(n)
+                    if (self.mix_table.item(r, 2) or QTableWidgetItem("")).text().strip() == "test")
         self.mix_tgl.setText(("▾  " if on else "▸  ")
-                             + "Mixtures  (known-ratio, shared with Model / Recovery)")
+                             + f"Mixtures  ({n - ntest} train · {ntest} test — edit any Role cell)")
 
     def _gather_prep(self):
         """Current preprocessing choices as a config dict (trim None if full range)."""
