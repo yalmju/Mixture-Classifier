@@ -57,7 +57,7 @@ from matplotlib.figure import Figure
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout, QSizePolicy
 
 
@@ -230,7 +230,11 @@ QPushButton#ghost {{ background: transparent; color: {INK}; border: 1px solid {L
     border-radius: 8px; padding: 9px 20px; font-size: 14px; }}
 QPushButton#ghost:hover {{ border-color: {TEAL}; }}
 QSpinBox, QDoubleSpinBox {{ background: {PANEL}; color: {INK};
-    border: 1px solid {LINE}; border-radius: 6px; padding: 4px 6px; min-width: 64px; }}
+    border: 1px solid {LINE}; border-radius: 6px; padding: 4px 8px; min-width: 76px; }}
+/* no steppers: the arrows are a tiny target and invite clicking a value up one
+   step at a time. Type the number instead — arrow keys and the wheel still work. */
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 0px; border: none; }}
 QComboBox {{ background: {PANEL}; color: {INK}; border: 1px solid {LINE};
     border-radius: 6px; padding: 4px 8px; min-width: 128px; }}
 QComboBox::drop-down {{ border: none; width: 18px; }}
@@ -373,6 +377,17 @@ def _card(title):
 # is destroyed while it is still running, so the thread must outlive the job and
 # be joined before the app quits. These two helpers are the only place that
 # lifecycle is spelled out; pages call them instead of hand-rolling it.
+def type_in_spinboxes(root):
+    """Drop the stepper arrows from every spin box under ``root`` and let the value be
+    typed. Purely presentational — range and step are untouched, so the wheel and the
+    arrow keys still step by the same amount."""
+    from PyQt6.QtWidgets import QAbstractSpinBox
+    for sb in root.findChildren(QAbstractSpinBox):
+        sb.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        sb.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        sb.setKeyboardTracking(False)      # act on the finished number, not each keypress
+
+
 def start_worker(owner, worker, *, done=None, fail=None, progress=None):
     """Run `worker.run()` on a fresh QThread owned by `owner`.
 
@@ -462,5 +477,5 @@ __all__ = [
     "AMBER", "CORAL", "PURPLE", "PINK", "GREEN", "RED", "TNGRAY",
     "SERIES", "CM_CMAP", "Canvas", "Kpi", "_card", "_save_figs", "EXPORT_DPI",
     "COLOR_BUS", "MODEL_BUS", "MIXTURE_BUS", "set_substance_colors", "substance_colors",
-    "substance_color", "start_worker", "stop_worker", "worker_busy",
+    "substance_color", "start_worker", "stop_worker", "worker_busy", "type_in_spinboxes",
 ]

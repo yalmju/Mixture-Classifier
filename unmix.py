@@ -333,8 +333,16 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         hit = bg_score < bg_thr
         hit_rule = f"measured background map (match < {bg_thr:.2f})"
     elif dl_blank:
-        hit = ~bg_mask[A.argmax(axis=1)]
-        hit_rule = f"composition model's {dl_model['blank']} channel (per pixel)"
+        # Compare the blank channel with the substances TOGETHER, not by argmax. The
+        # model splits its probability across every compound but keeps one blank
+        # channel, so on a genuinely mixed pixel three thirds each lose to a single
+        # blank — argmax called a pixel that is 65% substance "background", and the
+        # more evenly mixed the sample the worse the bias. A pixel is background when
+        # blank alone outweighs everything else.
+        blk = A[:, bg_mask].sum(axis=1)
+        hit = blk < A[:, nonbg].sum(axis=1)
+        hit_rule = (f"composition model's {dl_model['blank']} channel vs the substances "
+                    "(per pixel)")
     elif hit_mode == "auto":                          # BLK-based: strongest wins
         hit = ~bg_mask[A.argmax(axis=1)]
         hit_rule = "strongest component is a substance (auto)"

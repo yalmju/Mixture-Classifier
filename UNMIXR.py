@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
 
 from ui_common import (APP_NAME, VERSION, ICON_PATH, QSS, INK, COLOR_BUS,
                        set_substance_colors, substance_colors, substance_color,
-                       stop_worker)
+                       stop_worker, type_in_spinboxes)
 from dataset import discover_dataset, load_colors, save_colors
 from page_samples import SamplingPage
 from page_model import ModelPage
@@ -108,6 +108,8 @@ class MainWindow(QMainWindow):
         }
         for key in ("samples", "model", "valid", "quant", "real"):
             self.stack.addWidget(self.pages[key])
+        for page in self.pages.values():          # type numbers instead of clicking arrows
+            type_in_spinboxes(page)
 
         self.select("samples")
 
