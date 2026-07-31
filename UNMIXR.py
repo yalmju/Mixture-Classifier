@@ -22,14 +22,15 @@ import sys
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QIcon, QPixmap, QColor
+from PyQt6.QtGui import QFontDatabase, QIcon, QPixmap, QColor
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QFrame,
     QHBoxLayout, QVBoxLayout, QStackedWidget, QColorDialog,
 )
 
 from ui_common import (APP_NAME, VERSION, ICON_PATH, QSS, INK, COLOR_BUS,
-                       set_substance_colors, substance_colors, substance_color)
+                       set_substance_colors, substance_colors, substance_color,
+                       stop_worker)
 from dataset import discover_dataset, load_colors, save_colors
 from page_samples import SamplingPage
 from page_model import ModelPage
@@ -169,6 +170,18 @@ class MainWindow(QMainWindow):
         COLOR_BUS.changed.emit()                           # recolour every page
         self._refresh_colors()
 
+    # ---- shutdown --------------------------------------------------------
+    def closeEvent(self, event):
+        """Join every page's background job before the window goes away.
+
+        Qt aborts the process (exit code 0xC0000409 on Windows) if a QThread is
+        destroyed while still running, so closing the app mid-train must wait for
+        the worker instead of tearing it down underneath itself.
+        """
+        for page in self.pages.values():
+            stop_worker(page)
+        super().closeEvent(event)
+
 
 def main():
     # Point Qt at its bundled platform plugins. Fixes the macOS start-up error
@@ -193,7 +206,11 @@ def main():
             pass
     app = QApplication(sys.argv)
     app.setStyleSheet(QSS)
-    app.setFont(QFont("Segoe UI" if sys.platform == "win32" else "", 10))
+    # the real OS UI font: Segoe UI on Windows, SF Pro on macOS, the desktop's
+    # font on Linux — hardcoding "Segoe UI" left mac/Linux on a Qt fallback
+    ui_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+    ui_font.setPointSize(10)
+    app.setFont(ui_font)
     if os.path.exists(ICON_PATH):
         app.setWindowIcon(QIcon(ICON_PATH))
     win = MainWindow()

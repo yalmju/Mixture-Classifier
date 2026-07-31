@@ -9,7 +9,7 @@ import traceback
 
 import numpy as np
 
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QFileDialog, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
@@ -522,6 +522,8 @@ class ValidatePage(QWidget):
 
     # ---- run ----
     def _run(self):
+        if worker_busy(self):                             # already running — ignore
+            return
         items = self._items()
         if len(items) < 1:
             self.status.setText("add ≥1 mixture with a true ratio (e.g. DQ:1, TBZ:3)")
@@ -546,15 +548,8 @@ class ValidatePage(QWidget):
         self._cancelled = False; self.cancel_btn.setVisible(True)
         self.status.setText("● starting…"); self.status.setStyleSheet(f"color:{MUTE};")
         self.progbar.setRange(0, 0); self.progbar.setVisible(True)   # busy indicator
-        self._thread = QThread(); self._worker = ValidateWorker(params)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(lambda m: self.status.setText("● " + m))
-        self._worker.done.connect(self._apply)
-        self._worker.fail.connect(self._error)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.fail.connect(self._thread.quit)
-        self._thread.start()
+        start_worker(self, ValidateWorker(params), done=self._apply, fail=self._error,
+                     progress=lambda m: self.status.setText("● " + m))
 
     def _cancel(self):
         """Stop whichever background job is running and free the UI."""

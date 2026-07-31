@@ -7,7 +7,7 @@ import traceback
 
 import numpy as np
 
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QSpinBox, QCheckBox, QLineEdit, QFileDialog, QDialog, QDialogButtonBox,
@@ -882,6 +882,8 @@ class QuantifyPage(QWidget):
         write_readme(d, "UNMIXR — Calibration export", sections, figures)
 
     def _run(self):
+        if worker_busy(self):                             # already running — ignore
+            return
         # the per-compound peaks box (filled by VIP / Best R² / Pick) drives the fit
         peak_map = self._peaks_from_text()
         params = dict(cal=self._cal,
@@ -891,14 +893,7 @@ class QuantifyPage(QWidget):
                       baseline=not self.chk_baselined.isChecked(),
                       blank=self._load_blank())     # Samples BLK → blank-based LOD
         self.btn.setEnabled(False); self.btn.setText("Working…")
-        self._thread = QThread(); self._worker = QuantWorker(params)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.done.connect(self._apply)
-        self._worker.fail.connect(self._error)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.fail.connect(self._thread.quit)
-        self._thread.start()
+        start_worker(self, QuantWorker(params), done=self._apply, fail=self._error)
 
     def _error(self, tb):
         self.btn.setEnabled(True); self.btn.setText("Calibrate + quantify")

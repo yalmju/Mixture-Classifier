@@ -9,7 +9,7 @@ import traceback
 import numpy as np
 from matplotlib.patches import Patch
 
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QSpinBox, QComboBox, QCheckBox, QFileDialog, QProgressBar, QScrollArea,
@@ -354,6 +354,8 @@ class ModelPage(QWidget):
 
     # ---- training ----
     def _train(self):
+        if worker_busy(self):                             # already training — ignore
+            return
         cfg = load_preprocess(self.pest_dir)              # preprocessing set in Samples
         self._refresh_prep()
         params = dict(pest_dir=self.pest_dir, backend=self.cmb.currentData(),
@@ -373,16 +375,8 @@ class ModelPage(QWidget):
         self.btn.setEnabled(False); self.btn.setText("Training…")
         self.c_curve.placeholder("Training…")
         self.pbar.setVisible(True); self.pbar.setRange(0, 0)   # busy until first step
-        self._thread = QThread()
-        self._worker = TrainWorker(params)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._progress)
-        self._worker.done.connect(self._apply)
-        self._worker.fail.connect(self._error)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.fail.connect(self._thread.quit)
-        self._thread.start()
+        start_worker(self, TrainWorker(params), done=self._apply,
+                     fail=self._error, progress=self._progress)
 
     def _progress(self, msg):
         # live status so a long run reads as working, not frozen

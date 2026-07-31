@@ -34,20 +34,36 @@ def _train_subprocess(params, q):
         if _here not in _sys.path:                        # spawn may not inherit sys.path
             _sys.path.insert(0, _here)
         params = dict(params); items = params.pop("items")
+
+        def _accepted(fn, kw):
+            """Keep only the keywords ``fn`` actually declares. One options dict feeds
+            train_model, benchmark_loo and kfold_stability, and their signatures differ —
+            benchmark_loo takes `methods`, not `method`, and knows nothing about
+            `include_blank`. Passing the dict wholesale raised TypeError inside the
+            worker process, which surfaced as the run dying rather than as a message."""
+            import inspect
+            sig = inspect.signature(fn).parameters
+            if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.values()):
+                return dict(kw)                       # **kw absorbs anything
+            return {k: v for k, v in kw.items() if k in sig}
+
         if params.pop("_kfold", False):
             from dl_model import kfold_stability
             folds = params.pop("folds", 5); params.pop("loo", None); params.pop("test_items", None)
             q.put(("kfold", kfold_stability(items=items, folds=folds,
-                                            progress=lambda s: q.put(("progress", s)), **params)))
+                                            progress=lambda s: q.put(("progress", s)),
+                                            **_accepted(kfold_stability, params))))
             return
         if params.pop("_benchmark", False):
             from dl_model import benchmark_loo
             params.pop("loo", None)
             q.put(("bench", benchmark_loo(items=items,
-                                          progress=lambda s: q.put(("progress", s)), **params)))
+                                          progress=lambda s: q.put(("progress", s)),
+                                          **_accepted(benchmark_loo, params))))
             return
         from dl_model import train_model
-        model = train_model(items=items, progress=lambda s: q.put(("progress", s)), **params)
+        model = train_model(items=items, progress=lambda s: q.put(("progress", s)),
+                            **_accepted(train_model, params))
         q.put(("done", model))
     except Exception:
         import traceback
@@ -337,15 +353,9 @@ class ComposePanel(QWidget):
         self.save_b.setEnabled(False); self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
         self.status.setText("● training…"); self.status.setStyleSheet(f"color:{MUTE};")
-        self._thread = QThread(); self._worker = TrainComposeWorker(params)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(lambda m: self.status.setText("● " + m))
-        self._worker.done.connect(self._done)
-        self._worker.fail.connect(self._fail)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.fail.connect(self._thread.quit)
-        self._thread.start()
+        start_worker(self, TrainComposeWorker(params), done=self._done,
+                     fail=self._fail,
+                     progress=lambda m: self.status.setText("● " + m))
 
     def _kfold(self):
         """Repeat the held-out check over every 1-in-5 split for the chosen method."""
@@ -360,15 +370,9 @@ class ComposePanel(QWidget):
         self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
         self.status.setText("● 5-fold held-out check…"); self.status.setStyleSheet(f"color:{MUTE};")
-        self._thread = QThread(); self._worker = TrainComposeWorker(params)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(lambda m: self.status.setText("● " + m))
-        self._worker.done.connect(self._done)
-        self._worker.fail.connect(self._fail)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.fail.connect(self._thread.quit)
-        self._thread.start()
+        start_worker(self, TrainComposeWorker(params), done=self._done,
+                     fail=self._fail,
+                     progress=lambda m: self.status.setText("● " + m))
 
     def _done_kfold(self, res):
         import numpy as _np
@@ -401,15 +405,9 @@ class ComposePanel(QWidget):
         self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
         self.status.setText("● leave-one-out benchmark…"); self.status.setStyleSheet(f"color:{MUTE};")
-        self._thread = QThread(); self._worker = TrainComposeWorker(params)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(lambda m: self.status.setText("● " + m))
-        self._worker.done.connect(self._done)
-        self._worker.fail.connect(self._fail)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.fail.connect(self._thread.quit)
-        self._thread.start()
+        start_worker(self, TrainComposeWorker(params), done=self._done,
+                     fail=self._fail,
+                     progress=lambda m: self.status.setText("● " + m))
 
     def _reset_buttons(self):
         self.train_b.setEnabled(True); self.train_b.setText("Train")

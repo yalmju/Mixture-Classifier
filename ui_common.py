@@ -4,6 +4,7 @@ Imported by every page module and by unmixr.py."""
 from __future__ import annotations
 
 import os
+import sys
 
 import matplotlib
 matplotlib.use("QtAgg")
@@ -12,12 +13,26 @@ from matplotlib.figure import Figure
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout, QSizePolicy
 
 
 APP_NAME = "UNMIXR"
 VERSION = "1.0"
+
+# ---- cross-platform UI font stacks ---------------------------------------
+# Segoe UI / Consolas are Windows-only; naming them alone leaves macOS and Linux
+# on an arbitrary Qt fallback. Each platform leads with its own system UI font
+# and keeps the others as fallbacks, so one stylesheet looks native everywhere.
+if sys.platform == "darwin":
+    UI_FONT = "'SF Pro Text', 'Helvetica Neue', Helvetica, Arial"
+    MONO_FONT = "'SF Mono', Menlo, Monaco, monospace"
+elif sys.platform.startswith("win"):
+    UI_FONT = "'Segoe UI', Arial"
+    MONO_FONT = "Consolas, 'Courier New', monospace"
+else:
+    UI_FONT = "'Ubuntu', 'Noto Sans', 'DejaVu Sans', Arial"
+    MONO_FONT = "'Ubuntu Mono', 'DejaVu Sans Mono', monospace"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # App icon: drop a PNG at assets/icon.png and it is picked up automatically.
 ICON_PATH = os.path.join(BASE_DIR, "assets", "icon.png")
@@ -145,12 +160,12 @@ matplotlib.rcParams.update({
 
 QSS = f"""
 QMainWindow, QWidget {{ background: {PAGE}; color: {INK};
-    font-family: 'Segoe UI', Arial; font-size: 14px; }}
+    font-family: {UI_FONT}; font-size: 14px; }}
 #topbar {{ background: {PANEL}; border-bottom: 1px solid {LINE}; }}
 #wordmark {{ font-size: 18px; font-weight: 600; color: {INK}; }}
 #logo {{ background: {TEAL}; color: #ffffff; font-size: 15px; font-weight: 700;
     border-radius: 8px; }}
-#status {{ color: {FAINT}; font-family: 'Consolas', monospace; font-size: 12px; }}
+#status {{ color: {FAINT}; font-family: {MONO_FONT}; font-size: 12px; }}
 QPushButton#nav {{ background: transparent; color: {MUTE}; border: none;
     padding: 8px 18px; border-radius: 8px; font-size: 14px; }}
 QPushButton#nav:hover {{ background: {CARD}; color: {INK}; }}
@@ -306,11 +321,102 @@ def _card(title):
     return frame, lay
 
 
+# --------------------------------------------------------------------------
+# background worker lifecycle
+# --------------------------------------------------------------------------
+# Every long job (train / unmix / calibrate / validate) runs on its own QThread.
+# Qt aborts the whole process — exit code 0xC0000409 on Windows — if a QThread
+# is destroyed while it is still running, so the thread must outlive the job and
+# be joined before the app quits. These two helpers are the only place that
+# lifecycle is spelled out; pages call them instead of hand-rolling it.
+def start_worker(owner, worker, *, done=None, fail=None, progress=None):
+    """Run `worker.run()` on a fresh QThread owned by `owner`.
+
+    Keeps strong references on `owner` (`_thread` / `_worker`) for as long as the
+    job runs, so neither object can be garbage-collected mid-flight. Returns
+    False without starting anything when a job is already in flight — otherwise a
+    second click would rebind `owner._thread` and drop the last reference to the
+    live thread, which is what makes Qt abort.
+    """
+    old = getattr(owner, "_thread", None)
+    if old is not None:
+        try:
+            if old.isRunning():
+                return False
+        except RuntimeError:            # C++ side already gone; safe to replace
+            pass
+
+    thread = QThread()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    if progress is not None and hasattr(worker, "progress"):
+        worker.progress.connect(progress)
+    if done is not None:
+        worker.done.connect(done)
+    if fail is not None:
+        worker.fail.connect(fail)
+    # stop the thread's event loop once the job reports either way
+    worker.done.connect(thread.quit)
+    worker.fail.connect(thread.quit)
+    # ...and only tear the objects down after that loop has actually stopped
+    thread.finished.connect(worker.deleteLater)
+    thread.finished.connect(thread.deleteLater)
+    thread.finished.connect(lambda: _clear_worker(owner))
+
+    owner._thread = thread
+    owner._worker = worker
+    thread.start()
+    return True
+
+
+def _clear_worker(owner):
+    """Drop the finished thread/worker refs so the next run starts clean."""
+    owner._thread = None
+    owner._worker = None
+
+
+def worker_busy(owner):
+    """True while `owner`'s background job is still running.
+
+    Pages check this before touching their UI so a click during a run is a clean
+    no-op rather than a half-applied "Working…" state.
+    """
+    thread = getattr(owner, "_thread", None)
+    if thread is None:
+        return False
+    try:
+        return thread.isRunning()
+    except RuntimeError:                # C++ side already gone
+        return False
+
+
+def stop_worker(owner, timeout_ms=15000):
+    """Join `owner`'s worker thread if one is running.
+
+    Call this from closeEvent: quitting the app while a job is still running
+    destroys a live QThread, which aborts the process instead of exiting.
+    """
+    thread = getattr(owner, "_thread", None)
+    if thread is None:
+        return
+    try:
+        running = thread.isRunning()
+    except RuntimeError:                # already deleted — nothing to join
+        owner._thread = None
+        return
+    if not running:
+        return
+    thread.quit()
+    if not thread.wait(timeout_ms):     # job ignores quit() (tight numeric loop)
+        thread.terminate()
+        thread.wait(2000)
+
+
 __all__ = [
     "APP_NAME", "VERSION", "BASE_DIR", "ICON_PATH", "QSS",
     "PAGE", "PANEL", "CARD", "LINE", "INK", "MUTE", "FAINT", "TEAL", "BLUE",
     "AMBER", "CORAL", "PURPLE", "PINK", "GREEN", "RED", "TNGRAY",
     "SERIES", "CM_CMAP", "Canvas", "Kpi", "_card", "_save_figs", "EXPORT_DPI",
     "COLOR_BUS", "MODEL_BUS", "MIXTURE_BUS", "set_substance_colors", "substance_colors",
-    "substance_color",
+    "substance_color", "start_worker", "stop_worker", "worker_busy",
 ]
