@@ -132,9 +132,23 @@ class ComposePanel(QWidget):
         frow.addWidget(self.mix_lbl); frow.addWidget(reload_b)
         root.addLayout(frow)
 
-        # ---- method + per-method sub-parameters (auto-shown) ----
+        # ---- step 1: which method? (leave-one-out comparison, trains nothing) ----
+        brow = QHBoxLayout(); brow.setSpacing(8)
+        blbl = QLabel("1 · compare methods:"); blbl.setObjectName("field")
+        self.bench_b = QPushButton("Benchmark (LOO)"); self.bench_b.setObjectName("ghost")
+        self.bench_b.setToolTip("score NNLS / PLS / RF / 1D-CNN / MLP on the same mixtures "
+                                "with leave-one-out — composition error and detection ROC. "
+                                "Tells you which method to train; saves no model.")
+        self.bench_b.clicked.connect(self._benchmark)
+        self.bench_lbl = QLabel("run this first to see which method fits your data")
+        self.bench_lbl.setObjectName("field")
+        brow.addWidget(blbl); brow.addWidget(self.bench_b)
+        brow.addWidget(self.bench_lbl, 1)
+        root.addLayout(brow)
+
+        # ---- step 2: train the model that gets deployed ----
         mrow = QHBoxLayout(); mrow.setSpacing(8)
-        mlbl = QLabel("method:"); mlbl.setObjectName("field")
+        mlbl = QLabel("2 · train:"); mlbl.setObjectName("field")
         self.cmb = QComboBox(); self.cmb.setObjectName("field")
         for text, data in self.METHODS:
             self.cmb.addItem(text, data)
@@ -159,11 +173,6 @@ class ComposePanel(QWidget):
         self.cancel_b.setVisible(False); self.cancel_b.clicked.connect(self._cancel)
         self.save_b = QPushButton("Save model…"); self.save_b.setObjectName("ghost")
         self.save_b.setEnabled(False); self.save_b.clicked.connect(self._save)
-        self.bench_b = QPushButton("Benchmark (LOO)"); self.bench_b.setObjectName("ghost")
-        self.bench_b.setToolTip("compare PLS / RF / 1D-CNN / MLP on the same mixtures under "
-                                "leave-one-out — composition error, detection ROC and AUC")
-        self.bench_b.clicked.connect(self._benchmark)
-        mrow.addWidget(self.bench_b)
         self.export_b = QPushButton("Export…"); self.export_b.setObjectName("ghost")
         self.export_b.setEnabled(False); self.export_b.clicked.connect(self._export)
         self.export_b.setToolTip("write the plots (PNG), the per-mixture predictions and the "
@@ -213,11 +222,13 @@ class ComposePanel(QWidget):
         self.c_err = Canvas(); self.c_err.setMinimumHeight(300)
         self.c_err.placeholder("Train to see the per-substance error")
         elay.addWidget(self.c_err); plots2.addWidget(ecard, 1)
+        self._err_title = elay.itemAt(0).widget()
         rcard, rlay = _card("Detection ROC — is each substance present? "
                             "(threshold the predicted fraction)")
         self.c_roc = Canvas(); self.c_roc.setMinimumHeight(300)
         self.c_roc.placeholder("Train to see the detection ROC / AUC")
         rlay.addWidget(self.c_roc); plots2.addWidget(rcard, 1)
+        self._roc_title = rlay.itemAt(0).widget()
         root.addLayout(plots2, 1)
 
         self.status = QLabel(""); self.status.setObjectName("sub"); root.addWidget(self.status)
@@ -336,6 +347,9 @@ class ComposePanel(QWidget):
         methods = [m for m in ("nnls", "pls", "rf", "cnn", "mlp") if m in bench]
         label = {"nnls": "NNLS", "pls": "PLS", "rf": "RF", "cnn": "1D-CNN", "mlp": "MLP"}
         self._bench = {}
+        self._err_title.setText("Method comparison — composition error, leave-one-out "
+                                "(lower = better)")
+        self._roc_title.setText("Method comparison — detection ROC, leave-one-out")
         ax = self.c_err.new_ax()                            # error bar chart per method
         errs, aucs = [], {}
         for m in methods:
@@ -396,6 +410,10 @@ class ComposePanel(QWidget):
         self._rows = rows
         self._plot_triangle(rows)
         self._plot_loss(model.get("train_eval", {}).get("loss", []))
+        self._err_title.setText("Per-substance error — mean |predicted − true| fraction "
+                                "(lower = better)")
+        self._roc_title.setText("Detection ROC — is each substance present? "
+                                "(threshold the predicted fraction)")
         self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
         self.export_b.setEnabled(True)
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
