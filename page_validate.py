@@ -24,7 +24,7 @@ from ui_common import *
 from real_data import PEST_DEFAULT
 from dataset import load_preprocess
 from io_utils import write_csv, write_readme
-from validate import validate_mixtures, parse_mixture_label, parse_amount
+from validate import validate_mixtures, parse_mixture_label, parse_amount, simplify_ratio
 from composition import compute_composition, SUBSTANCES, bary, composition_distance
 
 
@@ -355,7 +355,7 @@ class ValidatePage(QWidget):
             f_item.setFlags(f_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 0, f_item)
             self.table.setItem(row, 1, QTableWidgetItem(
-                ", ".join(f"{k}:{v:.3g}" for k, v in it[1].items())))
+                ", ".join(f"{k}:{v:.3g}" for k, v in simplify_ratio(it[1]).items())))
         self.status.setText(f"{len(items)} mixtures from Samples — Validate, or add more")
         self.status.setStyleSheet(f"color:{MUTE};")
 
@@ -441,6 +441,7 @@ class ValidatePage(QWidget):
 
     def _guess(self, path, refs, base):
         g = parse_mixture_label(os.path.splitext(os.path.basename(path))[0], refs, base)
+        g = simplify_ratio(g) if g else g          # show 300:100 as 3:1
         return ", ".join(f"{k}:{v:.3g}" for k, v in g.items()) if g else ""
 
     def _reparse(self):

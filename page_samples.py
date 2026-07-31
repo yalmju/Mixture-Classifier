@@ -15,7 +15,7 @@ from real_data import PEST_DEFAULT
 from dataset import (discover_references, base_and_batch, load_manifest,
                      save_manifest, map_pixel_count, load_preprocess,
                      save_preprocess, load_mixture_list, save_mixture_list)
-from validate import parse_mixture_label
+from validate import parse_mixture_label, simplify_ratio
 
 
 # --------------------------------------------------------------------------
@@ -109,6 +109,8 @@ class SamplingPage(QWidget):
         root.addLayout(mhead)
 
         self.mix_files = []
+        self.mix_amounts = []            # per row: the ORIGINAL parsed amounts (µM), so the
+                                         # table can show a reduced ratio without losing scale
         self.mix_table = QTableWidget(0, 2)
         self.mix_table.setHorizontalHeaderLabels(["mixture file", "true ratio  (e.g. DQ:1, TBZ:3)"])
         mh = self.mix_table.horizontalHeader()
@@ -194,6 +196,8 @@ class SamplingPage(QWidget):
             it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.mix_table.setItem(row, 0, it0)
             g = parse_mixture_label(os.path.splitext(os.path.basename(p))[0], refs)
+            self.mix_amounts.append(dict(g) if g else {})   # ORIGINAL amounts (µM) kept
+            g = simplify_ratio(g) if g else g               # table shows 300:100 as 3:1
             txt = ", ".join(f"{k}:{v:.3g}" for k, v in g.items()) if g else ""
             self.mix_table.setItem(row, 1, QTableWidgetItem(txt))
         self._loading = False
@@ -223,7 +227,11 @@ class SamplingPage(QWidget):
                     pass
             if len(ratio) >= 2:
                 if self.chk_mix_uM.isChecked():
-                    items.append((self.mix_files[row], ratio, {k: v * 1e-6 for k, v in ratio.items()}))
+                    # µM must come from the ORIGINAL amounts — the table ratio is reduced
+                    amt = self.mix_amounts[row] if row < len(self.mix_amounts) else {}
+                    amt = amt or ratio
+                    items.append((self.mix_files[row], ratio,
+                                  {k: float(v) * 1e-6 for k, v in amt.items() if float(v) > 0}))
                 else:
                     items.append((self.mix_files[row], ratio))
         return items
@@ -242,7 +250,7 @@ class SamplingPage(QWidget):
 
     def _load_mix(self):
         self._loading = True
-        self.mix_table.setRowCount(0); self.mix_files = []
+        self.mix_table.setRowCount(0); self.mix_files = []; self.mix_amounts = []
         items = load_mixture_list(self.data_dir)
         self.chk_mix_uM.setChecked(any(len(it) > 2 and it[2] for it in items))
         seen = set()
@@ -252,12 +260,16 @@ class SamplingPage(QWidget):
                 continue
             seen.add(key)
             self.mix_files.append(it[0])
+            # absolute amounts (µM) come from the stored concentrations when present
+            conc = it[2] if len(it) > 2 and it[2] else None
+            self.mix_amounts.append({k: v * 1e6 for k, v in conc.items()} if conc
+                                    else dict(it[1]))
             row = self.mix_table.rowCount(); self.mix_table.insertRow(row)
             it0 = QTableWidgetItem(os.path.basename(it[0]))
             it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.mix_table.setItem(row, 0, it0)
             self.mix_table.setItem(row, 1, QTableWidgetItem(
-                ", ".join(f"{k}:{v:.3g}" for k, v in it[1].items())))
+                ", ".join(f"{k}:{v:.3g}" for k, v in simplify_ratio(it[1]).items())))
         self._loading = False
 
     def _load_prep(self):

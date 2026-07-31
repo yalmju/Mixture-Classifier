@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 from ui_common import *
 from real_data import PEST_DEFAULT
 from dataset import load_mixture_list
+from validate import simplify_ratio
 
 
 def _train_subprocess(params, q):
@@ -233,7 +234,7 @@ class ComposePanel(QWidget):
             row = self.table.rowCount(); self.table.insertRow(row)
             self.table.setItem(row, 0, QTableWidgetItem(os.path.basename(it[0])))
             self.table.setItem(row, 1, QTableWidgetItem(
-                ", ".join(f"{k}:{v:.3g}" for k, v in it[1].items())))
+                ", ".join(f"{k}:{v:.3g}" for k, v in simplify_ratio(it[1]).items())))
         n = len(self._items_cache)
         has_uM = any(len(it) > 2 and it[2] for it in self._items_cache)
         self.mix_lbl.setText(f"mixtures: {n} from Samples" + (" · µM" if has_uM else ""))

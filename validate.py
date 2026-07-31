@@ -98,6 +98,26 @@ def parse_mixture_label(basename, ref_names, base=None):
     return out if matched else None
 
 
+def simplify_ratio(ratio):
+    """Reduce a parsed amount dict to the smallest whole-number ratio: {DQ:300, THI:100}
+    → {DQ:3, THI:1}, {THI:1000, TBZ:1000, DQ:10} → {THI:100, TBZ:100, DQ:1}. Only the
+    RATIO is reduced — absolute concentrations (µM) must be kept separately, since
+    reducing throws the magnitude away. Non-integer amounts are scaled by the smallest
+    value instead. Returns a new dict in the original key order."""
+    vals = [float(v) for v in ratio.values() if float(v) > 0]
+    if not vals:
+        return dict(ratio)
+    if all(abs(v - round(v)) < 1e-9 for v in vals):
+        from math import gcd
+        g = 0
+        for v in vals:
+            g = gcd(g, int(round(v)))
+        g = g or 1
+        return {k: (float(v) / g if float(v) > 0 else 0.0) for k, v in ratio.items()}
+    m = min(vals)
+    return {k: (float(v) / m if float(v) > 0 else 0.0) for k, v in ratio.items()}
+
+
 def _response_factors(rows, names):
     """Relative response factor per substance from the observed-vs-true fractions.
     r_i / r_ref = geometric mean over mixtures of (obs_i/obs_ref)·(t_ref/t_i). The
