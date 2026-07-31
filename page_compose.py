@@ -163,10 +163,16 @@ class ComposePanel(QWidget):
         self.sp_seed.setObjectName("field")
         self.sp_nc = QSpinBox(); self.sp_nc.setRange(1, 20); self.sp_nc.setValue(8)
         self.sp_nc.setPrefix("components "); self.sp_nc.setObjectName("field")
+        self.sp_px = QSpinBox(); self.sp_px.setRange(0, 400); self.sp_px.setSingleStep(20)
+        self.sp_px.setValue(0); self.sp_px.setPrefix("pixels/map "); self.sp_px.setObjectName("field")
+        self.sp_px.setToolTip("extra training rows per map: 0 = one mean spectrum per map "
+                              "(34 rows total), higher = also use that many of the brightest "
+                              "individual pixels, all labelled with the map's ratio. More rows "
+                              "fight overfitting; splits stay grouped by map either way.")
         self.sp_nt = QSpinBox(); self.sp_nt.setRange(20, 1000); self.sp_nt.setSingleStep(20)
         self.sp_nt.setValue(300); self.sp_nt.setPrefix("trees "); self.sp_nt.setObjectName("field")
         mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
-        for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt):
+        for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px):
             mrow.addWidget(w)
         mrow.addStretch(1)
         self.train_b = QPushButton("Train"); self.train_b.setObjectName("primary")
@@ -286,6 +292,7 @@ class ComposePanel(QWidget):
         self.sp_seed.setVisible(m in ("mlp", "cnn", "rf"))
         self.sp_nc.setVisible(m == "pls")
         self.sp_nt.setVisible(m == "rf")
+        self.sp_px.setVisible(True)          # applies to every method
 
     def _opts(self):
         from dataset import load_preprocess
@@ -294,7 +301,8 @@ class ComposePanel(QWidget):
                     baseline=cfg["baseline"], trim=cfg["trim"],
                     method=self.cmb.currentData(), epochs=self.sp_ep.value(),
                     seed=self.sp_seed.value(), use_pretrain=False,
-                    n_components=self.sp_nc.value(), n_trees=self.sp_nt.value())
+                    n_components=self.sp_nc.value(), n_trees=self.sp_nt.value(),
+                    px_per_map=self.sp_px.value())
 
     def _train(self):
         items = self._items_cache

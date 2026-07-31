@@ -81,6 +81,26 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
     return p / (p.sum(1, keepdims=True) + 1e-12)
 
 
+def _map_spectra(cube, mask, n_px=0):
+    """Spectra to train on for ONE map. ``n_px``=0 keeps the historic behaviour (a single
+    intensity-weighted mean). ``n_px``>0 also returns that many individual pixels — the
+    brightest ones, which carry the SERS signal rather than blank substrate — each
+    baseline-corrected. The map's known ratio labels all of them, so a 400-pixel map
+    contributes hundreds of training examples instead of one; splits must stay GROUPED BY
+    MAP or pixels of the same map would leak across the split."""
+    from sers_mixture import als_baseline
+    cube = np.asarray(cube, float)[:, mask]
+    w = cube.sum(1); wn_ = w / (w.sum() + 1e-12)
+    mean = wn_ @ cube
+    out = [np.clip(mean - als_baseline(mean), 0, None)]
+    if n_px and len(cube) > 1:
+        order = np.argsort(-w)                       # brightest first
+        for i in order[:int(n_px)]:
+            y = cube[i]
+            out.append(np.clip(y - als_baseline(y), 0, None))
+    return out
+
+
 def _mean_spectrum(cube, mask):
     cube = np.asarray(cube, float)[:, mask]
     w = cube.sum(1); w = w / (w.sum() + 1e-12)
@@ -91,7 +111,7 @@ def _mean_spectrum(cube, mask):
 
 def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                 method="mlp", epochs=350, seed=0, use_pretrain=True,
-                n_components=8, n_trees=300, loo=False, test_items=None):
+                n_components=8, n_trees=300, loo=False, test_items=None, px_per_map=0):
     """Train a composition model (+ µM if absolute concentrations given) on ALL mixtures.
     items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
 
@@ -116,11 +136,14 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         if vec.sum() <= 0:
             continue
         _w, cube, _m, _c = load_map(it[0])
-        ya = _mean_spectrum(cube, mask)
-        X.append(ya / (np.linalg.norm(ya) + 1e-12)); Xabs.append(ya); Y.append(vec)
-        paths.append(it[0])
-        Cabs.append([float(conc.get(s, 0.0)) for s in subs] if conc else None)
+        for j, ya in enumerate(_map_spectra(cube, mask, px_per_map)):
+            X.append(ya / (np.linalg.norm(ya) + 1e-12)); Y.append(vec)
+            paths.append(it[0])                       # group key: the MAP, not the row
+            if j == 0:                                # µM head stays on the map mean
+                Xabs.append(ya)
+                Cabs.append([float(conc.get(s, 0.0)) for s in subs] if conc else None)
     X = np.array(X, np.float32); Xabs = np.array(Xabs); Y = np.array(Y, np.float32)
+    paths = np.array(paths, object)
     if len(X) < 3:
         raise ValueError("need ≥3 mixtures to train.")
 
@@ -205,24 +228,27 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
 
     loo_eval = None
     if loo and test_eval is None and len(X) >= 3:                     # honest metrics: predict each held-out mixture
-        P_loo = np.zeros_like(np.asarray(Y, float))
-        for i in range(len(X)):
+        uniq = list(dict.fromkeys(paths.tolist()))     # leave one MAP out, not one row
+        tv, pv, pl = [], [], []
+        for i, mp in enumerate(uniq):
             if progress:
-                progress(f"leave-one-out {i + 1}/{len(X)}")
-            tr = [j for j in range(len(X)) if j != i]
-            P_loo[i] = _fit_predict(method, X[tr], Y[tr], X[i], pre=pre, epochs=epochs,
-                                    seed=seed + i, n_components=n_components,
-                                    n_trees=n_trees, P_ref=P)[0]
-        loo_eval = {"true": np.asarray(Y, float).tolist(), "pred": P_loo.tolist(),
-                    "paths": list(paths)}
+                progress(f"leave-one-map-out {i + 1}/{len(uniq)}")
+            te = np.where(paths == mp)[0]; tr = np.where(paths != mp)[0]
+            pred = _fit_predict(method, X[tr], Y[tr], X[te], pre=pre, epochs=epochs,
+                                seed=seed + i, n_components=n_components,
+                                n_trees=n_trees, P_ref=P)
+            tv.append(Y[te[0]].tolist()); pv.append(np.asarray(pred, float).mean(0).tolist())
+            pl.append(mp)
+        loo_eval = {"true": tv, "pred": pv, "paths": pl}
 
     uM = None
-    have = [i for i in range(len(X)) if Cabs[i] is not None and any(c > 0 for c in Cabs[i])]
+    # Cabs/Xabs are per MAP (one row each); X may hold many pixel rows per map
+    have = [i for i in range(len(Xabs)) if Cabs[i] is not None and any(c > 0 for c in Cabs[i])]
     if len(have) >= 3:
         if progress:
             progress("training concentration head")
         hv = np.array(have); C = np.array([Cabs[i] if Cabs[i] is not None else [0.0] * len(subs)
-                                           for i in range(len(X))], float)
+                                           for i in range(len(Xabs))], float)
         mu = Xabs[hv].mean(0); sd = Xabs[hv].std(0) + 1e-8
         torch.manual_seed(seed)
         net = nn.Sequential(nn.Linear(Xabs.shape[1], 256), nn.BatchNorm1d(256), nn.ReLU(),
