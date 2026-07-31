@@ -138,11 +138,12 @@ class RealDataPage(QWidget):
         flipcol = QVBoxLayout(); flipcol.setSpacing(2)
         _fl = QLabel("orientation"); _fl.setObjectName("field")
         flipcol.addWidget(_fl); flipcol.addWidget(self.chk_flip)
-        self.chk_rel = QCheckBox("hide low-R²"); self.chk_rel.setChecked(True)
-        self.chk_rel.setToolTip("gray out and exclude pixels whose reconstruction R² is "
-                                "below the threshold — usually SATURATED/clipped or "
-                                "artefact pixels that fit the pure spectra badly and get "
-                                "misassigned (e.g. a clipped THI peak read as DQ/TBZ)")
+        self.chk_rel = QCheckBox("drop low-R²"); self.chk_rel.setChecked(False)
+        self.chk_rel.setToolTip("OFF by default: low-R² pixels are MARKED (coral ✕) and "
+                                "counted, but still composed — a poor fit to the pure "
+                                "spectra is a warning (saturated / clipped / something "
+                                "the references don't cover), not proof the pixel is "
+                                "wrong. Tick this to exclude them from the composition.")
         self.chk_rel.toggled.connect(lambda _=False: self._on_corr())
         self.rel_thr = QDoubleSpinBox(); self.rel_thr.setDecimals(2)
         self.rel_thr.setSingleStep(0.05); self.rel_thr.setRange(0.0, 0.95)
@@ -213,6 +214,9 @@ class RealDataPage(QWidget):
         obl.addLayout(trow)
         root.addWidget(self.optbox)
         self._toggle_opts(False)
+        self.cmb_method.itemAt(1).widget().currentIndexChanged.connect(
+            lambda _=0: self._sync_controls())
+        self._sync_controls()
 
         self.status = QLabel(""); self.status.setObjectName("sub")
         root.addWidget(self.status)
@@ -393,6 +397,28 @@ class RealDataPage(QWidget):
     def _method(self):
         return self.cmb_method.itemAt(1).widget().currentData()
 
+    def _dl_judges_bg(self):
+        """True when the loaded composition model carries a blank class AND the per-pixel
+        model method is selected — then the model alone decides background."""
+        m = getattr(self, "dl_model", None)
+        return bool(self._method() == "dlpx" and m and m.get("blank")
+                    and m.get("blank") in (m.get("subs") or []))
+
+    def _sync_controls(self):
+        """Grey out the gates that no longer get a vote, so the header shows at a glance
+        which single rule will decide background."""
+        if not hasattr(self, "thr"):        # _adopt_model can fire before the widgets exist
+            return
+        by_bg = bool(self.bg_paths)                    # a measured background map wins
+        by_dl = self._dl_judges_bg()
+        manual = not (by_bg or by_dl)
+        self.chk_auto.setEnabled(manual)
+        self.thr.itemAt(1).widget().setEnabled(manual and not self.chk_auto.isChecked())
+        why = ("a loaded background map decides background" if by_bg else
+               "the composition model's blank class decides background" if by_dl else "")
+        for w in (self.chk_auto, self.thr.itemAt(1).widget()):
+            w.setToolTip(f"not used — {why}" if why else "")
+
     def _browse_test(self):
         p, _ = QFileDialog.getOpenFileName(self, "Test map", "",
                                            "maps (*.csv *.txt);;all files (*)")
@@ -423,7 +449,7 @@ class RealDataPage(QWidget):
             return
         self.dl_model = MODEL_BUS.model
         self.dlm_lbl.setText("DL: " + (MODEL_BUS.origin or "trained model"))
-        self.dlm_lbl.setStyleSheet("")
+        self.dlm_lbl.setStyleSheet(""); self._sync_controls()
 
     def _browse_dl(self):
         p, _ = QFileDialog.getOpenFileName(self, "DL model (.dlm from Recovery)", "",
@@ -434,7 +460,7 @@ class RealDataPage(QWidget):
             from dl_model import load_model
             self.dl_model = load_model(p)
             self.dlm_lbl.setText("DL: " + os.path.basename(p))
-            self.dlm_lbl.setStyleSheet("")
+            self.dlm_lbl.setStyleSheet(""); self._sync_controls()
             if self._res is not None:
                 self._apply(self._res)                    # refresh readout with the DL row
         except Exception as e:
@@ -452,10 +478,11 @@ class RealDataPage(QWidget):
         self.bg_paths = list(ps)
         self.bg_lbl.setText("bg: " + (os.path.basename(ps[0]) if len(ps) == 1
                                       else f"{len(ps)} maps"))
-        self.bg_x.setVisible(True)
+        self.bg_x.setVisible(True); self._sync_controls()
 
     def _clear_bg(self):
         self.bg_paths = []; self.bg_lbl.setText(""); self.bg_x.setVisible(False)
+        self._sync_controls()
 
     def _browse_calib(self):
         p, _ = QFileDialog.getOpenFileName(
@@ -560,15 +587,25 @@ class RealDataPage(QWidget):
         s = rn.sum(axis=1, keepdims=True)
         return np.divide(rn, s, out=np.zeros_like(rn), where=s > 0)
 
+    def _flagged(self, r):
+        """Pixels whose reconstruction R² is below the threshold — ALWAYS computed and
+        always drawn/counted. A low R² means the pure references fit this pixel badly
+        (saturated, clipped, or a species the references don't cover); it is a warning
+        about the pixel, not a verdict on its composition."""
+        if getattr(r, "reliab", None) is None:
+            return np.zeros(r.n_pixels, bool)
+        return r.reliab < float(self.rel_thr.value())
+
     def _reliable(self, r):
-        """Pixels trustworthy enough to compose — reconstruction R² above the threshold.
-        Filters out saturated/clipped pixels that fit the pure spectra badly."""
-        if not self.chk_rel.isChecked() or getattr(r, "reliab", None) is None:
+        """Pixels kept in the composition. Low-R² pixels are dropped ONLY when the user
+        opts in — otherwise they are merely flagged, so nothing disappears silently."""
+        if not self.chk_rel.isChecked():
             return np.ones(r.n_pixels, bool)
-        return r.reliab >= float(self.rel_thr.value())
+        return ~self._flagged(r)
 
     def _hit(self, r):
-        """Effective hit = a substance pixel AND reliable (not saturated/artefact)."""
+        """Effective hit = a substance pixel (one rule decided that, see r.hit_rule)
+        minus any low-R² pixels the user chose to drop."""
         return r.hit & self._reliable(r)
 
     def _mean_ratio(self, r):
@@ -616,7 +653,7 @@ class RealDataPage(QWidget):
         return float(self.thr.itemAt(1).widget().value())
 
     def _on_auto(self, checked):
-        self.thr.itemAt(1).widget().setEnabled(not checked)   # threshold unused in auto
+        self._sync_controls()                      # threshold unused in auto / model mode
 
     def _progress(self, msg):
         self.btn.setText("Unmixing…"); self.status.setText("● " + msg)
@@ -636,7 +673,8 @@ class RealDataPage(QWidget):
         mr = self._mean_ratio(r)                          # corrected when toggle on
         corrected = self._rf_vec(r) is not None
         eff_hit = self._hit(r)
-        n_excl = int((r.hit & ~self._reliable(r)).sum())  # substance pixels dropped
+        n_flag = int((r.hit & self._flagged(r)).sum())    # low-R² substance pixels
+        dropping = self.chk_rel.isChecked()
         dom = nb[int(mr.argmax())] if len(nb) else r.dominant
         self.k_dom.set(dom, TEAL)
         self.k_n.set(str(int(np.sum(mr >= 0.05))), AMBER)
@@ -647,18 +685,17 @@ class RealDataPage(QWidget):
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
         ratio = "  :  ".join(f"{nm} {mr[i] * 100:.0f}" for i, nm in enumerate(nb))
         rtag = "solution ratio" if corrected else "mean ratio"
-        excl = (f" &nbsp;·&nbsp; <span style='color:{CORAL}'>{n_excl} saturated/"
-                f"low-R² px excluded</span>" if n_excl else "")
+        excl = (f" &nbsp;·&nbsp; <span style='color:{CORAL}'>{n_flag} low-R² px "
+                f"{'excluded' if dropping else 'flagged (still composed)'}</span>"
+                if n_flag else "")
         txt = (f"<b>hit:</b> {eff_hit.mean():.0%} of pixels are a substance{excl} "
                f"&nbsp;·&nbsp; <b>{rtag}</b> (hit pixels): {ratio} &nbsp;·&nbsp; "
                f"<b>dominant:</b> {dom}"
                + ("  <span style='color:%s'>(response-corrected)</span>" % TEAL
                   if corrected else ""))
-        if getattr(r, "bg_score", None) is not None:
-            n_bg = int((r.bg_score >= r.bg_thr).sum())
-            txt += (f"<br><b>measured background:</b> {n_bg / r.n_pixels:.0%} of pixels "
-                    f"match the loaded background map (score ≥ {r.bg_thr:.2f}) — "
-                    "judged background directly, not via NNLS")
+        if getattr(r, "hit_rule", ""):        # exactly one rule decided background
+            txt += (f"<br><span style='color:{FAINT}'>background decided by: "
+                    f"{r.hit_rule}</span>")
         if getattr(r, "calibrated", False) and r.conc_avg is not None:
             um = r.conc_avg * 1e6
             cs = "  ·  ".join(f"{nm} {um[i]:.3g} µM" for i, nm in enumerate(nb)
@@ -799,15 +836,15 @@ class RealDataPage(QWidget):
         cols = self._nb_colors(r); bg_col = self._bg_color(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux = np.unique(x); rad = (np.median(np.diff(ux)) * 0.46) if len(ux) > 1 else 0.46
-        hit = self._hit(r)                                # reliable substance pixels
-        excl = r.hit & ~self._reliable(r)                 # saturated/low-R² (flagged)
+        hit = self._hit(r)                                # substance pixels kept
+        excl = r.hit & self._flagged(r)                   # low-R² — marked either way
         # background / non-hit pixels: one fast scatter (not one patch each)
         if (~hit & ~excl).any():
             m = ~hit & ~excl
             ax.scatter(x[m], y[m], c=bg_col, marker="s", s=16, edgecolors="none")
-        if excl.any():                                    # excluded pixels marked, not silently dropped
-            ax.scatter(x[excl], y[excl], c="none", marker="x", s=22,
-                       edgecolors=CORAL, linewidths=0.9)
+        if excl.any():             # flagged pixels marked ON TOP of their pie (zorder),
+            ax.scatter(x[excl], y[excl], c="none", marker="x", s=22,   # never silent
+                       edgecolors=CORAL, linewidths=0.9, zorder=5)
         if r.method == "model":                           # classifier → one class/pixel
             dom = r.ratio_nb.argmax(axis=1)
             if hit.any():
@@ -875,9 +912,10 @@ class RealDataPage(QWidget):
         if (not r.hit[i] and getattr(r, "bg_score", None) is not None
                 and r.bg_score[i] >= r.bg_thr):
             tag = f"background (matches measured bg, score {r.bg_score[i]:.2f})"
-        if not self._reliable(r)[i]:                      # saturated/low-R² warning
+        if self._flagged(r)[i]:                           # low-R² warning
             r2 = float(r.reliab[i]) if getattr(r, "reliab", None) is not None else 0.0
-            tag += f"  ⚠ low R²={r2:.2f} (saturated? — excluded)"
+            tag += (f"  ⚠ low R²={r2:.2f} — references fit this pixel badly"
+                    + (" (excluded)" if self.chk_rel.isChecked() else ""))
         if getattr(r, "conc", None) is not None and r.hit[i]:   # absolute µM per pixel
             um = r.conc[i] * 1e6
             cs = "  ·  ".join(f"{r.comps[j]} {um[k]:.3g}µM" for k, j in enumerate(r.nonbg)

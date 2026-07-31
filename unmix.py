@@ -48,6 +48,7 @@ class UnmixResult:
     calib_r2: np.ndarray = None  # (Knb,) isotherm fit R² per substance
     bg_score: np.ndarray = None  # (n_pix,) match to the MEASURED background (0..1)
     bg_thr: float = None         # score at/above which a pixel is judged background
+    hit_rule: str = ""           # which single rule decided background vs substance
 
 
 def _baseline_removed(cube, baseline):
@@ -309,12 +310,30 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     Anb = A[:, nonbg]
     nb_tot = Anb.sum(axis=1, keepdims=True)
     ratio_nb = np.divide(Anb, nb_tot, out=np.zeros_like(Anb), where=nb_tot > 0)
-    if hit_mode == "auto":                            # BLK-based: strongest wins
+    # ---- ONE rule decides background vs substance ----------------------------
+    # Stacking gates (model blank channel AND a fraction threshold AND a measured
+    # background AND the R² filter) meant a dropped pixel could not be traced to a
+    # cause. Exactly one rule applies, and the result records which:
+    #   1. a loaded background map — the user measured THIS sample's substrate, so
+    #      that measurement wins outright;
+    #   2. else a composition model carrying a blank class — it judges background
+    #      itself, per pixel, and nothing else gets a vote;
+    #   3. else the classical NNLS/MCR behaviour (auto argmax or min_frac).
+    dl_blank = bool(method == "dlpx" and dl_model is not None
+                    and dl_model.get("blank")
+                    and dl_model.get("blank") in (dl_model.get("subs") or []))
+    if bg_score is not None:
+        hit = bg_score < bg_thr
+        hit_rule = f"measured background map (match < {bg_thr:.2f})"
+    elif dl_blank:
         hit = ~bg_mask[A.argmax(axis=1)]
+        hit_rule = f"composition model's {dl_model['blank']} channel (per pixel)"
+    elif hit_mode == "auto":                          # BLK-based: strongest wins
+        hit = ~bg_mask[A.argmax(axis=1)]
+        hit_rule = "strongest component is a substance (auto)"
     else:                                             # substance share above threshold
         hit = frac[:, nonbg].sum(axis=1) >= min_frac
-    if bg_score is not None:                          # measured background overrides:
-        hit &= bg_score < bg_thr                      # a matching pixel is background
+        hit_rule = f"substance share ≥ {min_frac:.2f}"
     hit_frac = float(hit.mean())
     mean_ratio = ratio_nb[hit].mean(axis=0) if hit.any() else ratio_nb.mean(axis=0)
     dominant = [names[i] for i in nonbg][int(mean_ratio.argmax())] if nonbg else names[0]
@@ -336,7 +355,7 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         hit_frac=hit_frac, mean_ratio=mean_ratio, dominant=dominant,
         mean_r2=float(reliab.mean()), calibrated=calibrated, conc=conc,
         conc_avg=conc_avg, pp_theta=pp_theta, calib_r2=calib_r2,
-        bg_score=bg_score, bg_thr=bg_thr)
+        bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
 
 
 def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
