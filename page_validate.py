@@ -911,7 +911,9 @@ class ValidatePage(QWidget):
         # lives in a scroll area, so a tall figure just scrolls)
         # binary and ternary are different regimes (3-way competition is harder) and the
         # ternaries set the scale, so plot them side by side, each on its own normalisation
-        ncomp = [int(sum(1 for v in r["nominal"] if v > 0.02)) for r in recs]
+        # count a component whenever it was actually dosed — a 2% cut-off silently demoted
+        # THI1000TBZ1000DQ10 (DQ = 0.5%) to "binary", hiding the buried-trace ternaries
+        ncomp = [int(sum(1 for v in r["nominal"] if v > 0)) for r in recs]
         groups = [("2-component mixtures", [k for k in range(len(recs)) if ncomp[k] < 3]),
                   ("3-component mixtures", [k for k in range(len(recs)) if ncomp[k] >= 3])]
         groups = [g for g in groups if g[1]] or [("mixtures", list(range(len(recs))))]
@@ -927,8 +929,11 @@ class ValidatePage(QWidget):
             norm = {k: gap[k] / (sub.max() or 1.0) * 100 for k in idx}
             ypos, ynames, ycols, spans = [], [], [], []
             cursor, first = 0.0, True
-            for si in (2, 1, 0):                               # THI-, TBZ-, DQ-dominant
-                members = [k for k in idx if dom[k] == si]
+            # ternaries often have no dominant component (1:1:1), so grouping by "dominant"
+            # only makes sense for the 2-component panel; there we group, here we just rank
+            groups_by_dom = ([2, 1, 0] if title.startswith("2-") else [None])
+            for si in groups_by_dom:
+                members = [k for k in idx if si is None or dom[k] == si]
                 if not members:
                     continue
                 if not first:
@@ -937,13 +942,15 @@ class ValidatePage(QWidget):
                 members.sort(key=lambda k: -norm[k])
                 start = cursor
                 for k in members:
-                    ax.barh(cursor, norm[k], height=0.66, alpha=0.85,
-                            color=substance_color(SUBSTANCES[si], si))
+                    ci = si if si is not None else dom[k]   # ungrouped: colour by its own max
+                    col = substance_color(SUBSTANCES[ci], ci)
+                    ax.barh(cursor, norm[k], height=0.66, alpha=0.85, color=col)
                     ypos.append(cursor)
                     ynames.append(recs[k]["name"].replace("_corrected", ""))
-                    ycols.append(substance_color(SUBSTANCES[si], si))
+                    ycols.append(col)
                     cursor -= 1.0
-                spans.append((si, (start + cursor + 1.0) / 2))
+                if si is not None:
+                    spans.append((si, (start + cursor + 1.0) / 2))
             ax.set_yticks(ypos)
             ax.set_yticklabels(ynames, fontsize=7 if len(idx) > 24 else 8)
             ax.tick_params(axis="y", length=0)

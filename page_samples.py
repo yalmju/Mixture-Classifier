@@ -14,7 +14,8 @@ from ui_common import *
 from real_data import PEST_DEFAULT
 from dataset import (discover_references, base_and_batch, load_manifest,
                      save_manifest, map_pixel_count, load_preprocess,
-                     save_preprocess, load_mixture_list, save_mixture_list)
+                     save_preprocess, load_mixture_list, save_mixture_list,
+                     load_mixture_roles)
 from validate import parse_mixture_label, simplify_ratio
 
 
@@ -111,11 +112,13 @@ class SamplingPage(QWidget):
         self.mix_files = []
         self.mix_amounts = []            # per row: the ORIGINAL parsed amounts (µM), so the
                                          # table can show a reduced ratio without losing scale
-        self.mix_table = QTableWidget(0, 2)
-        self.mix_table.setHorizontalHeaderLabels(["mixture file", "true ratio  (e.g. DQ:1, TBZ:3)"])
+        self.mix_table = QTableWidget(0, 3)
+        self.mix_table.setHorizontalHeaderLabels(
+            ["mixture file", "true ratio  (e.g. DQ:1, TBZ:3)", "Role (train/test)"])
         mh = self.mix_table.horizontalHeader()
         mh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         mh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        mh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.mix_table.verticalHeader().setVisible(False)
         self.mix_table.setMaximumHeight(150)
         self.mix_table.itemChanged.connect(self._on_mix_edit)
@@ -200,6 +203,7 @@ class SamplingPage(QWidget):
             g = simplify_ratio(g) if g else g               # table shows 300:100 as 3:1
             txt = ", ".join(f"{k}:{v:.3g}" for k, v in g.items()) if g else ""
             self.mix_table.setItem(row, 1, QTableWidgetItem(txt))
+            self.mix_table.setItem(row, 2, QTableWidgetItem("train"))
         self._loading = False
         self._save_mix()
 
@@ -236,11 +240,21 @@ class SamplingPage(QWidget):
                     items.append((self.mix_files[row], ratio))
         return items
 
+    def _mix_roles(self):
+        """{path: "train"|"test"} — 'test' mixtures are an INDEPENDENT batch held out of
+        training so the model can be scored on maps it has never seen."""
+        out = {}
+        for row in range(self.mix_table.rowCount()):
+            cell = self.mix_table.item(row, 2)
+            v = (cell.text() if cell else "").strip().lower()
+            out[self.mix_files[row]] = "test" if v.startswith("t") and v != "train" else "train"
+        return out
+
     def _save_mix(self):
         if self._loading:                                 # don't persist mid-(re)load — that
             return                                        # once wiped mixtures.json to []
         try:
-            save_mixture_list(self.data_dir, self._mix_items())
+            save_mixture_list(self.data_dir, self._mix_items(), self._mix_roles())
             MIXTURE_BUS.changed.emit()
             n = self.mix_table.rowCount()
             self.summary.setText(self.summary.text().split("  ·  mixtures")[0] +
@@ -252,6 +266,7 @@ class SamplingPage(QWidget):
         self._loading = True
         self.mix_table.setRowCount(0); self.mix_files = []; self.mix_amounts = []
         items = load_mixture_list(self.data_dir)
+        roles = load_mixture_roles(self.data_dir)
         self.chk_mix_uM.setChecked(any(len(it) > 2 and it[2] for it in items))
         seen = set()
         for it in items:
@@ -270,6 +285,7 @@ class SamplingPage(QWidget):
             self.mix_table.setItem(row, 0, it0)
             self.mix_table.setItem(row, 1, QTableWidgetItem(
                 ", ".join(f"{k}:{v:.3g}" for k, v in simplify_ratio(it[1]).items())))
+            self.mix_table.setItem(row, 2, QTableWidgetItem(roles.get(it[0], "train")))
         self._loading = False
 
     def _load_prep(self):
