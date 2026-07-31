@@ -34,6 +34,12 @@ def _train_subprocess(params, q):
         if _here not in _sys.path:                        # spawn may not inherit sys.path
             _sys.path.insert(0, _here)
         params = dict(params); items = params.pop("items")
+        if params.pop("_kfold", False):
+            from dl_model import kfold_stability
+            folds = params.pop("folds", 5); params.pop("loo", None); params.pop("test_items", None)
+            q.put(("kfold", kfold_stability(items=items, folds=folds,
+                                            progress=lambda s: q.put(("progress", s)), **params)))
+            return
         if params.pop("_benchmark", False):
             from dl_model import benchmark_loo
             params.pop("loo", None)
@@ -79,6 +85,8 @@ class TrainComposeWorker(QObject):
                     self.progress.emit(payload)
                 elif tag == "error":
                     proc.join(timeout=2); self.fail.emit(payload); return
+                elif tag == "kfold":                      # repeated held-out check
+                    proc.join(timeout=5); self.done.emit(("kfold", payload)); return
                 elif tag == "bench":                      # LOO method comparison
                     proc.join(timeout=5); self.done.emit(("bench", payload)); return
                 else:                                     # "done"
@@ -142,9 +150,14 @@ class ComposePanel(QWidget):
                                 "with leave-one-out — composition error and detection ROC. "
                                 "Tells you which method to train; saves no model.")
         self.bench_b.clicked.connect(self._benchmark)
+        self.kfold_b = QPushButton("5-fold check"); self.kfold_b.setObjectName("ghost")
+        self.kfold_b.setToolTip("repeat the held-out test over all 5 one-in-five splits for "
+                                "the method chosen below — reports mean ± spread, so a single "
+                                "lucky split cannot set the headline number")
+        self.kfold_b.clicked.connect(self._kfold)
         self.bench_lbl = QLabel("run this first to see which method fits your data")
         self.bench_lbl.setObjectName("field")
-        brow.addWidget(blbl); brow.addWidget(self.bench_b)
+        brow.addWidget(blbl); brow.addWidget(self.bench_b); brow.addWidget(self.kfold_b)
         brow.addWidget(self.bench_lbl, 1)
         root.addLayout(brow)
 
@@ -327,6 +340,46 @@ class ComposePanel(QWidget):
         self._worker.fail.connect(self._thread.quit)
         self._thread.start()
 
+    def _kfold(self):
+        """Repeat the held-out check over every 1-in-5 split for the chosen method."""
+        items = self._items_cache + getattr(self, "_test_items", [])
+        if len(items) < 5:
+            self.status.setText("need ≥5 mixtures for a 5-fold check")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        params = self._opts(); params["items"] = items
+        params["_kfold"] = True; params["folds"] = 5
+        self.train_b.setEnabled(False); self.bench_b.setEnabled(False)
+        self.kfold_b.setEnabled(False); self.kfold_b.setText("Checking…")
+        self._cancelled = False; self.cancel_b.setVisible(True)
+        self.pbar.setRange(0, 0); self.pbar.setVisible(True)
+        self.status.setText("● 5-fold held-out check…"); self.status.setStyleSheet(f"color:{MUTE};")
+        self._thread = QThread(); self._worker = TrainComposeWorker(params)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(lambda m: self.status.setText("● " + m))
+        self._worker.done.connect(self._done)
+        self._worker.fail.connect(self._fail)
+        self._worker.done.connect(self._thread.quit)
+        self._worker.fail.connect(self._thread.quit)
+        self._thread.start()
+
+    def _done_kfold(self, res):
+        import numpy as _np
+        errs = res.get("errors", [])
+        self._err_title.setText("5-fold held-out check — composition error per split")
+        ax = self.c_err.new_ax()
+        if errs:
+            x = _np.arange(len(errs))
+            ax.bar(x, [e * 100 for e in errs], color=TEAL, edgecolor="white", alpha=0.9)
+            ax.axhline(res["mean"] * 100, color=MUTE, ls="--", lw=1.2)
+            ax.set_xticks(x); ax.set_xticklabels([f"fold {i + 1}" for i in x], fontsize=8.5)
+            ax.set_ylabel("composition error (%)  — held out")
+        self.c_err.fig.tight_layout(); self.c_err.draw_idle()
+        meth = self.cmb.currentData().upper()
+        self.status.setText(f"5-fold ({meth}) — " + " · ".join(f"{e:.0%}" for e in errs)
+                            + f"   → mean {res['mean']:.1%} ± {res['sd']:.1%}")
+        self.status.setStyleSheet(f"color:{MUTE};")
+
     def _benchmark(self):
         """Leave-one-out comparison of NNLS / PLS / RF / CNN / MLP on the same mixtures."""
         items = self._items_cache
@@ -353,6 +406,7 @@ class ComposePanel(QWidget):
     def _reset_buttons(self):
         self.train_b.setEnabled(True); self.train_b.setText("Train")
         self.bench_b.setEnabled(True); self.bench_b.setText("Benchmark (LOO)")
+        self.kfold_b.setEnabled(True); self.kfold_b.setText("5-fold check")
         self.pbar.setVisible(False); self.cancel_b.setVisible(False)
 
     def _done_bench(self, bench):
@@ -417,6 +471,8 @@ class ComposePanel(QWidget):
     def _done(self, res):
         if getattr(self, "_cancelled", False):
             return
+        if isinstance(res, tuple) and len(res) == 2 and res[0] == "kfold":
+            self._reset_buttons(); self._done_kfold(res[1]); return
         if isinstance(res, tuple) and len(res) == 2 and res[0] == "bench":
             self._reset_buttons(); self._done_bench(res[1]); return
         model, err, rows = res
