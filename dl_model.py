@@ -44,6 +44,43 @@ def _cnn(n_feat, n_comp):
     return C()
 
 
+def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
+                 n_components=8, n_trees=300, P_ref=None):
+    """Fit ``method`` on (Xtr, Ytr) and return composition predictions for Xte, rows
+    summing to 1. Shared by the full-data fit and each leave-one-out fold so both use
+    exactly the same estimator."""
+    n_comp = Ytr.shape[1]
+    if method == "nnls":                       # classical baseline: no training at all
+        from dl_quantify import surface_composition
+        p = surface_composition(np.atleast_2d(Xte), P_ref)
+    elif method == "pls":
+        from sklearn.cross_decomposition import PLSRegression
+        nc = max(1, min(int(n_components), len(Xtr) - 1, Xtr.shape[1]))
+        p = PLSRegression(n_components=nc).fit(Xtr, Ytr).predict(np.atleast_2d(Xte))
+    elif method == "rf":
+        from sklearn.ensemble import RandomForestRegressor
+        p = RandomForestRegressor(n_estimators=int(n_trees),
+                                  random_state=int(seed)).fit(Xtr, Ytr).predict(np.atleast_2d(Xte))
+    elif method == "cnn":
+        import torch
+        torch.manual_seed(int(seed)); net = _cnn(Xtr.shape[1], n_comp)
+        sm = torch.nn.LogSoftmax(dim=1)
+        op = torch.optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-3)
+        Xt = torch.tensor(Xtr); Yt = torch.tensor(Ytr); w = 1.0 + 2.0 * (1.0 - Yt)
+        for _ in range(int(epochs)):
+            net.train(); op.zero_grad()
+            (w * (sm(net(Xt)).exp() - Yt).abs()).sum(1).mean().backward(); op.step()
+        net.eval()
+        with torch.no_grad():
+            return torch.softmax(net(torch.tensor(np.atleast_2d(Xte).astype(np.float32))), 1).numpy()
+    else:
+        from dl_quantify import train_composition, predict_composition
+        m = train_composition(Xtr, Ytr, n_comp, pretrain=pre, seed=seed, epochs_ft=epochs)
+        return predict_composition(m, np.atleast_2d(Xte))
+    p = np.clip(np.asarray(p, float), 0, None)
+    return p / (p.sum(1, keepdims=True) + 1e-12)
+
+
 def _mean_spectrum(cube, mask):
     cube = np.asarray(cube, float)[:, mask]
     w = cube.sum(1); w = w / (w.sum() + 1e-12)
@@ -54,7 +91,7 @@ def _mean_spectrum(cube, mask):
 
 def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                 method="mlp", epochs=350, seed=0, use_pretrain=True,
-                n_components=8, n_trees=300):
+                n_components=8, n_trees=300, loo=False):
     """Train a composition model (+ µM if absolute concentrations given) on ALL mixtures.
     items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
 
@@ -145,6 +182,18 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     train_eval = {"true": np.asarray(Y, float).tolist(), "pred": np.asarray(tp, float).tolist(),
                   "loss": loss_curve}
 
+    loo_eval = None
+    if loo and len(X) >= 3:                     # honest metrics: predict each held-out mixture
+        P_loo = np.zeros_like(np.asarray(Y, float))
+        for i in range(len(X)):
+            if progress:
+                progress(f"leave-one-out {i + 1}/{len(X)}")
+            tr = [j for j in range(len(X)) if j != i]
+            P_loo[i] = _fit_predict(method, X[tr], Y[tr], X[i], pre=pre, epochs=epochs,
+                                    seed=seed + i, n_components=n_components,
+                                    n_trees=n_trees, P_ref=P)[0]
+        loo_eval = {"true": np.asarray(Y, float).tolist(), "pred": P_loo.tolist()}
+
     uM = None
     have = [i for i in range(len(X)) if Cabs[i] is not None and any(c > 0 for c in Cabs[i])]
     if len(have) >= 3:
@@ -169,7 +218,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
 
     return {"subs": subs, "lo": lo, "hi": hi, "n_feat": int(mask.sum()), "P": P,
             "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None,
-            "train_eval": train_eval, **comp_store}
+            "train_eval": train_eval, "loo_eval": loo_eval, **comp_store}
 
 
 def apply_model(model, wn, cube):
@@ -205,6 +254,62 @@ def apply_model(model, wn, cube):
         with torch.no_grad():
             logv = net2(torch.tensor(xe[None, :])).numpy()[0]
         out["uM"] = {subs[k]: float(10.0 ** np.clip(logv[k], -3.0, 6.0)) for k in range(len(subs))}
+    return out
+
+
+def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
+                  methods=("nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
+                  use_pretrain=True,
+                  n_components=8, n_trees=300):
+    """Leave-one-out comparison of the composition methods on the SAME mixtures — the
+    honest counterpart to the train-set numbers. Maps are loaded once, then every method
+    is refit per fold. Returns {method: {"true", "pred"}} plus "subs"."""
+    from real_data import load_map
+    from dl_quantify import simulate_mixtures, _ratio
+    subs, wn, mask, P, lo, hi = _refs(data_dir, baseline, trim)
+    X, Y = [], []
+    for k, it in enumerate(items):
+        if progress:
+            progress(f"loading maps {k + 1}/{len(items)}")
+        vec = _ratio([float(it[1].get(s, 0.0)) for s in subs])
+        if vec.sum() <= 0:
+            continue
+        _w, cube, _m, _c = load_map(it[0])
+        ya = _mean_spectrum(cube, mask)
+        X.append(ya / (np.linalg.norm(ya) + 1e-12)); Y.append(vec)
+    X = np.array(X, np.float32); Y = np.array(Y, np.float32)
+    if len(X) < 3:
+        raise ValueError("need ≥3 mixtures for a leave-one-out benchmark.")
+
+    pre = None
+    if calib_path and use_pretrain:
+        try:
+            from io_utils import load_calibration_csv
+            from calibration import calibrate
+            ax_c, nc, dils = load_calibration_csv(calib_path); mc = (ax_c >= lo) & (ax_c <= hi)
+            dil = [(dils[nc.index(s)][0], np.asarray(dils[nc.index(s)][1])[:, mc])
+                   for s in subs if s in nc]
+            if len(dil) == len(subs):
+                cal = calibrate(dil, P, subs); rng = np.random.default_rng(0)
+                Xs, Cs = simulate_mixtures(P, cal.K, cal.gA, 5000, rng, noise=0.015,
+                                           baseline=0.03, gain_lo=0.8, gain_hi=1.25)
+                Xs = np.array([r / (np.linalg.norm(r) + 1e-12) for r in Xs]).astype(np.float32)
+                pre = (Xs, np.array([_ratio(c) for c in Cs]).astype(np.float32))
+        except Exception:
+            pre = None
+
+    out = {"subs": subs}
+    for mi, meth in enumerate(methods):
+        Pm = np.zeros_like(Y, float)
+        for i in range(len(X)):
+            if progress:
+                progress(f"{meth.upper()} leave-one-out {i + 1}/{len(X)}  "
+                         f"[{mi + 1}/{len(methods)} methods]")
+            tr = [j for j in range(len(X)) if j != i]
+            Pm[i] = _fit_predict(meth, X[tr], Y[tr], X[i], pre=pre, epochs=epochs,
+                                 seed=seed + i, n_components=n_components,
+                                 n_trees=n_trees, P_ref=P)[0]
+        out[meth] = {"true": Y.tolist(), "pred": Pm.tolist()}
     return out
 
 

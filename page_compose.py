@@ -33,8 +33,14 @@ def _train_subprocess(params, q):
         _here = os.path.dirname(os.path.abspath(__file__))
         if _here not in _sys.path:                        # spawn may not inherit sys.path
             _sys.path.insert(0, _here)
-        from dl_model import train_model
         params = dict(params); items = params.pop("items")
+        if params.pop("_benchmark", False):
+            from dl_model import benchmark_loo
+            params.pop("loo", None)
+            q.put(("bench", benchmark_loo(items=items,
+                                          progress=lambda s: q.put(("progress", s)), **params)))
+            return
+        from dl_model import train_model
         model = train_model(items=items, progress=lambda s: q.put(("progress", s)), **params)
         q.put(("done", model))
     except Exception:
@@ -73,13 +79,17 @@ class TrainComposeWorker(QObject):
                     self.progress.emit(payload)
                 elif tag == "error":
                     proc.join(timeout=2); self.fail.emit(payload); return
+                elif tag == "bench":                      # LOO method comparison
+                    proc.join(timeout=5); self.done.emit(("bench", payload)); return
                 else:                                     # "done"
                     model = payload; break
             proc.join(timeout=5)
             # train-set recovery is computed IN-MEMORY inside train_model (no map reload,
             # which was holding the GIL and freezing the GUI). Reorder to SUBSTANCES.
             subs = model["subs"]; sidx = {s: j for j, s in enumerate(subs)}
-            te = model.get("train_eval", {}); tvs = te.get("true", []); pvs = te.get("pred", [])
+            # prefer the leave-one-out predictions when they were computed — the honest number
+            te = model.get("loo_eval") or model.get("train_eval", {})
+            tvs = te.get("true", []); pvs = te.get("pred", [])
             errs = []; rows = []
             for i in range(len(tvs)):
                 tv = [float(tvs[i][sidx[s]]) if s in sidx else 0.0 for s in SUBSTANCES]
@@ -130,7 +140,7 @@ class ComposePanel(QWidget):
             self.cmb.addItem(text, data)
         self.cmb.currentIndexChanged.connect(self._update_params)
         self.sp_ep = QSpinBox(); self.sp_ep.setRange(20, 3000); self.sp_ep.setSingleStep(50)
-        self.sp_ep.setValue(150); self.sp_ep.setPrefix("epochs "); self.sp_ep.setObjectName("field")
+        self.sp_ep.setValue(350); self.sp_ep.setPrefix("epochs "); self.sp_ep.setObjectName("field")
         self.sp_ep.setToolTip("training iterations (MLP / CNN). Higher = better but slower; "
                               "the GUI is busy while it trains — raise for a final model.")
         self.sp_seed = QSpinBox(); self.sp_seed.setRange(0, 999); self.sp_seed.setPrefix("seed ")
@@ -141,9 +151,15 @@ class ComposePanel(QWidget):
         self.sp_nc.setPrefix("components "); self.sp_nc.setObjectName("field")
         self.sp_nt = QSpinBox(); self.sp_nt.setRange(20, 1000); self.sp_nt.setSingleStep(20)
         self.sp_nt.setValue(300); self.sp_nt.setPrefix("trees "); self.sp_nt.setObjectName("field")
+        self.chk_loo = QCheckBox("leave-one-out metrics"); self.chk_loo.setObjectName("field")
+        self.chk_loo.setToolTip("score each mixture with a model that did NOT see it. The "
+                                "honest number — without this the plots show how well the "
+                                "model reproduces its own training data. Slower (refits per "
+                                "mixture).")
         mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
         for w in (self.sp_ep, self.sp_seed, self.chk_pre, self.sp_nc, self.sp_nt):
             mrow.addWidget(w)
+        mrow.addWidget(self.chk_loo)
         mrow.addStretch(1)
         self.train_b = QPushButton("Train"); self.train_b.setObjectName("primary")
         self.train_b.clicked.connect(self._train)
@@ -151,6 +167,11 @@ class ComposePanel(QWidget):
         self.cancel_b.setVisible(False); self.cancel_b.clicked.connect(self._cancel)
         self.save_b = QPushButton("Save model…"); self.save_b.setObjectName("ghost")
         self.save_b.setEnabled(False); self.save_b.clicked.connect(self._save)
+        self.bench_b = QPushButton("Benchmark (LOO)"); self.bench_b.setObjectName("ghost")
+        self.bench_b.setToolTip("compare PLS / RF / 1D-CNN / MLP on the same mixtures under "
+                                "leave-one-out — composition error, detection ROC and AUC")
+        self.bench_b.clicked.connect(self._benchmark)
+        mrow.addWidget(self.bench_b)
         self.export_b = QPushButton("Export…"); self.export_b.setObjectName("ghost")
         self.export_b.setEnabled(False); self.export_b.clicked.connect(self._export)
         self.export_b.setToolTip("write the plots (PNG), the per-mixture predictions and the "
@@ -273,6 +294,7 @@ class ComposePanel(QWidget):
             self.status.setText("prepare ≥3 known-ratio mixtures in the Samples tab first")
             self.status.setStyleSheet(f"color:{RED};"); return
         params = self._opts(); params["items"] = items
+        params["loo"] = self.chk_loo.isChecked()
         self.train_b.setEnabled(False); self.train_b.setText("Training…")
         self.save_b.setEnabled(False); self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
@@ -287,6 +309,77 @@ class ComposePanel(QWidget):
         self._worker.fail.connect(self._thread.quit)
         self._thread.start()
 
+    def _benchmark(self):
+        """Leave-one-out comparison of NNLS / PLS / RF / CNN / MLP on the same mixtures."""
+        items = self._items_cache
+        if len(items) < 3:
+            self.status.setText("prepare ≥3 known-ratio mixtures in the Samples tab first")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        params = self._opts(); params.pop("method", None); params.pop("loo", None)
+        params["items"] = items; params["_benchmark"] = True
+        self.train_b.setEnabled(False); self.bench_b.setEnabled(False)
+        self.bench_b.setText("Benchmarking…")
+        self._cancelled = False; self.cancel_b.setVisible(True)
+        self.pbar.setRange(0, 0); self.pbar.setVisible(True)
+        self.status.setText("● leave-one-out benchmark…"); self.status.setStyleSheet(f"color:{MUTE};")
+        self._thread = QThread(); self._worker = TrainComposeWorker(params)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(lambda m: self.status.setText("● " + m))
+        self._worker.done.connect(self._done)
+        self._worker.fail.connect(self._fail)
+        self._worker.done.connect(self._thread.quit)
+        self._worker.fail.connect(self._thread.quit)
+        self._thread.start()
+
+    def _reset_buttons(self):
+        self.train_b.setEnabled(True); self.train_b.setText("Train")
+        self.bench_b.setEnabled(True); self.bench_b.setText("Benchmark (LOO)")
+        self.pbar.setVisible(False); self.cancel_b.setVisible(False)
+
+    def _done_bench(self, bench):
+        """Plot the LOO comparison: composition error per method + overlaid detection ROC."""
+        import numpy as _np
+        from composition import SUBSTANCES
+        subs = bench.get("subs", list(SUBSTANCES))
+        methods = [m for m in ("nnls", "pls", "rf", "cnn", "mlp") if m in bench]
+        label = {"nnls": "NNLS", "pls": "PLS", "rf": "RF", "cnn": "1D-CNN", "mlp": "MLP"}
+        self._bench = {}
+        ax = self.c_err.new_ax()                            # error bar chart per method
+        errs, aucs = [], {}
+        for m in methods:
+            T = _np.asarray(bench[m]["true"], float); P = _np.asarray(bench[m]["pred"], float)
+            errs.append(float((0.5 * _np.abs(P - T).sum(1)).mean()))
+            rows = [(f"mix {i+1}",
+                     [T[i][subs.index(s)] if s in subs else 0.0 for s in SUBSTANCES],
+                     [P[i][subs.index(s)] if s in subs else 0.0 for s in SUBSTANCES])
+                    for i in range(len(T))]
+            self._bench[m] = rows
+            aucs[m] = self._roc(rows)
+        x = _np.arange(len(methods))
+        ax.bar(x, [e * 100 for e in errs], color=[TEAL if m == "mlp" else MUTE for m in methods],
+               edgecolor="white", alpha=0.9)
+        ax.set_xticks(x); ax.set_xticklabels([label[m] for m in methods], fontsize=8.5)
+        ax.set_ylabel("composition error (%)  — leave-one-out")
+        self.c_err.fig.tight_layout(); self.c_err.draw_idle()
+        axr = self.c_roc.new_ax()                           # ROC overlay
+        axr.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0)
+        for j, m in enumerate(methods):
+            fpr, tpr, a = aucs[m]
+            if fpr is None:
+                continue
+            axr.plot(fpr, tpr, lw=2.4 if m == "mlp" else 1.4,
+                     color=TEAL if m == "mlp" else SERIES[j % len(SERIES)],
+                     label=f"{label[m]}  (AUC {a:.3f})")
+        axr.set_xlabel("false positive rate"); axr.set_ylabel("true positive rate")
+        axr.set_xlim(-0.02, 1.02); axr.set_ylim(-0.02, 1.02); axr.set_aspect("equal")
+        axr.legend(fontsize=8, framealpha=0, loc="lower right")
+        self.c_roc.fig.tight_layout(); self.c_roc.draw_idle()
+        best = methods[int(_np.argmin(errs))]
+        self.status.setText("leave-one-out benchmark — " + " · ".join(
+            f"{label[m]} {e:.0%}" for m, e in zip(methods, errs)) + f"   → best: {label[best]}")
+        self.status.setStyleSheet(f"color:{MUTE};")
+
     def _cancel(self):
         """Non-blocking cancel: kill the child, DON'T wait on anything in the GUI thread.
         (The old join/wait here blocked the main thread — Cancel itself froze the app.)"""
@@ -297,17 +390,18 @@ class ComposePanel(QWidget):
         th = getattr(self, "_thread", None)
         if th is not None:
             th.quit()                                     # no wait — it dies on its own
-        self.cancel_b.setVisible(False); self.pbar.setVisible(False)
-        self.train_b.setEnabled(True); self.train_b.setText("Train")
+        self._reset_buttons()
         self.status.setText("cancelled"); self.status.setStyleSheet(f"color:{MUTE};")
 
     def _done(self, res):
         if getattr(self, "_cancelled", False):
             return
+        if isinstance(res, tuple) and len(res) == 2 and res[0] == "bench":
+            self._reset_buttons(); self._done_bench(res[1]); return
         model, err, rows = res
         self._model = model
-        self.train_b.setEnabled(True); self.train_b.setText("Train")
-        self.save_b.setEnabled(True); self.pbar.setVisible(False); self.cancel_b.setVisible(False)
+        self._reset_buttons()
+        self.save_b.setEnabled(True)
         self._rows = rows
         self._plot_triangle(rows)
         self._plot_loss(model.get("train_eval", {}).get("loss", []))
@@ -324,8 +418,7 @@ class ComposePanel(QWidget):
         import sys
         if getattr(self, "_cancelled", False):            # cancel path already reset the UI
             return
-        self.train_b.setEnabled(True); self.train_b.setText("Train")
-        self.pbar.setVisible(False); self.cancel_b.setVisible(False)
+        self._reset_buttons()
         self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)

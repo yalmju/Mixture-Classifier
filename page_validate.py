@@ -134,7 +134,7 @@ class ValidatePage(QWidget):
         self.dl_chk.setToolTip("physics-informed DL composition (leave-one-map-out over the "
                                "loaded mixtures). The composition view (triangle · recovery · "
                                "drift) then shows the DL prediction instead of NNLS. Slower.")
-        self.explain_btn = QPushButton("DL explain"); self.explain_btn.setObjectName("ghost")
+        self.explain_btn = QPushButton("Band importance"); self.explain_btn.setObjectName("ghost")
         self.explain_btn.setToolTip("train the DL on the loaded mixtures and show which "
                                     "spectral bands it uses (Integrated Gradients + band "
                                     "permutation importance + ligand ablation)")
@@ -567,7 +567,7 @@ class ValidatePage(QWidget):
                     th.terminate(); th.wait()
         self.cancel_btn.setVisible(False); self.progbar.setVisible(False)
         self.btn.setEnabled(True); self.btn.setText("Validate")
-        self.explain_btn.setEnabled(True); self.explain_btn.setText("DL explain")
+        self.explain_btn.setEnabled(True); self.explain_btn.setText("Band importance")
         self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
         self.status.setText("cancelled"); self.status.setStyleSheet(f"color:{MUTE};")
 
@@ -575,7 +575,7 @@ class ValidatePage(QWidget):
     def _run_explain(self):
         items = self._items()
         if len(items) < 3:
-            self.status.setText("add ≥3 mixtures for DL explain")
+            self.status.setText("add ≥3 mixtures for band importance")
             self.status.setStyleSheet(f"color:{RED};"); return
         cfg = load_preprocess(self.data_dir)
         params = dict(data_dir=self.data_dir, items=items, calib_path=self.calib_path,
@@ -583,7 +583,7 @@ class ValidatePage(QWidget):
         self.explain_btn.setEnabled(False); self.explain_btn.setText("Explaining…")
         self._cancelled = False; self.cancel_btn.setVisible(True)
         self.progbar.setRange(0, 0); self.progbar.setVisible(True)
-        self.status.setText("● DL explain — training…"); self.status.setStyleSheet(f"color:{MUTE};")
+        self.status.setText("● band importance — training…"); self.status.setStyleSheet(f"color:{MUTE};")
         self._ethread = QThread(); self._eworker = ExplainWorker(params)
         self._eworker.moveToThread(self._ethread)
         self._ethread.started.connect(self._eworker.run)
@@ -597,15 +597,15 @@ class ValidatePage(QWidget):
     def _apply_explain(self, r):
         if getattr(self, "_cancelled", False):
             return
-        self.explain_btn.setEnabled(True); self.explain_btn.setText("DL explain")
+        self.explain_btn.setEnabled(True); self.explain_btn.setText("Band importance")
         self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
-        self.status.setText("done (DL explain)"); self.status.setStyleSheet(f"color:{MUTE};")
+        self.status.setText("done (band importance)"); self.status.setStyleSheet(f"color:{MUTE};")
         self._plot_explain(r)
 
     def _error_explain(self, tb):
-        self.explain_btn.setEnabled(True); self.explain_btn.setText("DL explain")
+        self.explain_btn.setEnabled(True); self.explain_btn.setText("Band importance")
         self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
-        self.status.setText("DL explain failed — " + tb.strip().splitlines()[-1][:80])
+        self.status.setText("band importance failed — " + tb.strip().splitlines()[-1][:80])
         self.status.setStyleSheet(f"color:{RED};")
 
     # ---- train + save a DL model (for the Real-data tab) ----
@@ -867,10 +867,9 @@ class ValidatePage(QWidget):
                     fontweight="bold", color=col)
         ax.set_aspect("equal"); ax.axis("off")
 
-    def _plot_triangle(self, res, annotated=False):
-        """Draw the recovery drift triangle. ``annotated`` adds the title + description
-        + reading guide — baked in only on EXPORT, so the standalone PNG is readable
-        with zero context; in-app the card header already labels it, kept uncluttered."""
+    def _plot_triangle(self, res):
+        """Draw the recovery drift triangle (graph + legend only; the card header in the
+        app and the exported README supply the description)."""
         import matplotlib.pyplot as _plt
         cmap = _plt.get_cmap("RdYlGn")                    # green = accurate, red = wrong
         EMAX = 0.6
@@ -899,15 +898,8 @@ class ValidatePage(QWidget):
             Line2D([], [], marker=r"$\rightarrow$", color="#8b95a1", ls="", ms=10, label="drift")]
         ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(-0.04, 1.02),
                   fontsize=7.5, framealpha=0.0, handletextpad=0.3, labelspacing=0.25)
-        ax.text(0.5, -0.11, "dot colour = accuracy  (green good → red off)",
-                transform=ax.transAxes, ha="center", va="top", fontsize=7.5, color=FAINT)
-        if annotated:                    # export only: full self-documenting caption
-            ax.set_title("Composition recovery — real vs measured mixture ratio",
-                         fontsize=11.5, fontweight="bold", color=INK, pad=24)
-            ax.text(0.5, 1.04, "arrow: real → measured   ·   corner %: recovery "
-                    "(100% = perfect, green 80–120%)   ·   closer to a corner = more of "
-                    "that substance", transform=ax.transAxes,
-                    ha="center", va="bottom", fontsize=7.5, color=MUTE)
+        # no baked-in title/caption: the figure carries the graph + legend, and the README
+        # written next to it explains what it is (keeps exports drop-in for a figure set)
         ax.set_xlim(-0.16, 1.16); ax.set_ylim(-0.12, 1.10)
         self.c_tri.fig.tight_layout(); self.c_tri.draw_idle()
 
@@ -917,53 +909,53 @@ class ValidatePage(QWidget):
             self.c_rel.new_ax(); self.c_rel.placeholder("no nominal ratios"); return
         # give each mixture ~19 px of vertical room so the labels never overlap (the panel
         # lives in a scroll area, so a tall figure just scrolls)
-        self.c_rel.setMinimumHeight(max(300, len(recs) * 19 + 110))
-        ax = self.c_rel.new_ax()
-        dom = [int(np.argmax(r["nominal"])) for r in recs]
-        gap = np.array([composition_distance(r["nominal"], r["mean"]) for r in recs])
-        gap_n = gap / (gap.max() or 1.0) * 100
-        bars, ypos, ynames, ycols, spans = [], [], [], [], []
-        cursor, first = 0.0, True
-        for si in (2, 1, 0):                                   # THI-, TBZ-, DQ-dominant
-            members = [k for k in range(len(recs)) if dom[k] == si]
-            if not members:
-                continue
-            if not first:
-                cursor -= 0.8
-            first = False
-            members.sort(key=lambda k: -gap_n[k])
-            start = cursor
-            for k in members:
-                bars.append((cursor, k, si)); ypos.append(cursor)
-                ynames.append(recs[k]["name"].replace("_corrected", ""))
-                ycols.append(substance_color(SUBSTANCES[si], si))
-                cursor -= 1.0
-            spans.append((si, (start + cursor + 1.0) / 2))
-        # 2- vs 3-component mixtures are different regimes (3-way competition is harder);
-        # hatch the ternaries so both read in one chart instead of needing separate runs
+        # binary and ternary are different regimes (3-way competition is harder) and the
+        # ternaries set the scale, so plot them side by side, each on its own normalisation
         ncomp = [int(sum(1 for v in r["nominal"] if v > 0.02)) for r in recs]
-        for y, k, si in bars:
-            ax.barh(y, gap_n[k], height=0.66, alpha=0.85,
-                    color=substance_color(SUBSTANCES[si], si),
-                    hatch="//" if ncomp[k] >= 3 else None,
-                    edgecolor="white" if ncomp[k] >= 3 else "none", linewidth=0.0)
-        ax.set_yticks(ypos)
-        ax.set_yticklabels(ynames, fontsize=7 if len(recs) > 24 else 8)
-        ax.tick_params(axis="y", length=0)
-        for t, c in zip(ax.get_yticklabels(), ycols):
-            t.set_color(c)
-        for si, yc in spans:
-            ax.text(103, yc, f"{SUBSTANCES[si]}-dom", va="center", ha="left", fontsize=9,
-                    fontweight="bold", color=substance_color(SUBSTANCES[si], si))
-        ax.set_xlim(0, 120)
-        ax.set_xlabel("predicted vs real  —  drift (% of worst)")
-        if any(n >= 3 for n in ncomp):                     # explain the hatch
-            from matplotlib.patches import Patch
-            ax.legend(handles=[Patch(facecolor=MUTE, alpha=0.85, label="2 components"),
-                               Patch(facecolor=MUTE, alpha=0.85, hatch="//",
-                                     edgecolor="white", label="3 components")],
-                      fontsize=8, framealpha=0, loc="lower right")
-        self.c_rel.fig.tight_layout(); self.c_rel.draw_idle()
+        groups = [("2-component mixtures", [k for k in range(len(recs)) if ncomp[k] < 3]),
+                  ("3-component mixtures", [k for k in range(len(recs)) if ncomp[k] >= 3])]
+        groups = [g for g in groups if g[1]] or [("mixtures", list(range(len(recs))))]
+        tallest = max(len(idx) for _t, idx in groups)
+        self.c_rel.setMinimumHeight(max(300, tallest * 19 + 130))
+        fig = self.c_rel.fig; fig.clear()
+        axes = fig.subplots(1, len(groups), squeeze=False)[0]
+        gap = np.array([composition_distance(r["nominal"], r["mean"]) for r in recs])
+        dom = [int(np.argmax(r["nominal"])) for r in recs]
+        for ax, (title, idx) in zip(axes, groups):
+            self.c_rel.style(ax)
+            sub = gap[idx]
+            norm = {k: gap[k] / (sub.max() or 1.0) * 100 for k in idx}
+            ypos, ynames, ycols, spans = [], [], [], []
+            cursor, first = 0.0, True
+            for si in (2, 1, 0):                               # THI-, TBZ-, DQ-dominant
+                members = [k for k in idx if dom[k] == si]
+                if not members:
+                    continue
+                if not first:
+                    cursor -= 0.8
+                first = False
+                members.sort(key=lambda k: -norm[k])
+                start = cursor
+                for k in members:
+                    ax.barh(cursor, norm[k], height=0.66, alpha=0.85,
+                            color=substance_color(SUBSTANCES[si], si))
+                    ypos.append(cursor)
+                    ynames.append(recs[k]["name"].replace("_corrected", ""))
+                    ycols.append(substance_color(SUBSTANCES[si], si))
+                    cursor -= 1.0
+                spans.append((si, (start + cursor + 1.0) / 2))
+            ax.set_yticks(ypos)
+            ax.set_yticklabels(ynames, fontsize=7 if len(idx) > 24 else 8)
+            ax.tick_params(axis="y", length=0)
+            for t, c in zip(ax.get_yticklabels(), ycols):
+                t.set_color(c)
+            for si, yc in spans:
+                ax.text(103, yc, f"{SUBSTANCES[si]}-dom", va="center", ha="left", fontsize=8,
+                        fontweight="bold", color=substance_color(SUBSTANCES[si], si))
+            ax.set_xlim(0, 125)
+            ax.set_title(title, fontsize=9, color=INK)
+            ax.set_xlabel("drift (% of this group's worst)")
+        fig.tight_layout(); self.c_rel.draw_idle()
 
     def _plot_recovery(self, res):
         ax = self.c_rec.new_ax()
@@ -1038,10 +1030,10 @@ class ValidatePage(QWidget):
         if self._cres:                                   # composition view
             figs += [("drift_triangle", self.c_tri),
                      ("relative_drift", self.c_rel), ("recovery", self.c_rec)]
-            self._plot_triangle(self._cres, annotated=True)   # bake caption into the PNG
+            self.c_tri.export_panel = (6.2, 6.2)   # the simplex is aspect-equal: export square,
+            self.c_rel.export_panel = (5.6, 6.4)   # else the tight bbox squashes it flat
         n = _save_figs(figs, d)
         if self._cres:
-            self._plot_triangle(self._cres)                   # restore clean in-app view
             n += self._export_pub_triangles(d)                # publication-style variants
         self._export_readme(d, res, [f[0] for f in figs], is_dl=getattr(self, "_is_dl", False))
         self.status.setText(f"exported README + response_factors.csv + table + {n} PNG "
