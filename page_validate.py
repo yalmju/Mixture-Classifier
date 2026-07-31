@@ -139,10 +139,12 @@ class ValidatePage(QWidget):
                                     "spectral bands it uses (Integrated Gradients + band "
                                     "permutation importance + ligand ablation)")
         self.explain_btn.clicked.connect(self._run_explain)
+        # (the composition model is trained + saved ONCE in the Model tab; Recovery applies it)
         self.savemodel_btn = QPushButton("Save DL model"); self.savemodel_btn.setObjectName("ghost")
-        self.savemodel_btn.setToolTip("train the DL on the loaded mixtures and save it, so the "
-                                      "Real-data tab can apply it to unknown maps (composition + µM)")
+        self.savemodel_btn.setToolTip("deprecated — train and save the composition model in the "
+                                      "Model tab instead; Recovery applies it")
         self.savemodel_btn.clicked.connect(self._save_dl_model)
+        self.savemodel_btn.setVisible(False)
         clr_b = QPushButton("Clear"); clr_b.setObjectName("ghost"); clr_b.clicked.connect(self._clear)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost"); exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Validate"); self.btn.setObjectName("primary")
@@ -934,9 +936,14 @@ class ValidatePage(QWidget):
                 ycols.append(substance_color(SUBSTANCES[si], si))
                 cursor -= 1.0
             spans.append((si, (start + cursor + 1.0) / 2))
+        # 2- vs 3-component mixtures are different regimes (3-way competition is harder);
+        # hatch the ternaries so both read in one chart instead of needing separate runs
+        ncomp = [int(sum(1 for v in r["nominal"] if v > 0.02)) for r in recs]
         for y, k, si in bars:
             ax.barh(y, gap_n[k], height=0.66, alpha=0.85,
-                    color=substance_color(SUBSTANCES[si], si))
+                    color=substance_color(SUBSTANCES[si], si),
+                    hatch="//" if ncomp[k] >= 3 else None,
+                    edgecolor="white" if ncomp[k] >= 3 else "none", linewidth=0.0)
         ax.set_yticks(ypos)
         ax.set_yticklabels(ynames, fontsize=7 if len(recs) > 24 else 8)
         ax.tick_params(axis="y", length=0)
@@ -947,6 +954,12 @@ class ValidatePage(QWidget):
                     fontweight="bold", color=substance_color(SUBSTANCES[si], si))
         ax.set_xlim(0, 120)
         ax.set_xlabel("predicted vs real  —  drift (% of worst)")
+        if any(n >= 3 for n in ncomp):                     # explain the hatch
+            from matplotlib.patches import Patch
+            ax.legend(handles=[Patch(facecolor=MUTE, alpha=0.85, label="2 components"),
+                               Patch(facecolor=MUTE, alpha=0.85, hatch="//",
+                                     edgecolor="white", label="3 components")],
+                      fontsize=8, framealpha=0, loc="lower right")
         self.c_rel.fig.tight_layout(); self.c_rel.draw_idle()
 
     def _plot_recovery(self, res):
