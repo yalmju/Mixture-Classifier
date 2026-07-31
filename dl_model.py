@@ -102,15 +102,17 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     method = (method or "mlp").lower()
     if progress:
         progress(f"training composition head ({method})")
+    def _norm_rows(p):
+        p = np.clip(np.asarray(p, float), 0, None); return p / (p.sum(1, keepdims=True) + 1e-12)
     if method == "pls":
         from sklearn.cross_decomposition import PLSRegression
         nc = max(1, min(int(n_components), len(X) - 1, X.shape[1]))
-        comp_store = {"method": "pls", "sk": PLSRegression(n_components=nc).fit(X, Y)}
+        sk = PLSRegression(n_components=nc).fit(X, Y)
+        comp_store = {"method": "pls", "sk": sk}; tp = _norm_rows(sk.predict(X))
     elif method == "rf":
         from sklearn.ensemble import RandomForestRegressor
-        comp_store = {"method": "rf",
-                      "sk": RandomForestRegressor(n_estimators=int(n_trees),
-                                                  random_state=int(seed)).fit(X, Y)}
+        sk = RandomForestRegressor(n_estimators=int(n_trees), random_state=int(seed)).fit(X, Y)
+        comp_store = {"method": "rf", "sk": sk}; tp = _norm_rows(sk.predict(X))
     elif method == "cnn":
         import torch
         torch.manual_seed(int(seed)); net = _cnn(X.shape[1], len(subs))
@@ -121,6 +123,8 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             net.train(); op.zero_grad()
             (w * (sm(net(Xt)).exp() - Yt).abs()).sum(1).mean().backward(); op.step()
         net.eval()
+        with torch.no_grad():
+            tp = torch.softmax(net(Xt), 1).numpy()
         comp_store = {"method": "cnn",
                       "comp_state": {k: v.detach().numpy() for k, v in net.state_dict().items()}}
     else:
@@ -129,6 +133,9 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         comp_store = {"method": "mlp",
                       "comp_state": {k: v.cpu().numpy() for k, v in comp["state"].items()},
                       "comp_hidden": (256, 64)}
+        from dl_quantify import predict_composition
+        tp = predict_composition(comp, X)
+    train_eval = {"true": np.asarray(Y, float).tolist(), "pred": np.asarray(tp, float).tolist()}
 
     uM = None
     have = [i for i in range(len(X)) if Cabs[i] is not None and any(c > 0 for c in Cabs[i])]
@@ -151,7 +158,8 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
               "mu": mu, "sd": sd}
 
     return {"subs": subs, "lo": lo, "hi": hi, "n_feat": int(mask.sum()), "P": P,
-            "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None, **comp_store}
+            "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None,
+            "train_eval": train_eval, **comp_store}
 
 
 def apply_model(model, wn, cube):

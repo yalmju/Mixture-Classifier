@@ -34,23 +34,20 @@ class TrainComposeWorker(QObject):
 
     def run(self):
         try:
-            from dl_model import train_model, apply_model
-            from real_data import load_map
+            from dl_model import train_model
             from composition import SUBSTANCES
             params = dict(self.params); items = params.pop("items")
             model = train_model(items=items, progress=self.progress.emit, **params)
-            subs = model["subs"]; errs = []; rows = []      # train-set composition recovery
-            for k, it in enumerate(items):
-                self.progress.emit(f"scoring {k + 1}/{len(items)}")
-                wn, cube, _m, _c = load_map(it[0])
-                comp = apply_model(model, wn, cube)["composition"]
-                tr = it[1]; s = sum(float(tr.get(n, 0)) for n in subs)
-                if s <= 0:
-                    continue
-                true = [float(tr.get(n, 0)) / s for n in SUBSTANCES]
-                pred = [comp.get(n, 0.0) for n in SUBSTANCES]
-                errs.append(0.5 * sum(abs(pred[j] - true[j]) for j in range(len(SUBSTANCES))))
-                rows.append((os.path.basename(it[0]), true, pred))
+            # train-set recovery is computed IN-MEMORY inside train_model (no map reload,
+            # which was holding the GIL and freezing the GUI). Reorder to SUBSTANCES.
+            subs = model["subs"]; sidx = {s: j for j, s in enumerate(subs)}
+            te = model.get("train_eval", {}); tvs = te.get("true", []); pvs = te.get("pred", [])
+            errs = []; rows = []
+            for i in range(len(tvs)):
+                tv = [float(tvs[i][sidx[s]]) if s in sidx else 0.0 for s in SUBSTANCES]
+                pv = [float(pvs[i][sidx[s]]) if s in sidx else 0.0 for s in SUBSTANCES]
+                errs.append(0.5 * sum(abs(pv[j] - tv[j]) for j in range(len(SUBSTANCES))))
+                rows.append((f"mix {i + 1}", tv, pv))
             self.done.emit((model, float(np.mean(errs)) if errs else float("nan"), rows))
         except Exception:
             self.fail.emit(traceback.format_exc())
