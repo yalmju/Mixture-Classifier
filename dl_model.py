@@ -484,6 +484,34 @@ def apply_model_pixels(model, wn, spectra):
     return np.vstack(out)
 
 
+def apply_uM_pixels(model, wn, spectra):
+    """Per-pixel absolute concentration from the model's µM head: (n_px, n_conc) in µM,
+    plus the substance names that head covers. The head is trained on log10 µM labels,
+    so it is an order-of-magnitude estimate — but it is the SAME estimator the map-level
+    readout uses, batched, which is what lets the concentration maps come from the model
+    instead of the Langmuir isotherm."""
+    import torch, torch.nn as nn
+    u = model.get("uM")
+    if not u:
+        return None, []
+    usubs = u.get("subs") or model["subs"]
+    wn = np.asarray(wn); mask = (wn >= model["lo"]) & (wn <= model["hi"])
+    X = np.asarray(spectra, float)
+    if X.shape[1] == len(wn):
+        X = X[:, mask]
+    net = nn.Sequential(nn.Linear(model["n_feat"], 256), nn.BatchNorm1d(256), nn.ReLU(),
+                        nn.Dropout(0.15), nn.Linear(256, 64), nn.ReLU(),
+                        nn.Linear(64, len(usubs)))
+    net.load_state_dict({k: torch.tensor(v) for k, v in u["state"].items()}); net.eval()
+    Xe = ((X - u["mu"]) / u["sd"]).astype(np.float32)
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(Xe), 512):
+            out.append(net(torch.tensor(Xe[i:i + 512])).numpy())
+    logv = np.vstack(out)
+    return 10.0 ** np.clip(logv, -3.0, 6.0), list(usubs)
+
+
 def apply_recovery(model, items, progress=None):
     """Apply an already-trained composition model to each known-ratio mixture (NO training)
     → list of {name, nominal, mean[, uM_pred, uM_true]} in composition.SUBSTANCES order,

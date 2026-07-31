@@ -249,7 +249,8 @@ class RealDataPage(QWidget):
         # 3) per-substance concentration (µM) maps + overall composition, side by side
         self.c_conc = Canvas(); self.c_comp = Canvas()
         self.card_conc, lay_conc = _card(
-            "Per-substance concentration (µM) — load a calibration to enable")
+            "Per-substance concentration (µM) — from the composition model, "
+            "or from a loaded calibration when one is given")
         lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(300)
         ccard, clay = _card("Composition (overall)")
         clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(300)
@@ -688,7 +689,8 @@ class RealDataPage(QWidget):
             um = r.conc_avg * 1e6
             cs = "  ·  ".join(f"{nm} {um[i]:.3g} µM" for i, nm in enumerate(nb)
                               if np.isfinite(um[i]) and um[i] > 0)
-            txt += f"<br><b>mean concentration</b> (hit pixels): {cs}"
+            src = "calibration" if r.calib_r2 is not None else "composition model"
+            txt += (f"<br><b>mean concentration</b> (hit pixels, {src}): {cs}")
             if r.calib_r2 is not None:
                 r2s = "  ·  ".join(f"{nm} R²={r.calib_r2[i]:.2f}" for i, nm in enumerate(nb))
                 tag = ("  ⚠ low-quality calibration — µM approximate"

@@ -317,38 +317,26 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     Anb = A[:, nonbg]
     nb_tot = Anb.sum(axis=1, keepdims=True)
     ratio_nb = np.divide(Anb, nb_tot, out=np.zeros_like(Anb), where=nb_tot > 0)
-    # ---- ONE rule decides background vs substance ----------------------------
-    # Stacking gates (model blank channel AND a fraction threshold AND a measured
-    # background AND the R² filter) meant a dropped pixel could not be traced to a
-    # cause. Exactly one rule applies, and the result records which:
-    #   1. a loaded background map — the user measured THIS sample's substrate, so
-    #      that measurement wins outright;
-    #   2. else a composition model carrying a blank class — it judges background
-    #      itself, per pixel, and nothing else gets a vote;
-    #   3. else the classical NNLS/MCR behaviour (auto argmax or min_frac).
-    dl_blank = bool(method == "dlpx" and dl_model is not None
-                    and dl_model.get("blank")
-                    and dl_model.get("blank") in (dl_model.get("subs") or []))
+    # ---- background vs substance: NNLS decides, the model composes ----------
+    # The composition model's blank channel was given this call and it buried the
+    # signal: pixels whose spectrum plainly shows a THI peak came back "background",
+    # and a letters map with visible ink read 1% hit. The point of the experiment is
+    # that ink marks where the signal is, so the call goes back to the least-squares
+    # abundances — the same rule the NNLS method uses, on the same templates, which
+    # reads that map at 44% hit. The model is left doing what it is good at: saying
+    # WHICH substances a hit pixel holds. A loaded background map still overrides,
+    # since that is a direct measurement of this sample's own substrate.
+    ls_tot = A_ls.sum(axis=1, keepdims=True)
+    ls_frac = np.divide(A_ls, ls_tot, out=np.zeros_like(A_ls), where=ls_tot > 0)
     if bg_score is not None:
         hit = bg_score < bg_thr
         hit_rule = f"measured background map (match < {bg_thr:.2f})"
-    elif dl_blank:
-        # Compare the blank channel with the substances TOGETHER, not by argmax. The
-        # model splits its probability across every compound but keeps one blank
-        # channel, so on a genuinely mixed pixel three thirds each lose to a single
-        # blank — argmax called a pixel that is 65% substance "background", and the
-        # more evenly mixed the sample the worse the bias. A pixel is background when
-        # blank alone outweighs everything else.
-        blk = A[:, bg_mask].sum(axis=1)
-        hit = blk < A[:, nonbg].sum(axis=1)
-        hit_rule = (f"composition model's {dl_model['blank']} channel vs the substances "
-                    "(per pixel)")
-    elif hit_mode == "auto":                          # BLK-based: strongest wins
-        hit = ~bg_mask[A.argmax(axis=1)]
-        hit_rule = "strongest component is a substance (auto)"
+    elif hit_mode == "auto":                          # strongest least-squares component
+        hit = ~bg_mask[A_ls.argmax(axis=1)]
+        hit_rule = "strongest reference component is a substance (NNLS, auto)"
     else:                                             # substance share above threshold
-        hit = frac[:, nonbg].sum(axis=1) >= min_frac
-        hit_rule = f"substance share ≥ {min_frac:.2f}"
+        hit = ls_frac[:, nonbg].sum(axis=1) >= min_frac
+        hit_rule = f"NNLS substance share ≥ {min_frac:.2f}"
     hit_frac = float(hit.mean())
     mean_ratio = ratio_nb[hit].mean(axis=0) if hit.any() else ratio_nb.mean(axis=0)
     dominant = [names[i] for i in nonbg][int(mean_ratio.argmax())] if nonbg else names[0]
@@ -356,6 +344,23 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     # ---- optional: per-pixel ABSOLUTE concentration via Langmuir calibration ----
     calibrated, conc, conc_avg, pp_theta, calib_r2 = False, None, None, None, None
     calib_slope = None
+    # Concentration from the MODEL when one is driving the composition: the same µM head
+    # the summary line reports, run per pixel. The Langmuir path stays available and wins
+    # when a calibration is explicitly loaded.
+    if (method == "dlpx" and dl_model is not None and dl_model.get("uM")
+            and not calib_path and nonbg):
+        from dl_model import apply_uM_pixels
+        if progress:
+            progress("composition model — per-pixel concentration")
+        um, unames = apply_uM_pixels(dl_model, wn, spectra)
+        if um is not None:
+            conc = np.zeros((len(spectra), len(nonbg)))
+            for k, j in enumerate(nonbg):
+                if names[j] in unames:
+                    conc[:, k] = um[:, unames.index(names[j])] * 1e-6      # µM -> M
+            conc[~hit] = 0.0
+            conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
+            calibrated = True
     if calib_path and nonbg:
         nb_names = [names[i] for i in nonbg]
         pures = ref_templates[nonbg]                       # calibrate against the references
