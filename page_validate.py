@@ -47,9 +47,6 @@ class ValidateWorker(QObject):
                 from dl_model import apply_recovery
                 dres = apply_recovery(self.params["shared_model"],
                                       self.params["shared_items"], progress=self.progress.emit)
-            elif self.params.get("dl"):
-                from dl_recovery import dl_recovery
-                dres = dl_recovery(progress=self.progress.emit, **self.params["dl"])
             self.done.emit((vres, cres, dres))
         except Exception:
             self.fail.emit(traceback.format_exc())
@@ -72,33 +69,13 @@ class ExplainWorker(QObject):
             self.fail.emit(traceback.format_exc())
 
 
-class SaveModelWorker(QObject):
-    done = pyqtSignal(str)
-    fail = pyqtSignal(str)
-    progress = pyqtSignal(str)
-
-    def __init__(self, params):
-        super().__init__()
-        self.params = params
-
-    def run(self):
-        try:
-            from dl_model import train_model, save_model
-            out = self.params.pop("out")
-            model = train_model(progress=self.progress.emit, **self.params)
-            save_model(model, out)
-            self.done.emit(f"{out}  (n={model['n_train']}, µM {'yes' if model['has_uM'] else 'no'})")
-        except Exception:
-            self.fail.emit(traceback.format_exc())
-
-
 class ValidatePage(QWidget):
     def __init__(self):
         super().__init__()
         self._thread = None
         self._res = None
         self._cres = None                # composition (per-pixel) result
-        self._shared_model = MODEL_BUS.model         # model trained in the Model tab (Step 2)
+        self._shared_model = MODEL_BUS.model         # model trained/loaded in the Model tab
         COLOR_BUS.changed.connect(self._recolor)     # top-bar picker → recolour
         MODEL_BUS.changed.connect(self._on_model_bus)
         MIXTURE_BUS.changed.connect(lambda: self._load_from_samples(force=True))
@@ -135,16 +112,11 @@ class ValidatePage(QWidget):
                                "loaded mixtures). The composition view (triangle · recovery · "
                                "drift) then shows the DL prediction instead of NNLS. Slower.")
         self.explain_btn = QPushButton("Band importance"); self.explain_btn.setObjectName("ghost")
-        self.explain_btn.setToolTip("train the DL on the loaded mixtures and show which "
+        self.explain_btn.setToolTip("show which bands the LOADED model uses "
                                     "spectral bands it uses (Integrated Gradients + band "
                                     "permutation importance + ligand ablation)")
         self.explain_btn.clicked.connect(self._run_explain)
         # (the composition model is trained + saved ONCE in the Model tab; Recovery applies it)
-        self.savemodel_btn = QPushButton("Save DL model"); self.savemodel_btn.setObjectName("ghost")
-        self.savemodel_btn.setToolTip("deprecated — train and save the composition model in the "
-                                      "Model tab instead; Recovery applies it")
-        self.savemodel_btn.clicked.connect(self._save_dl_model)
-        self.savemodel_btn.setVisible(False)
         clr_b = QPushButton("Clear"); clr_b.setObjectName("ghost"); clr_b.clicked.connect(self._clear)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost"); exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Validate"); self.btn.setObjectName("primary")
@@ -154,7 +126,7 @@ class ValidatePage(QWidget):
         self.cancel_btn.clicked.connect(self._cancel); self.cancel_btn.setVisible(False)
         ctl.addWidget(self.ref_lbl); ctl.addStretch(1)
         ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.dl_chk)
-        ctl.addWidget(add_b); ctl.addWidget(self.explain_btn); ctl.addWidget(self.savemodel_btn)
+        ctl.addWidget(add_b); ctl.addWidget(self.explain_btn)
         ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.cancel_btn); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
@@ -202,41 +174,10 @@ class ValidatePage(QWidget):
         vrow.addWidget(self.vip_chk); vrow.addWidget(self.vip_txt, 1); vrow.addWidget(vip_b)
         ibl.addLayout(vrow)
 
-        # DL training settings — used by BOTH 'DL predict' (leave-one-out) and 'Save DL
-        # model'. Method dropdown; each method's own sub-parameters appear automatically.
-        # Downstream (Real-data apply) needs no knobs; tuning lives here.
-        drow = QHBoxLayout(); drow.setSpacing(8)
-        dlbl = QLabel("DL method:"); dlbl.setObjectName("field")
-        self.dl_method = QComboBox(); self.dl_method.setObjectName("field")
-        for text, data in [("MLP (deep)", "mlp"), ("PLS", "pls"),
-                           ("Random Forest", "rf"), ("1D-CNN", "cnn")]:
-            self.dl_method.addItem(text, data)
-        self.dl_method.setToolTip("composition model — the best one is data-dependent, so pick "
-                                  "per experiment. Sub-parameters below change with the method.")
-        self.dl_method.currentIndexChanged.connect(self._update_dl_params)
-        # per-method sub-parameter widgets (shown/hidden by _update_dl_params)
-        self.dl_ep = QSpinBox(); self.dl_ep.setRange(20, 3000); self.dl_ep.setSingleStep(50)
-        self.dl_ep.setValue(350); self.dl_ep.setPrefix("epochs "); self.dl_ep.setObjectName("field")
-        self.dl_ep.setToolTip("training iterations (MLP / CNN)")
-        self.dl_seed = QSpinBox(); self.dl_seed.setRange(0, 999); self.dl_seed.setValue(0)
-        self.dl_seed.setPrefix("seed "); self.dl_seed.setObjectName("field")
-        self.dl_seed.setToolTip("RNG seed (MLP / CNN / RF)")
-        self.dl_pre = QCheckBox("physics pretrain"); self.dl_pre.setChecked(True)
-        self.dl_pre.setObjectName("field")
-        self.dl_pre.setToolTip("MLP only — warm up on physics-simulated mixtures from the "
-                               "calibration before fitting the real ones (needs a calibration)")
-        self.dl_nc = QSpinBox(); self.dl_nc.setRange(1, 20); self.dl_nc.setValue(8)
-        self.dl_nc.setPrefix("components "); self.dl_nc.setObjectName("field")
-        self.dl_nc.setToolTip("PLS latent components")
-        self.dl_nt = QSpinBox(); self.dl_nt.setRange(20, 1000); self.dl_nt.setSingleStep(20)
-        self.dl_nt.setValue(300); self.dl_nt.setPrefix("trees "); self.dl_nt.setObjectName("field")
-        self.dl_nt.setToolTip("Random-Forest trees")
-        drow.addWidget(dlbl); drow.addWidget(self.dl_method)
-        for w in (self.dl_ep, self.dl_seed, self.dl_pre, self.dl_nc, self.dl_nt):
-            drow.addWidget(w)
-        drow.addStretch(1)
-        ibl.addLayout(drow)
-        self._update_dl_params()
+        # No DL training knobs here on purpose: Recovery APPLIES the model trained
+        # (or loaded) in the Model tab. Method / epochs / seed / pretrain used to be
+        # duplicated on this page, so the same model could be trained twice with
+        # different settings and the two tabs would disagree about the same mixtures.
 
         # editable table: file  |  true ratio (name:parts, comma-separated)
         self.table = QTableWidget(0, 2)
@@ -319,6 +260,7 @@ class ValidatePage(QWidget):
         self.readout.setWordWrap(True); self.readout.setTextFormat(Qt.TextFormat.RichText)
         self.readout.setStyleSheet(f"font-size:15px; color:{INK};")
         root.addWidget(self.readout)
+        self._on_model_bus()          # reflect whether a model exists NOW, not only later
 
     # ---- helpers ----
     def _short(self, p):
@@ -494,31 +436,16 @@ class ValidatePage(QWidget):
                 items.append((self._files[row], ratio, tc))
         return items
 
-    def _update_dl_params(self):
-        """Show only the sub-parameters that the chosen composition method uses."""
-        m = self.dl_method.currentData()
-        self.dl_ep.setVisible(m in ("mlp", "cnn"))
-        self.dl_seed.setVisible(m in ("mlp", "cnn", "rf"))
-        self.dl_pre.setVisible(m == "mlp")
-        self.dl_nc.setVisible(m == "pls")
-        self.dl_nt.setVisible(m == "rf")
-
     def _on_model_bus(self):
         """A model was trained in the Model tab → Recovery applies it (no retraining)."""
         self._shared_model = MODEL_BUS.model
         active = self._shared_model is not None
-        self.dl_chk.setText("DL predict (Model-tab model)" if active else "DL predict")
-        for w in (self.dl_method, self.dl_ep, self.dl_seed, self.dl_pre, self.dl_nc, self.dl_nt):
-            w.setEnabled(not active)                 # applying, not training → knobs inert
+        self.dl_chk.setText("DL predict (Model-tab model)" if active
+                            else "DL predict — load a model in the Model tab")
+        self.dl_chk.setEnabled(active)               # nothing to apply without one
+        self.explain_btn.setEnabled(active)
         if active:
             self.dl_chk.setChecked(True)
-
-    def _dl_opts(self):
-        """DL training knobs shared by 'DL predict' (leave-one-out) and 'Save DL model'."""
-        return dict(method=self.dl_method.currentData(),
-                    epochs=self.dl_ep.value(), seed=self.dl_seed.value(),
-                    use_pretrain=self.dl_pre.isChecked(),
-                    n_components=self.dl_nc.value(), n_trees=self.dl_nt.value())
 
     # ---- run ----
     def _run(self):
@@ -537,13 +464,11 @@ class ValidatePage(QWidget):
                              files=[it[0] for it in items],
                              nominals=[it[1] for it in items]))
         if self.dl_chk.isChecked():                        # physics-informed DL composition
-            if self._shared_model is not None:             # inherit the Model-tab model (no retrain)
-                params["shared_model"] = self._shared_model
-                params["shared_items"] = items
-            else:
-                params["dl"] = dict(data_dir=self.data_dir, items=items,
-                                    calib_path=self.calib_path, baseline=cfg["baseline"],
-                                    trim=cfg["trim"], **self._dl_opts())
+            if self._shared_model is None:                 # apply-only: nothing to apply
+                self.status.setText("no composition model — train or load one in the Model tab")
+                self.status.setStyleSheet(f"color:{RED};"); return
+            params["shared_model"] = self._shared_model
+            params["shared_items"] = items
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self._cancelled = False; self.cancel_btn.setVisible(True)
         self.status.setText("● starting…"); self.status.setStyleSheet(f"color:{MUTE};")
@@ -563,7 +488,6 @@ class ValidatePage(QWidget):
         self.cancel_btn.setVisible(False); self.progbar.setVisible(False)
         self.btn.setEnabled(True); self.btn.setText("Validate")
         self.explain_btn.setEnabled(True); self.explain_btn.setText("Band importance")
-        self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
         self.status.setText("cancelled"); self.status.setStyleSheet(f"color:{MUTE};")
 
     # ---- DL explain (interpretability) ----
@@ -574,20 +498,23 @@ class ValidatePage(QWidget):
         self.status.setStyleSheet(f"color:{RED};")
         self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
         self.explain_btn.setEnabled(True); self.explain_btn.setText("Band importance")
-        self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
 
     def _run_explain(self):
         items = self._items()
         if len(items) < 3:
             self.status.setText("add ≥3 mixtures for band importance")
             self.status.setStyleSheet(f"color:{RED};"); return
+        if self._shared_model is None:
+            self.status.setText("no composition model — train or load one in the Model tab")
+            self.status.setStyleSheet(f"color:{RED};"); return
         cfg = load_preprocess(self.data_dir)
         params = dict(data_dir=self.data_dir, items=items, calib_path=self.calib_path,
-                      baseline=cfg["baseline"], trim=cfg["trim"])
+                      baseline=cfg["baseline"], trim=cfg["trim"],
+                      model=self._shared_model)     # explain THE model, don't fit a new one
         self.explain_btn.setEnabled(False); self.explain_btn.setText("Explaining…")
         self._cancelled = False; self.cancel_btn.setVisible(True)
         self.progbar.setRange(0, 0); self.progbar.setVisible(True)
-        self.status.setText("● band importance — training…"); self.status.setStyleSheet(f"color:{MUTE};")
+        self.status.setText("● band importance — reading the loaded model…"); self.status.setStyleSheet(f"color:{MUTE};")
         if not start_worker(self, ExplainWorker(params), done=self._apply_explain,
                             fail=self._error_explain,
                             progress=lambda m: self.status.setText("● " + m)):
@@ -606,43 +533,6 @@ class ValidatePage(QWidget):
         self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
         self.status.setText("band importance failed — " + tb.strip().splitlines()[-1][:80])
         self.status.setStyleSheet(f"color:{RED};")
-
-    # ---- train + save a DL model (for the Real-data tab) ----
-    def _save_dl_model(self):
-        items = self._items()
-        if len(items) < 3:
-            self.status.setText("add ≥3 mixtures to train a DL model")
-            self.status.setStyleSheet(f"color:{RED};"); return
-        p, _ = QFileDialog.getSaveFileName(self, "Save DL model", "dl_model.dlm",
-                                           "DL model (*.dlm)")
-        if not p:
-            return
-        cfg = load_preprocess(self.data_dir)
-        params = dict(data_dir=self.data_dir, items=items, calib_path=self.calib_path,
-                      baseline=cfg["baseline"], trim=cfg["trim"], out=p, **self._dl_opts())
-        self.savemodel_btn.setEnabled(False); self.savemodel_btn.setText("Saving…")
-        self._cancelled = False; self.cancel_btn.setVisible(True)
-        self.progbar.setRange(0, 0); self.progbar.setVisible(True)
-        self.status.setText("● training DL model…"); self.status.setStyleSheet(f"color:{MUTE};")
-        if not start_worker(self, SaveModelWorker(params), done=self._saved_model,
-                            fail=self._error_save,
-                            progress=lambda m: self.status.setText("● " + m)):
-            self._busy("saving the DL model")      # another job already running
-
-    def _saved_model(self, info):
-        if getattr(self, "_cancelled", False):
-            return
-        self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
-        self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
-        self.status.setText("DL model saved → " + os.path.basename(info))
-        self.status.setStyleSheet(f"color:{MUTE};")
-
-    def _error_save(self, tb):
-        self.savemodel_btn.setEnabled(True); self.savemodel_btn.setText("Save DL model")
-        self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
-        self.status.setText("DL model save failed — " + tb.strip().splitlines()[-1][:80])
-        self.status.setStyleSheet(f"color:{RED};")
-        print(tb, file=sys.stderr)
 
     def _plot_explain(self, r):
         """3-panel interpretability: IG attribution per compound · band permutation

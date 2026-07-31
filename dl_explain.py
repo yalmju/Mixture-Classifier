@@ -14,7 +14,16 @@ import os
 import numpy as np
 
 
-def dl_explain(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None):
+def dl_explain(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
+               model=None):
+    """Explain WHICH BANDS a composition model uses: integrated-gradient attribution
+    per compound, band-permutation importance, and ligand ablation.
+
+    ``model`` is a trained model dict from ``dl_model.train_model`` — pass it and nothing
+    is trained here, so Recovery explains the very model Real-data scores with instead of
+    a fresh one that would answer for a different set of weights. Gradients are needed, so
+    only the torch heads ("mlp", "cnn") can be explained; PLS / RF have none. With no model
+    the historic behaviour (train one here) still applies."""
     from unmix import _templates, _baseline_removed, _l2, compute_vip_bands
     from real_data import load_map
     from dataset import is_blank
@@ -24,13 +33,23 @@ def dl_explain(data_dir, items, calib_path=None, baseline=True, trim=None, progr
     import torch
 
     names, wn, means = _templates(data_dir, baseline, None)
-    lo, hi = trim if trim else (300.0, 1800.0)
+    if model is not None:
+        meth = model.get("method", "mlp")
+        if meth not in ("mlp", "cnn"):
+            raise ValueError(
+                f"the loaded model is {meth.upper()}, which has no gradients to attribute. "
+                "Band importance needs an MLP or CNN model — train one in the Model tab.")
+        lo, hi = model["lo"], model["hi"]          # the model's own window, so the net fits
+    else:
+        lo, hi = trim if trim else (300.0, 1800.0)
     mask = (wn >= lo) & (wn <= hi)
     if mask.sum() < 10:
         mask = np.ones(len(wn), bool)
     wnv = wn[mask]
     idx = {n: i for i, n in enumerate(names)}
     subs = [s for s in SUBSTANCES if s in idx and not is_blank(s)]
+    if model is not None:                          # the model's own channel order rules
+        subs = [s for s in model["subs"] if not is_blank(s)]
     if len(subs) < 2:
         raise ValueError("DL explain needs ≥2 reference substances matching the mixtures.")
     P = _l2(_baseline_removed(means[[idx[s] for s in subs]][:, mask], baseline))
@@ -75,10 +94,35 @@ def dl_explain(data_dir, items, calib_path=None, baseline=True, trim=None, progr
         except Exception:
             pre = None
 
-    if progress:
-        progress("DL explain — training model")
-    model = train_composition(X, Y, len(subs), pretrain=pre, seed=0)
-    net = _spec_net(model["n_feat"], model["n_comp"]); net.load_state_dict(model["state"]); net.eval()
+    if model is not None:                          # APPLY the shared model — no training
+        if progress:
+            progress("band importance — reading the loaded model")
+        n_out = len(model["subs"])                 # blank channel included if it has one
+        if model.get("method") == "cnn":
+            from dl_model import _cnn
+            net = _cnn(model["n_feat"], n_out)
+        else:
+            net = _spec_net(model["n_feat"], n_out, model.get("comp_hidden", (256, 64)))
+        net.load_state_dict({k: torch.tensor(v) for k, v in model["comp_state"].items()})
+        net.eval()
+    else:
+        if progress:
+            progress("DL explain — training model")
+        m = train_composition(X, Y, len(subs), pretrain=pre, seed=0)
+        net = _spec_net(m["n_feat"], m["n_comp"]); net.load_state_dict(m["state"]); net.eval()
+
+    # A model carrying a blank class has one channel more than the compounds shown.
+    # Line the labels up with the net's outputs (blank = 0 for every mixture) and keep a
+    # compound -> channel map, or the error term compares a 4-vector with a 3-vector.
+    if model is not None:
+        chan = [model["subs"].index(nm) for nm in subs]
+        n_out = len(model["subs"])
+        Yf = np.zeros((N, n_out), np.float32)
+        for k, c in enumerate(chan):
+            Yf[:, c] = Y[:, k]
+        Y = Yf
+    else:
+        chan = list(range(len(subs)))
 
     def predict(Xa):
         with torch.no_grad():
@@ -93,10 +137,13 @@ def dl_explain(data_dir, items, calib_path=None, baseline=True, trim=None, progr
             g, = torch.autograd.grad(out, s); tot += g[0]
         return ((xt - base) * (tot / steps)).detach().numpy()
     attr = {}
-    for c, name in enumerate(subs):
+    for k, name in enumerate(subs):
+        c = chan[k]
         if progress:
             progress(f"DL explain — attribution {name}")
         pres = np.where(Y[:, c] > 0.05)[0]
+        if not len(pres):
+            attr[name] = np.zeros(nfeat); continue
         A = np.mean([np.abs(ig(X[i], c)) for i in pres], axis=0)
         attr[name] = A / (A.max() + 1e-12)
 
@@ -116,13 +163,15 @@ def dl_explain(data_dir, items, calib_path=None, baseline=True, trim=None, progr
     # (3) ligand ablation
     abl = {}
     base_pred = predict(X)
-    for c, name in enumerate(subs):
+    for k, name in enumerate(subs):
+        c = chan[k]
         reg = np.zeros(nfeat, bool)
         for wv in vip.get(name, []):
             reg |= (np.abs(wnv - wv) <= 10)
         Xa = X.copy(); Xa[:, reg] = 0.0
         pres = np.where(Y[:, c] > 0.05)[0]
-        abl[name] = (float(base_pred[pres, c].mean()), float(predict(Xa)[pres, c].mean()))
+        abl[name] = ((float(base_pred[pres, c].mean()), float(predict(Xa)[pres, c].mean()))
+                     if len(pres) else (0.0, 0.0))
 
     return {"wn": wnv, "subs": subs, "attr": attr, "vip": vip,
             "perm": np.array(perm), "abl": abl}
