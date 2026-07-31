@@ -46,6 +46,7 @@ class UnmixResult:
     conc_avg: np.ndarray = None  # (Knb,) mean concentration over hit pixels (M)
     pp_theta: np.ndarray = None  # (n_pix,) total surface coverage Σθ per pixel
     calib_r2: np.ndarray = None  # (Knb,) isotherm fit R² per substance
+    calib_slope: np.ndarray = None  # (Knb,) gA*K — signal per molar at low C
     bg_score: np.ndarray = None  # (n_pix,) match to the MEASURED background (0..1)
     bg_thr: float = None         # score at/above which a pixel is judged background
     hit_rule: str = ""           # which single rule decided background vs substance
@@ -346,10 +347,11 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
 
     # ---- optional: per-pixel ABSOLUTE concentration via Langmuir calibration ----
     calibrated, conc, conc_avg, pp_theta, calib_r2 = False, None, None, None, None
+    calib_slope = None
     if calib_path and nonbg:
         nb_names = [names[i] for i in nonbg]
         pures = ref_templates[nonbg]                       # calibrate against the references
-        conc, pp_theta, calib_r2 = _quantify_map(
+        conc, pp_theta, calib_r2, calib_slope = _quantify_map(
             calib_path, nb_names, pures, spectra, wn, trim, baseline, hit, progress)
         conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
         calibrated = True
@@ -361,13 +363,16 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         hit_frac=hit_frac, mean_ratio=mean_ratio, dominant=dominant,
         mean_r2=float(reliab.mean()), calibrated=calibrated, conc=conc,
         conc_avg=conc_avg, pp_theta=pp_theta, calib_r2=calib_r2,
-        bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
+        calib_slope=calib_slope, bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
 
 
 def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
                   progress=None):
     """Absolute concentration (M) per pixel for the non-background substances, from
-    a dilution-series calibration. Returns (conc (n,Knb), theta (n,), r2 (Knb,))."""
+    a dilution-series calibration. Returns (conc (n,Knb), theta (n,), r2 (Knb,),
+    slope (Knb,)) where slope = gA*K is each substance's signal per molar at low
+    concentration — the number that sets how a measured ratio becomes a concentration
+    ratio, and the one worth showing when the two disagree."""
     axis_c, names_c, dils = load_calibration_csv(calib_path)
     cidx = {n: k for k, n in enumerate(names_c)}
     missing = [c for c in nb_names if c not in cidx]
@@ -400,7 +405,7 @@ def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
             progress(f"quantifying — pixel {n}/{len(idx)}")
         q = quantify(spectra[i], pures, calib)
         conc[i] = q["C"]; theta[i] = q["theta_total"]
-    return conc, theta, r2
+    return conc, theta, r2, np.asarray(calib.gA) * np.asarray(calib.K)
 
 
 if __name__ == "__main__":

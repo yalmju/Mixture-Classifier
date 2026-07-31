@@ -700,6 +700,23 @@ class RealDataPage(QWidget):
                        if float(np.min(r.calib_r2)) < 0.7 else "")
                 txt += (f"<br><span style='color:{FAINT}'>calibration fit: {r2s}{tag}"
                         "  ·  click a pixel for its µM</span>")
+            # The single number that turns a measured RATIO into a CONCENTRATION ratio:
+            # each substance's signal per molar. It was invisible, so a calibration
+            # claiming one substance is hundreds of times brighter than another silently
+            # skewed every µM. Shown relative to the weakest, with a warning when the
+            # spread is large enough to dominate the answer.
+            sl = getattr(r, "calib_slope", None)
+            if sl is not None and np.all(np.isfinite(sl)) and np.min(sl) > 0:
+                rel = np.asarray(sl, float) / float(np.min(sl))
+                rs = "  ·  ".join(f"{nm} {rel[i]:.3g}×" for i, nm in enumerate(nb))
+                spread = float(rel.max())
+                warn = ""
+                if spread >= 50:
+                    warn = (f" &nbsp;<span style='color:{CORAL}'>⚠ {spread:.0f}× spread "
+                            "— check the concentration column of the calibration CSV "
+                            "(unit / decade); this factor sets the µM ratio</span>")
+                txt += (f"<br><span style='color:{FAINT}'>calibration response per "
+                        f"molar (vs weakest): {rs}</span>{warn}")
         if getattr(self, "dl_model", None) is not None and self.test:
             # ONE model run feeds both readouts. The composition shown here IS the mean
             # of the per-pixel model output already drawn in the pie — recomputing it
