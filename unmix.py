@@ -46,6 +46,8 @@ class UnmixResult:
     conc_avg: np.ndarray = None  # (Knb,) mean concentration over hit pixels (M)
     pp_theta: np.ndarray = None  # (n_pix,) total surface coverage Σθ per pixel
     calib_r2: np.ndarray = None  # (Knb,) isotherm fit R² per substance
+    bg_score: np.ndarray = None  # (n_pix,) match to the MEASURED background (0..1)
+    bg_thr: float = None         # score at/above which a pixel is judged background
 
 
 def _baseline_removed(cube, baseline):
@@ -145,6 +147,49 @@ def compute_vip_bands(data_dir, baseline=True, trim=None, k=2, lo=400.0, hi=1800
     return nb_names, vip_bands(wn, ref, nb_names, k=k, lo=lo, hi=hi)
 
 
+def _bg_match(X, mu, V):
+    """Per-row R² of reconstructing X from the background subspace (mean ``mu`` +
+    principal directions ``V``). 1 = the pixel is fully explained by background."""
+    Z = X - mu
+    rec = Z @ V.T @ V
+    ss_res = ((Z - rec) ** 2).sum(axis=1)
+    ss_tot = ((X - X.mean(axis=1, keepdims=True)) ** 2).sum(axis=1)
+    return np.clip(1.0 - np.divide(ss_res, ss_tot, out=np.ones_like(ss_res),
+                                   where=ss_tot > 0), 0.0, 1.0)
+
+
+def _bg_subspace(bg_paths, wn, baseline, trim, n_comp=6):
+    """Learn the MEASURED background from blank map(s): (mu, V, thr) where mu + V
+    span the background spectra (same preprocessing as the test pixels) and thr is
+    a self-calibrated match score — fit on half the background pixels, thr = the
+    5th percentile of the OTHER half's scores, so ~95% of true background passes
+    without hand-tuning. A test pixel scoring >= thr is judged background."""
+    rows = []
+    for p in bg_paths:
+        wn_b, cube, _m, _c = load_map(p)
+        wn_b = np.asarray(wn_b, float); cube = np.asarray(cube, float)
+        if trim is not None:
+            lo, hi = trim
+            mb = (wn_b >= lo) & (wn_b <= hi)
+            if mb.sum() >= 10:
+                wn_b = wn_b[mb]; cube = cube[:, mb]
+        Xb = _baseline_removed(cube, baseline)
+        if len(wn_b) != len(wn) or not np.allclose(wn_b, wn):
+            Xb = np.stack([np.interp(wn, wn_b, y) for y in Xb])
+        rows.append(_l2(Xb))
+    B = np.vstack(rows)
+    if len(B) >= 8:                       # held-out half keeps the threshold honest
+        fit, hold = B[0::2], B[1::2]
+    else:
+        fit, hold = B, B
+    mu = fit.mean(axis=0)
+    k = int(min(n_comp, max(1, len(fit) - 1)))
+    _u, _s, Vt = np.linalg.svd(fit - mu, full_matrices=False)
+    V = Vt[:k]
+    thr = float(np.quantile(_bg_match(hold, mu, V), 0.05))
+    return mu, V, thr
+
+
 def _vip_fit_mask(wn, peak_map, window, min_pts):
     """Boolean mask over ``wn`` = union of each compound's VIP band ± window. None when
     no peak_map, or too few points to fit ``min_pts`` components (falls back to full)."""
@@ -159,7 +204,7 @@ def _vip_fit_mask(wn, peak_map, window, min_pts):
 
 def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
               min_frac=0.05, hit_mode="threshold", calib_path=None,
-              peak_map=None, peak_window=10.0, dl_model=None,
+              peak_map=None, peak_window=10.0, dl_model=None, bg_map=None,
               progress=None) -> UnmixResult:
     """Unmix ``test_path`` against the substances in ``data_dir`` (background
     included) by ``method`` ('nnls' or 'mcr'). ``hit_mode`` decides which pixels
@@ -173,7 +218,12 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     marker-band windows (± ``peak_window`` cm⁻¹): the composition is then decomposed on
     the least-cross-talk discriminative bands instead of the whole spectrum. Display /
     band-image spectra stay full; only the abundance fit (and its reconstruction R²) use
-    the masked region. Ignored for method='mcr'."""
+    the masked region. Ignored for method='mcr'.
+
+    ``bg_map`` (path or list of paths to MEASURED blank/background maps, e.g. Pest/BLk)
+    judges each pixel background vs substance directly: pixels whose spectrum is
+    explained by the measured-background subspace are background no matter what the
+    unmix says — so the hit decision no longer leans on NNLS abundances."""
     names, wn, means = _templates(data_dir, baseline, progress)
     wn_u, cube_u, _mean_u, coord = load_map(test_path)
 
@@ -192,6 +242,14 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     K = len(names)
     bg_mask = np.array([is_blank(c) for c in names])
     nonbg = [i for i in range(K) if not bg_mask[i]]
+
+    bg_score = bg_thr = None
+    if bg_map:
+        paths = [bg_map] if isinstance(bg_map, str) else list(bg_map)
+        if progress:
+            progress("learning the measured background")
+        mu_b, V_b, bg_thr = _bg_subspace(paths, wn, baseline, trim)
+        bg_score = _bg_match(X, mu_b, V_b)
 
     if method == "mcr":
         if progress:
@@ -214,30 +272,33 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
             A[i], _ = nnls(fit_T.T, y)
             if progress and i % 300 == 0:
                 progress(f"NNLS unmixing — pixel {i}/{len(fit_X)}")
-        if method == "dlpx" and dl_model is not None:
-            # the trained composition model, run per pixel: it replaces the substance
-            # fractions while NNLS keeps supplying the blank/background channel and the
-            # reconstruction used for the reliability (R²) mask.
-            if progress:
-                progress("composition model — per-pixel prediction")
-            from dl_model import apply_model_pixels
-            Pk = apply_model_pixels(dl_model, wn, spectra)          # (n_px, n_subs)
-            sub_names = dl_model.get("subs", [])
-            blank = dl_model.get("blank")
-            if blank and blank in sub_names:
-                # the model judges background itself: use its channels directly, including
-                # the blank one, so hit/background no longer depends on NNLS
-                for j, nm in enumerate(sub_names):
-                    tgt = nm if nm in names else next((c for c in names if is_blank(c)), None)
-                    if tgt in names:
-                        A[:, names.index(tgt)] = Pk[:, j]
-            else:
-                tot = A[:, nonbg].sum(1, keepdims=True)             # keep NNLS' substance mass
-                for j, nm in enumerate(sub_names):
-                    if nm in names:
-                        A[:, names.index(nm)] = Pk[:, j] * tot[:, 0]
+    A_ls = A                             # least-squares abundances, for the R² QC
+    if method == "dlpx" and dl_model is not None:
+        # the trained composition model, run per pixel: it replaces the abundance
+        # channels. The reliability (R²) mask stays on the NNLS reconstruction
+        # (A_ls) — the model outputs are probabilities, not fit coefficients, so
+        # reconstructing from them would misread nearly every pixel as low-R².
+        if progress:
+            progress("composition model — per-pixel prediction")
+        from dl_model import apply_model_pixels
+        A_ls = A.copy()
+        Pk = apply_model_pixels(dl_model, wn, spectra)              # (n_px, n_subs)
+        sub_names = dl_model.get("subs", [])
+        blank = dl_model.get("blank")
+        if blank and blank in sub_names:
+            # the model judges background itself: use its channels directly, including
+            # the blank one, so hit/background no longer depends on NNLS
+            for j, nm in enumerate(sub_names):
+                tgt = nm if nm in names else next((c for c in names if is_blank(c)), None)
+                if tgt in names:
+                    A[:, names.index(tgt)] = Pk[:, j]
+        else:
+            tot = A[:, nonbg].sum(1, keepdims=True)                 # keep NNLS' substance mass
+            for j, nm in enumerate(sub_names):
+                if nm in names:
+                    A[:, names.index(nm)] = Pk[:, j] * tot[:, 0]
 
-    recon = A @ fit_T
+    recon = A_ls @ fit_T
     ss_res = np.sum((fit_X - recon) ** 2, axis=1)
     ss_tot = np.sum((fit_X - fit_X.mean(axis=1, keepdims=True)) ** 2, axis=1)
     reliab = np.clip(1.0 - np.divide(ss_res, ss_tot, out=np.ones_like(ss_res),
@@ -252,6 +313,8 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         hit = ~bg_mask[A.argmax(axis=1)]
     else:                                             # substance share above threshold
         hit = frac[:, nonbg].sum(axis=1) >= min_frac
+    if bg_score is not None:                          # measured background overrides:
+        hit &= bg_score < bg_thr                      # a matching pixel is background
     hit_frac = float(hit.mean())
     mean_ratio = ratio_nb[hit].mean(axis=0) if hit.any() else ratio_nb.mean(axis=0)
     dominant = [names[i] for i in nonbg][int(mean_ratio.argmax())] if nonbg else names[0]
@@ -272,7 +335,8 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         A=A, ratio_nb=ratio_nb, hit=hit, reliab=reliab, n_pixels=len(X),
         hit_frac=hit_frac, mean_ratio=mean_ratio, dominant=dominant,
         mean_r2=float(reliab.mean()), calibrated=calibrated, conc=conc,
-        conc_avg=conc_avg, pp_theta=pp_theta, calib_r2=calib_r2)
+        conc_avg=conc_avg, pp_theta=pp_theta, calib_r2=calib_r2,
+        bg_score=bg_score, bg_thr=bg_thr)
 
 
 def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,

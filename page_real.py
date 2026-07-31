@@ -66,6 +66,7 @@ class RealDataPage(QWidget):
         self.test = None
         self.model_path = None      # trained model (unmixr_model.joblib) for classify
         self.calib_path = None      # optional dilution-series calibration CSV → µM
+        self.bg_paths = []          # measured background map(s) → direct bg judgment
         self.rf = {}                # response factors {name: ×} from Validate (correction)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(12)
@@ -101,6 +102,15 @@ class RealDataPage(QWidget):
         self.dlm_lbl = QLabel(""); self.dlm_lbl.setObjectName("field")
         MODEL_BUS.changed.connect(self._adopt_model)       # auto-use a model trained in the Model tab
         self._adopt_model()
+        bg_b = QPushButton("Load background…"); bg_b.setObjectName("ghost")
+        bg_b.setToolTip("measured blank/background map(s) (e.g. Pest/BLk) — a pixel "
+                        "whose spectrum matches them is judged BACKGROUND directly, "
+                        "independent of the NNLS abundances")
+        bg_b.clicked.connect(self._browse_bg)
+        self.bg_lbl = QLabel(""); self.bg_lbl.setObjectName("field")
+        self.bg_x = QPushButton("✕"); self.bg_x.setObjectName("ghost")
+        self._compact_x(self.bg_x, "clear background")
+        self.bg_x.clicked.connect(self._clear_bg); self.bg_x.setVisible(False)
         cal_b = QPushButton("Load calibration…"); cal_b.setObjectName("ghost")
         cal_b.setToolTip("a dilution-series CSV → per-pixel absolute concentration (µM)")
         cal_b.clicked.connect(self._browse_calib)
@@ -191,6 +201,7 @@ class RealDataPage(QWidget):
         srow = QHBoxLayout(); srow.setSpacing(8)
         srow.addWidget(model_b); srow.addWidget(self.model_lbl)
         srow.addWidget(dlm_b)
+        srow.addWidget(bg_b); srow.addWidget(self.bg_lbl); srow.addWidget(self.bg_x)
         srow.addWidget(cal_b); srow.addWidget(self.cal_lbl); srow.addWidget(self.cal_x)
         srow.addWidget(corr_b); srow.addLayout(corrcol)
         srow.addStretch(1)
@@ -430,6 +441,22 @@ class RealDataPage(QWidget):
             self.dl_model = None; self.dlm_lbl.setText("DL load failed")
             print(e, file=sys.stderr)
 
+    def _browse_bg(self):
+        """Pick one or more MEASURED background/blank maps (e.g. Pest/BLk) — they
+        teach the analysis what 'nothing here' looks like on this substrate."""
+        ps, _ = QFileDialog.getOpenFileNames(
+            self, "Measured background map(s) (e.g. Pest/BLk)", "",
+            "maps (*.csv *.txt);;all files (*)")
+        if not ps:
+            return
+        self.bg_paths = list(ps)
+        self.bg_lbl.setText("bg: " + (os.path.basename(ps[0]) if len(ps) == 1
+                                      else f"{len(ps)} maps"))
+        self.bg_x.setVisible(True)
+
+    def _clear_bg(self):
+        self.bg_paths = []; self.bg_lbl.setText(""); self.bg_x.setVisible(False)
+
     def _browse_calib(self):
         p, _ = QFileDialog.getOpenFileName(
             self, "Calibration spectra CSV (compound, concentration_M, wavenumbers…) "
@@ -567,7 +594,8 @@ class RealDataPage(QWidget):
                           method=self._method(), baseline=cfg["baseline"],
                           trim=cfg["trim"], min_frac=self.thr_value(),
                           hit_mode="auto" if self.chk_auto.isChecked() else "threshold",
-                          calib_path=self.calib_path, dl_model=self.dl_model)
+                          calib_path=self.calib_path, dl_model=self.dl_model,
+                          bg_map=self.bg_paths or None)
             if params["method"] == "dlpx" and self.dl_model is None:
                 self.status.setText("no composition model — train one in the Model tab "
                                     "(or Load DL model…)")
@@ -626,6 +654,11 @@ class RealDataPage(QWidget):
                f"<b>dominant:</b> {dom}"
                + ("  <span style='color:%s'>(response-corrected)</span>" % TEAL
                   if corrected else ""))
+        if getattr(r, "bg_score", None) is not None:
+            n_bg = int((r.bg_score >= r.bg_thr).sum())
+            txt += (f"<br><b>measured background:</b> {n_bg / r.n_pixels:.0%} of pixels "
+                    f"match the loaded background map (score ≥ {r.bg_thr:.2f}) — "
+                    "judged background directly, not via NNLS")
         if getattr(r, "calibrated", False) and r.conc_avg is not None:
             um = r.conc_avg * 1e6
             cs = "  ·  ".join(f"{nm} {um[i]:.3g} µM" for i, nm in enumerate(nb)
@@ -839,6 +872,9 @@ class RealDataPage(QWidget):
         rat = "  ·  ".join(f"{r.comps[j]} {ratio_nb[i, k] * 100:.0f}%"
                            for k, j in enumerate(r.nonbg) if ratio_nb[i, k] > 0.02)
         tag = rat if r.hit[i] else "background"
+        if (not r.hit[i] and getattr(r, "bg_score", None) is not None
+                and r.bg_score[i] >= r.bg_thr):
+            tag = f"background (matches measured bg, score {r.bg_score[i]:.2f})"
         if not self._reliable(r)[i]:                      # saturated/low-R² warning
             r2 = float(r.reliab[i]) if getattr(r, "reliab", None) is not None else 0.0
             tag += f"  ⚠ low R²={r2:.2f} (saturated? — excluded)"
@@ -879,15 +915,19 @@ class RealDataPage(QWidget):
                   [[nm, f"{r.mean_ratio[i]:.4f}"] for i, nm in enumerate(nb)])
         inten = r.spectra.sum(axis=1)                      # total baseline-removed signal
         cal = getattr(r, "conc", None) is not None
+        has_bg = getattr(r, "bg_score", None) is not None
         head = (["x", "y", "hit", "total_intensity"]
                 + [f"ratio_{nm}" for nm in nb] + [f"A_{c}" for c in r.comps]
-                + ([f"conc_uM_{nm}" for nm in nb] if cal else []) + ["reliability_r2"])
+                + ([f"conc_uM_{nm}" for nm in nb] if cal else []) + ["reliability_r2"]
+                + (["bg_match"] if has_bg else []))
         rows = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}", int(r.hit[i]),
                  f"{inten[i]:.4f}"]
                 + [f"{r.ratio_nb[i, k]:.4f}" for k in range(len(nb))]
                 + [f"{r.A[i, k]:.5f}" for k in range(len(r.comps))]
                 + ([f"{r.conc[i, k] * 1e6:.4g}" for k in range(len(nb))] if cal else [])
-                + [f"{r.reliab[i]:.4f}"] for i in range(r.n_pixels)]
+                + [f"{r.reliab[i]:.4f}"]
+                + ([f"{r.bg_score[i]:.4f}"] if has_bg else [])
+                for i in range(r.n_pixels)]
         write_csv(os.path.join(d, "per_pixel.csv"), head, rows)
         figs = [("real_intensity_maps", self.c_maps),
                 ("real_composition_pies", self.c_pie),
