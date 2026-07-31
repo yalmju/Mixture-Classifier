@@ -168,7 +168,11 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     def _norm_rows(p):
         p = np.clip(np.asarray(p, float), 0, None); return p / (p.sum(1, keepdims=True) + 1e-12)
     loss_curve = []
-    if method == "pls":
+    if method == "nnls":                       # classical baseline: nothing is trained
+        from dl_quantify import surface_composition
+        comp_store = {"method": "nnls"}
+        tp = _norm_rows(surface_composition(X, P))
+    elif method == "pls":
         from sklearn.cross_decomposition import PLSRegression
         nc = max(1, min(int(n_components), len(X) - 1, X.shape[1]))
         sk = PLSRegression(n_components=nc).fit(X, Y)
@@ -384,6 +388,34 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
                                  n_trees=n_trees, P_ref=P)[0]
         out[meth] = {"true": Y.tolist(), "pred": Pm.tolist()}
     return out
+
+
+def apply_model_pixels(model, wn, spectra):
+    """Composition for EVERY pixel spectrum (n_px, n_wn) → (n_px, n_subs), rows summing
+    to 1. Same heads as apply_model, just batched, so the Real-data tab can draw a
+    per-pixel composition map from the trained model instead of only a map-level answer."""
+    lo, hi = model["lo"], model["hi"]
+    wn = np.asarray(wn); mask = (wn >= lo) & (wn <= hi)
+    X = np.asarray(spectra, float)
+    if X.shape[1] == len(wn):
+        X = X[:, mask]
+    X = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
+    method = model.get("method", "mlp")
+    if method in ("pls", "rf"):
+        p = np.clip(np.asarray(model["sk"].predict(X.astype(np.float64)), float), 0, None)
+        return p / (p.sum(1, keepdims=True) + 1e-12)
+    import torch
+    if method == "cnn":
+        net = _cnn(model["n_feat"], len(model["subs"]))
+    else:
+        from dl_quantify import _spec_net
+        net = _spec_net(model["n_feat"], len(model["subs"]), model["comp_hidden"])
+    net.load_state_dict({k: torch.tensor(v) for k, v in model["comp_state"].items()}); net.eval()
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(X), 512):                 # batch so a big map stays in memory
+            out.append(torch.softmax(net(torch.tensor(X[i:i + 512].astype(np.float32))), 1).numpy())
+    return np.vstack(out)
 
 
 def apply_recovery(model, items, progress=None):

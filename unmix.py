@@ -159,7 +159,7 @@ def _vip_fit_mask(wn, peak_map, window, min_pts):
 
 def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
               min_frac=0.05, hit_mode="threshold", calib_path=None,
-              peak_map=None, peak_window=10.0,
+              peak_map=None, peak_window=10.0, dl_model=None,
               progress=None) -> UnmixResult:
     """Unmix ``test_path`` against the substances in ``data_dir`` (background
     included) by ``method`` ('nnls' or 'mcr'). ``hit_mode`` decides which pixels
@@ -214,6 +214,19 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
             A[i], _ = nnls(fit_T.T, y)
             if progress and i % 300 == 0:
                 progress(f"NNLS unmixing — pixel {i}/{len(fit_X)}")
+        if method == "dlpx" and dl_model is not None:
+            # the trained composition model, run per pixel: it replaces the substance
+            # fractions while NNLS keeps supplying the blank/background channel and the
+            # reconstruction used for the reliability (R²) mask.
+            if progress:
+                progress("composition model — per-pixel prediction")
+            from dl_model import apply_model_pixels
+            Pk = apply_model_pixels(dl_model, wn, spectra)          # (n_px, n_subs)
+            sub_names = dl_model.get("subs", [])
+            tot = A[:, nonbg].sum(1, keepdims=True)                 # keep NNLS' substance mass
+            for j, nm in enumerate(sub_names):
+                if nm in names:
+                    A[:, names.index(nm)] = Pk[:, j] * tot[:, 0]
 
     recon = A @ fit_T
     ss_res = np.sum((fit_X - recon) ** 2, axis=1)

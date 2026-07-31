@@ -50,8 +50,8 @@ class RealWorker(QObject):
 
 
 class RealDataPage(QWidget):
-    METHODS = [("NNLS (fixed refs)", "nnls"), ("MCR-ALS (refine)", "mcr"),
-               ("Trained model", "model")]
+    METHODS = [("Composition model (per pixel)", "dlpx"), ("NNLS (fixed refs)", "nnls"),
+               ("MCR-ALS (refine)", "mcr"), ("Trained model", "model")]
 
     def __init__(self):
         super().__init__()
@@ -567,7 +567,11 @@ class RealDataPage(QWidget):
                           method=self._method(), baseline=cfg["baseline"],
                           trim=cfg["trim"], min_frac=self.thr_value(),
                           hit_mode="auto" if self.chk_auto.isChecked() else "threshold",
-                          calib_path=self.calib_path)
+                          calib_path=self.calib_path, dl_model=self.dl_model)
+            if params["method"] == "dlpx" and self.dl_model is None:
+                self.status.setText("no composition model — train one in the Model tab "
+                                    "(or Load DL model…)")
+                self.status.setStyleSheet(f"color:{RED};"); return
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
         self._thread = QThread(); self._worker = RealWorker(params, use_model=use_model)
