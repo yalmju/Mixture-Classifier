@@ -333,6 +333,9 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
 
     return {"subs": subs, "lo": lo, "hi": hi, "n_feat": int(mask.sum()), "P": P,
             "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None,
+            "n_maps": int(len(set(paths.tolist()))),
+            "px_per_map": int(px_per_map),
+            "training_level": "map_mean" if int(px_per_map) == 0 else "map_mean+pixels",
             "train_eval": train_eval, "loo_eval": loo_eval, "test_eval": test_eval,
             "blank": blank_name, **comp_store}
 
@@ -340,6 +343,12 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
 def apply_model(model, wn, cube):
     """Score a test map (or single spectrum): returns {composition: {name: frac},
     uM: {name: µM} or None}. Handles the model's own window + standardisation."""
+    if model.get("kind") == "pixel_surface_v2":
+        from pixel_surface import apply_pixel_surface
+        p = apply_pixel_surface(model, wn, np.atleast_2d(cube),
+                                preprocessed=False).mean(axis=0)
+        return {"composition": {s: float(p[i]) for i, s in enumerate(model["subs"])},
+                "uM": None}
     lo, hi = model["lo"], model["hi"]
     mask = (np.asarray(wn) >= lo) & (np.asarray(wn) <= hi)
     ya = _mean_spectrum(cube, mask)
@@ -464,6 +473,9 @@ def apply_model_pixels(model, wn, spectra):
     """Composition for EVERY pixel spectrum (n_px, n_wn) → (n_px, n_subs), rows summing
     to 1. Same heads as apply_model, just batched, so the Real-data tab can draw a
     per-pixel composition map from the trained model instead of only a map-level answer."""
+    if model.get("kind") == "pixel_surface_v2":
+        from pixel_surface import apply_pixel_surface
+        return apply_pixel_surface(model, wn, spectra, preprocessed=True)
     lo, hi = model["lo"], model["hi"]
     wn = np.asarray(wn); mask = (wn >= lo) & (wn <= hi)
     X = np.asarray(spectra, float)
@@ -488,12 +500,16 @@ def apply_model_pixels(model, wn, spectra):
     return np.vstack(out)
 
 
-def apply_uM_pixels(model, wn, spectra):
+def apply_uM_pixels(model, wn, spectra, return_meta=False):
     """Per-pixel absolute concentration from the model's µM head: (n_px, n_conc) in µM,
     plus the substance names that head covers. The head is trained on log10 µM labels,
     so it is an order-of-magnitude estimate — but it is the SAME estimator the map-level
     readout uses, batched, which is what lets the concentration maps come from the model
     instead of the Langmuir isotherm."""
+    if model.get("kind") == "pixel_surface_v2" and model.get("uM", {}).get("kind") == "pixel_concentration_v2":
+        from pixel_surface import apply_pixel_concentration
+        out = apply_pixel_concentration(model, wn, spectra)
+        return out if return_meta else out[:2]
     import torch, torch.nn as nn
     u = model.get("uM")
     if not u:
@@ -513,7 +529,8 @@ def apply_uM_pixels(model, wn, spectra):
         for i in range(0, len(Xe), 512):
             out.append(net(torch.tensor(Xe[i:i + 512])).numpy())
     logv = np.vstack(out)
-    return 10.0 ** np.clip(logv, -3.0, 6.0), list(usubs)
+    result = (10.0 ** np.clip(logv, -3.0, 6.0), list(usubs))
+    return (*result, {}) if return_meta else result
 
 
 def apply_recovery(model, items, progress=None):

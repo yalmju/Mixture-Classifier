@@ -62,7 +62,10 @@ Samples → Model → Recovery → Quantify → Real data
 | `page_validate.py` | Recovery |
 | `page_real.py` | Real data |
 | `triangle_figs.py` | 논문용 삼각형 (accuracy / RGB / **compare 좌우 2패널**) — 앱과 스크립트 공용 |
-| `experiments/dl/*.py` | 오프라인 벤치마크 스크립트 (docs 그림 생성) |
+| `experiments/benchmarks/*.py` | 유지 중인 오프라인 벤치마크 (docs 그림 생성) |
+| `experiments/concentration/*.py` | 농도 분석 실험 |
+| `experiments/reports/*.py` | PDF 요약 보고서 생성기 |
+| `experiments/archive/legacy_dl/*.py` | 메인 코드로 대체된 구형 DL 실험 보관본 |
 
 ---
 

@@ -90,7 +90,7 @@ S += [Paragraph("6. 용어 (약어 풀이)", H2),
       Paragraph("<b>IG</b> Integrated Gradients(적분 기울기 — 각 파수의 예측 기여도) · <b>permutation importance</b> 특정 구간을 섞어 정확도 하락으로 중요도 측정 · <b>ligand ablation</b> 성분 마커밴드를 지워 예측 붕괴로 인과 확인 · <b>VIP</b> variable-importance-in-projection(판별 마커밴드) · <b>SERS</b> surface-enhanced Raman spectroscopy", GL),
       Paragraph("<b>µM</b> 마이크로몰(농도) · <b>order-of-magnitude / within-order</b> 자릿수 정확도(예측/실제가 10배 이내) · <b>within-2×</b> 2배 이내 · <b>recovery</b> 복원율=측정/실제×100% · <b>response factor(응답계수)</b> 단위 농도당 표면 신호 세기(THI가 크면 표면 지배) · <b>gain</b> 기판/장비 신호 배율 · <b>competition(경쟁흡착)</b> 성분들이 표면 자리를 다투는 것", GL),
       Spacer(1,4),
-      Paragraph("코드: dl_quantify.py · dl_recovery.py · dl_explain.py · dl_model.py · experiments/dl/ · 상세: docs/dl_quantification_findings.md · docs/dl_interpretability.md", CAP)]
+      Paragraph("코드: dl_quantify.py · dl_explain.py · dl_model.py · experiments/ · 상세: docs/dl_quantification_findings.md · docs/dl_interpretability.md", CAP)]
 
 SimpleDocTemplate(OUT, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm, topMargin=1.6*cm, bottomMargin=1.6*cm).build(S)
 print("wrote", OUT)

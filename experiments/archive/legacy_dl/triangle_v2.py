@@ -28,7 +28,7 @@ from io_utils import load_calibration_csv
 from composition import bary
 import torch, torch.nn as nn
 
-npz = os.path.join(os.path.dirname(__file__), "tri_preds.npz")
+npz = os.path.join(os.path.dirname(__file__), "..", "..", "benchmarks", "tri_preds.npz")
 LO, HI = 300.0, 1800.0
 names, wn, means = _templates(pure, True, None); m = (wn >= LO) & (wn <= HI)
 nb = [names[i] for i in range(len(names)) if not is_blank(names[i])]

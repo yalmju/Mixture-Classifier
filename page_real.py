@@ -458,12 +458,16 @@ class RealDataPage(QWidget):
 
     def _browse_dl(self):
         p, _ = QFileDialog.getOpenFileName(self, "DL model (.dlm from Recovery)", "",
-                                           "DL model (*.dlm);;all (*)")
+                                           "DL / Pixel surface model (*.dlm *.psm);;all (*)")
         if not p:
             return
         try:
-            from dl_model import load_model
-            self.dl_model = load_model(p)
+            if p.lower().endswith(".psm"):
+                from pixel_surface import load_pixel_surface
+                self.dl_model = load_pixel_surface(p)
+            else:
+                from dl_model import load_model
+                self.dl_model = load_model(p)
             self.dlm_lbl.setText("DL: " + os.path.basename(p) + self._blank_tag())
             self.dlm_lbl.setStyleSheet(""); self._sync_controls()
             if self._res is not None:
@@ -691,6 +695,11 @@ class RealDataPage(QWidget):
                               if np.isfinite(um[i]) and um[i] > 0)
             src = "calibration" if r.calib_r2 is not None else "composition model"
             txt += (f"<br><b>mean concentration</b> (hit pixels, {src}): {cs}")
+            if getattr(r, "conc_ood", None) is not None:
+                den = max(1, int(np.count_nonzero(r.hit)) * len(nb))
+                nbad = int(np.count_nonzero(r.conc_ood[r.hit])) if np.any(r.hit) else int(np.count_nonzero(r.conc_ood))
+                txt += (f" <span style='color:{FAINT}'>(order-of-magnitude, semi-quantitative; "
+                        f"OOD {nbad / den:.0%}; OOD values hidden)</span>")
             if r.calib_r2 is not None:
                 r2s = "  ·  ".join(f"{nm} R²={r.calib_r2[i]:.2f}" for i, nm in enumerate(nb))
                 tag = ("  ⚠ low-quality calibration — µM approximate"
@@ -715,40 +724,68 @@ class RealDataPage(QWidget):
                 txt += (f"<br><span style='color:{FAINT}'>calibration response per "
                         f"molar (vs weakest): {rs}</span>{warn}")
         if getattr(self, "dl_model", None) is not None and self.test:
-            # ONE model run feeds both readouts. The composition shown here IS the mean
-            # of the per-pixel model output already drawn in the pie — recomputing it
-            # from a map-level mean over a separately chosen pixel set (what this used
-            # to do) let the summary line contradict the map beside it.
+            # Diagnostic: compare the deployed per-pixel path with the map-aggregate
+            # path used by Recovery/held-out evaluation. A model trained on one mean
+            # spectrum per map can look sound in Recovery yet be out-of-distribution
+            # when it is applied to individual pixels here.
             try:
                 sel = eff_hit if eff_hit.any() else None
                 if self._method() == "dlpx":
-                    comp = "  ·  ".join(f"{nm} {mr[i] * 100:.0f}%"
-                                        for i, nm in enumerate(nb))
-                    src = "mean of the per-pixel map"
+                    pixel_v = np.asarray(mr, float)
                 else:
                     from dl_model import apply_model_pixels
                     P = apply_model_pixels(self.dl_model, r.wn,
                                            r.spectra if sel is None else r.spectra[sel])
                     subs = self.dl_model.get("subs", [])
-                    v = P.mean(axis=0)
-                    comp = "  ·  ".join(f"{s} {v[k] * 100:.0f}%"
-                                        for k, s in enumerate(subs))
-                    src = ("per-pixel model over the hit pixels" if sel is not None
-                           else "per-pixel model over every pixel")
-                txt += (f"<br><b style='color:{BLUE}'>DL composition</b> "
-                        f"<span style='color:{FAINT}'>({src})</span>: {comp}")
-                if self.dl_model.get("uM"):   # µM head has no per-pixel form — same pixels
-                    from dl_model import apply_model
-                    from real_data import load_map
-                    wn, cube, _mn, _c = load_map(self.test)
-                    cube = np.asarray(cube, float)
-                    px = (sel if sel is not None and len(sel) == len(cube)
-                          else np.ones(len(cube), bool))
-                    d = apply_model(self.dl_model, wn, cube[px])
-                    if d["uM"]:
-                        um = "  ·  ".join(f"{k} ≈{v:.0f} µM" for k, v in d["uM"].items())
-                        txt += (f"<br><b style='color:{BLUE}'>DL concentration</b> "
-                                f"(order-of-magnitude, semi-quantitative): {um}")
+                    pv = P.mean(axis=0)
+                    pixel_v = np.array([pv[subs.index(nm)] if nm in subs else 0.0
+                                        for nm in nb], float)
+                    pixel_v /= pixel_v.sum() + 1e-12
+
+                from dl_model import apply_model
+                from real_data import load_map
+                wn, cube, _mn, _c = load_map(self.test)
+                cube = np.asarray(cube, float)
+                px = (sel if sel is not None and len(sel) == len(cube)
+                      else np.ones(len(cube), bool))
+                d = apply_model(self.dl_model, wn, cube[px])
+                agg_v = np.array([d["composition"].get(nm, 0.0) for nm in nb], float)
+                agg_v /= agg_v.sum() + 1e-12
+                pixel_comp = "  ·  ".join(f"{nm} {pixel_v[i] * 100:.0f}%"
+                                           for i, nm in enumerate(nb))
+                agg_comp = "  ·  ".join(f"{nm} {agg_v[i] * 100:.0f}%"
+                                         for i, nm in enumerate(nb))
+                gap = 0.5 * float(np.abs(pixel_v - agg_v).sum())
+                if self.dl_model.get("kind") == "pixel_surface_v2":
+                    txt += (f"<br><b style='color:{BLUE}'>Pixel surface composition</b> "
+                            f"<span style='color:{FAINT}'>(mean over hit pixels)</span>: "
+                            f"{pixel_comp}")
+                else:
+                    txt += (f"<br><b style='color:{BLUE}'>DL composition - pixel mean</b>: "
+                            f"{pixel_comp}"
+                            f"<br><b style='color:{BLUE}'>DL composition - aggregate hit "
+                            f"spectrum</b>: {agg_comp} "
+                            f"<span style='color:{FAINT}'>(difference {gap:.0%})</span>")
+
+                level = self.dl_model.get("training_level")
+                ppm = self.dl_model.get("px_per_map")
+                nrows = self.dl_model.get("n_train", "?")
+                loo_paths = (self.dl_model.get("loo_eval") or {}).get("paths") or []
+                nmaps = self.dl_model.get("n_maps", len(loo_paths) or "?")
+                if level is None:                         # model saved before metadata existed
+                    if isinstance(nrows, int) and isinstance(nmaps, int) and nrows == nmaps:
+                        level, ppm = "map_mean (inferred)", 0
+                    else:
+                        level, ppm = "unknown (legacy model)", "?"
+                warning = (f" <span style='color:{CORAL}'>individual pixels were not "
+                           f"training inputs</span>" if level.startswith("map_mean") else "")
+                txt += (f"<br><span style='color:{FAINT}'>model training unit: {level} "
+                        f"(maps {nmaps}, rows {nrows}, extra pixels/map {ppm})</span>{warning}")
+
+                if d.get("uM"):
+                    um = "  ·  ".join(f"{k} ≈{v:.0f} µM" for k, v in d["uM"].items())
+                    txt += (f"<br><b style='color:{BLUE}'>DL concentration - aggregate "
+                            f"hit spectrum</b> (order-of-magnitude, semi-quantitative): {um}")
             except Exception as e:
                 print("DL apply failed:", e, file=sys.stderr)
         self.readout.setText(txt)
@@ -845,6 +882,7 @@ class RealDataPage(QWidget):
                            interpolation="nearest", cmap=cmap, vmin=0.0, vmax=vmax)
             cb = self.c_conc.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
             cb.ax.tick_params(labelsize=8, colors="black")       # same 0..vmax on every panel
+            ax.set_title(f"{nm} (µM; OOD hidden)", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
         self.c_conc.fig.tight_layout(); self.c_conc.draw_idle()
 
@@ -943,8 +981,11 @@ class RealDataPage(QWidget):
             cs = "  ·  ".join(f"{r.comps[j]} {um[k]:.3g}µM" for k, j in enumerate(r.nonbg)
                               if np.isfinite(um[k]) and um[k] > 0)
             sat = ("  ⚠sat" if r.pp_theta is not None and r.pp_theta[i] > 0.85 else "")
+            ood_names = [r.comps[j] for k, j in enumerate(r.nonbg) if not np.isfinite(um[k])]
             if cs:
                 tag += f"  |  {cs}{sat}"
+            if ood_names:
+                tag += "  |  OOD: " + ", ".join(ood_names)
         ax.set_xlabel("Raman shift (cm$^{-1}$)"); ax.set_yticks([])
         ax.legend(fontsize=9, framealpha=0.0, labelcolor="black",
                   loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, frameon=False)
@@ -984,7 +1025,8 @@ class RealDataPage(QWidget):
                  f"{inten[i]:.4f}"]
                 + [f"{r.ratio_nb[i, k]:.4f}" for k in range(len(nb))]
                 + [f"{r.A[i, k]:.5f}" for k in range(len(r.comps))]
-                + ([f"{r.conc[i, k] * 1e6:.4g}" for k in range(len(nb))] if cal else [])
+                + ([f"{r.conc[i, k] * 1e6:.4g}" if np.isfinite(r.conc[i, k]) else "OOD"
+                    for k in range(len(nb))] if cal else [])
                 + [f"{r.reliab[i]:.4f}"]
                 + ([f"{r.bg_score[i]:.4f}"] if has_bg else [])
                 for i in range(r.n_pixels)]

@@ -269,4 +269,6 @@ Four-method comparison (all components pooled, leave-one-out):
 ---
 
 *Reproduce:* `python dl_quantify.py` (synthetic self-test). Real-data validation, benchmark,
-interpretability and concentration scripts live in `experiments/dl/` (see its README).
+interpretability provenance is retained in `experiments/archive/legacy_dl/`, while maintained
+benchmarks and concentration studies live in `experiments/benchmarks/` and
+`experiments/concentration/` (see `experiments/README.md`).

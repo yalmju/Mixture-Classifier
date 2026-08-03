@@ -44,6 +44,8 @@ class UnmixResult:
     calibrated: bool = False     # True if a dilution-series calibration was applied
     conc: np.ndarray = None      # (n_pix, Knb) per-pixel absolute concentration (M)
     conc_avg: np.ndarray = None  # (Knb,) mean concentration over hit pixels (M)
+    conc_ood: np.ndarray = None  # (n_pix, Knb) invalid/OOD concentration estimate
+    conc_ranges: np.ndarray = None  # (Knb, 2) reportable calibration range (M)
     pp_theta: np.ndarray = None  # (n_pix,) total surface coverage Σθ per pixel
     calib_r2: np.ndarray = None  # (Knb,) isotherm fit R² per substance
     calib_slope: np.ndarray = None  # (Knb,) gA*K — signal per molar at low C
@@ -343,6 +345,7 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
 
     # ---- optional: per-pixel ABSOLUTE concentration via Langmuir calibration ----
     calibrated, conc, conc_avg, pp_theta, calib_r2 = False, None, None, None, None
+    conc_ood, conc_ranges = None, None
     calib_slope = None
     # Concentration from the MODEL when one is driving the composition: the same µM head
     # the summary line reports, run per pixel. The Langmuir path stays available and wins
@@ -352,14 +355,22 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         from dl_model import apply_uM_pixels
         if progress:
             progress("composition model — per-pixel concentration")
-        um, unames = apply_uM_pixels(dl_model, wn, spectra)
+        um, unames, um_meta = apply_uM_pixels(dl_model, wn, spectra, return_meta=True)
         if um is not None:
             conc = np.zeros((len(spectra), len(nonbg)))
+            conc_ood = np.zeros((len(spectra), len(nonbg)), dtype=bool)
+            conc_ranges = np.full((len(nonbg), 2), np.nan)
             for k, j in enumerate(nonbg):
                 if names[j] in unames:
                     conc[:, k] = um[:, unames.index(names[j])] * 1e-6      # µM -> M
+                    ui = unames.index(names[j])
+                    if um_meta.get("component_ood") is not None:
+                        conc_ood[:, k] = um_meta["component_ood"][:, ui]
+                    if um_meta.get("ranges_M") is not None:
+                        conc_ranges[k] = um_meta["ranges_M"] [ui]
             conc[~hit] = 0.0
-            conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
+            with np.errstate(invalid="ignore"):
+                conc_avg = np.nanmean(conc[hit], axis=0) if hit.any() else np.nanmean(conc, axis=0)
             calibrated = True
     if calib_path and nonbg:
         nb_names = [names[i] for i in nonbg]
@@ -376,7 +387,8 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         hit_frac=hit_frac, mean_ratio=mean_ratio, dominant=dominant,
         mean_r2=float(reliab.mean()), calibrated=calibrated, conc=conc,
         conc_avg=conc_avg, pp_theta=pp_theta, calib_r2=calib_r2,
-        calib_slope=calib_slope, bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
+        calib_slope=calib_slope, conc_ood=conc_ood, conc_ranges=conc_ranges,
+        bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
 
 
 def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,

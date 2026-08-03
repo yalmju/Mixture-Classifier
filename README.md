@@ -66,11 +66,11 @@ model capacity.
 **Analysis engine:**
 - `sers_mixture.py` — component-DETECTION pipeline (which compounds present).
 - `competitive.py` — concentration-RATIO recovery under competitive Langmuir adsorption.
-- `competitive_compare.py` — explain competitive adsorption from measured mixtures (additive residual + Langmuir-vs-linear + partner displacement).
+- `experiments/benchmarks/competitive_compare.py` — offline competitive-adsorption comparison (additive residual + Langmuir-vs-linear + partner displacement).
 - `synthetic.py` — synthetic SERS generator (competitive adsorption) so everything runs with zero real data.
 - `resnet1d.py` — ResNet1D multi-label detector (PyTorch), the Molecules-2025 architecture; the "ResNet1D" Model backend.
 
-**Folders:** `examples/` sample CSVs · `docs/` project status / reference pages · `assets/` the app icon.
+**Folders:** `examples/` sample CSVs · `docs/` project status / reference pages · `assets/` the app icon · `experiments/` offline benchmarks, concentration studies, archived prototypes, and PDF report tools.
 
 ## Concentration ratios under competitive adsorption (`competitive.py`)
 

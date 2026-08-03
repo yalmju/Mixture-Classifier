@@ -14,7 +14,7 @@ from matplotlib.patches import FancyArrowPatch
 from matplotlib.lines import Line2D
 
 D = os.path.join(os.getcwd(), "docs")
-d = np.load(os.path.join(os.path.dirname(__file__), "tri_preds.npz"))
+d = np.load(os.path.join(os.path.dirname(__file__), "..", "..", "benchmarks", "tri_preds.npz"))
 Y, Pn = d["Y"], d["Pn"]                                   # solution, NNLS surface  (cols: DQ,TBZ,THI)
 N = len(Y)
 

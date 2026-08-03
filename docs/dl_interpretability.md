@@ -48,5 +48,5 @@ chemically meaningful marker bands**. The MLP is not exploiting a dataset artefa
 learned the compounds' real SERS signatures, which is what makes its composition predictions
 credible.
 
-*Reproduce:* `python experiments/dl/interpretability.py` (regenerates
+*Legacy reproduction:* `python experiments/archive/legacy_dl/interpretability.py` (regenerates
 `docs/dl_interpretability.png`).

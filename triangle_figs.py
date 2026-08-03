@@ -1,5 +1,5 @@
 """triangle_figs.py — publication-style ternary figures, shared by the app's exports and
-the experiments/dl scripts so both produce the SAME figures.
+offline experiment scripts so both produce the SAME figures.
 
 Two views of the same (true, predicted) composition pairs:
 
