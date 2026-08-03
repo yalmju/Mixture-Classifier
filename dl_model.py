@@ -524,7 +524,12 @@ def apply_recovery(model, items, progress=None):
     import os
     from real_data import load_map
     from composition import SUBSTANCES
-    subs = model["subs"]
+    from dataset import is_blank
+    # A model trained with "learn background" carries a blank class in subs. Recovery
+    # reports per-COMPOUND recovery against composition.SUBSTANCES, which has no blank
+    # in it, so mapping the blank through SUBSTANCES.index raised
+    # "ValueError: 'BLK' is not in list" and killed the whole run.
+    subs = [s_ for s_ in model["subs"] if not is_blank(s_)]
     # A mixture the model TRAINED on must not be scored by that model — it would just
     # recite its own answer (recovery collapses to ~100%). Training already computed a
     # held-out prediction for each of those maps, so reuse it and only run the model on
@@ -542,7 +547,9 @@ def apply_recovery(model, items, progress=None):
         conc = it[2] if len(it) > 2 else None
         key = os.path.normcase(os.path.normpath(path))
         if key in held:                                  # held-out prediction from training
-            comp = {subs[j]: float(held[key][j]) for j in range(len(subs))}
+            allsubs = model["subs"]                      # held rows span every channel
+            comp = {allsubs[j]: float(held[key][j])
+                    for j in range(min(len(allsubs), len(held[key])))}
             res = {"uM": None}
         else:
             wn, cube, _m, _c = load_map(path)
@@ -550,13 +557,15 @@ def apply_recovery(model, items, progress=None):
         s = sum(float(ratio.get(sn, 0)) for sn in subs)
         nom = np.zeros(len(SUBSTANCES)); mn = np.zeros(len(SUBSTANCES))
         for sn in subs:
+            if sn not in SUBSTANCES:                     # a class Recovery does not report
+                continue
             o = SUBSTANCES.index(sn)
             nom[o] = float(ratio.get(sn, 0)) / s if s > 0 else 0.0
             mn[o] = comp.get(sn, 0.0)
         row = {"name": os.path.basename(path).replace("_corrected", "").replace(".csv", ""),
                "nominal": nom, "mean": mn}
         if res.get("uM"):
-            row["uM_pred"] = {sn: res["uM"][sn] for sn in subs}
+            row["uM_pred"] = {sn: res["uM"][sn] for sn in subs if sn in res["uM"]}
             if conc:
                 row["uM_true"] = {sn: conc[sn] * 1e6 for sn in subs if conc.get(sn, 0) > 0}
         out.append(row)

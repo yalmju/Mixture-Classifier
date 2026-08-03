@@ -367,7 +367,12 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
             frac = ratio_nb                                        # model's composition
             conc = frac * total * 1e-6                             # µM -> M
             conc[~hit] = 0.0
-            conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
+            # MEDIAN, not mean: the µM head predicts log10 concentration, so a handful
+            # of pixels at the clip ceiling drag an arithmetic mean by orders of
+            # magnitude — that is how TBZ came back at 1.89e5 µM while the composition
+            # called it 40%. The median summarises an order-of-magnitude estimate.
+            conc_avg = (np.median(conc[hit], axis=0) if hit.any()
+                        else np.median(conc, axis=0))
             calibrated = True
     if calib_path and nonbg:
         nb_names = [names[i] for i in nonbg]
