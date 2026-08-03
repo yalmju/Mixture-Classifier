@@ -1,8 +1,6 @@
-"""page_real.py — Real data tab: unmix one test map (NNLS, MCR-ALS or the ResNet1D
-DL unmixer, selectable). A band-intensity image, a per-pixel composition pie map,
-the spectrum of a clicked pixel, and the overall composition. Background is unmixed
-as its own component. With a calibration loaded, the per-pixel spectrum→B step can
-also run through the DL quantifier (drift-robust drop-in for NNLS fit_B)."""
+"""page_real.py — Real data tab: unmix one test map (NNLS or MCR-ALS, selectable).
+A band-intensity image, a per-pixel composition pie map, the spectrum of a clicked
+pixel, and the overall composition. Background is unmixed as its own component."""
 from __future__ import annotations
 
 import os
@@ -14,7 +12,7 @@ from matplotlib.colors import to_rgb
 from matplotlib.patches import Wedge, Patch
 from matplotlib.collections import PatchCollection
 
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
@@ -27,7 +25,7 @@ from unmix import unmix_map
 from classify import classify_map
 from real_data import PEST_DEFAULT
 from dataset import load_preprocess, load_colors, save_colors
-from io_utils import write_csv
+from io_utils import write_csv, write_readme
 
 BG_GREY = "#c7ccd3"
 INTEN_CMAP = "magma"
@@ -52,20 +50,24 @@ class RealWorker(QObject):
 
 
 class RealDataPage(QWidget):
-    METHODS = [("NNLS (fixed refs)", "nnls"), ("MCR-ALS (refine)", "mcr"),
-               ("ResNet1D (DL)", "dl"), ("Trained model", "model")]
+    METHODS = [("Composition model (per pixel)", "dlpx"), ("NNLS (fixed refs)", "nnls"),
+               ("MCR-ALS (refine)", "mcr"), ("ResNet1D (DL)", "dl"),
+               ("Trained model", "model")]
 
     def __init__(self):
         super().__init__()
         self._thread = None
         self._res = None
+        self.dl_model = None
         self._sel = None
         self._click_axes = []       # axes that accept a pixel click
         self._colors = {}           # per-substance colour override {name: '#hex'}
+        COLOR_BUS.changed.connect(self._on_colors_changed)   # top-bar picker sync
         self.data_dir = PEST_DEFAULT
         self.test = None
         self.model_path = None      # trained model (unmixr_model.joblib) for classify
         self.calib_path = None      # optional dilution-series calibration CSV → µM
+        self.bg_paths = []          # measured background map(s) → direct bg judgment
         self.rf = {}                # response factors {name: ×} from Validate (correction)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(12)
@@ -73,8 +75,7 @@ class RealDataPage(QWidget):
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Real-data analysis — unmix a test map"); h1.setObjectName("h1")
         sub = QLabel("Unmix one test map against your references (background "
-                     "included) by NNLS, MCR-ALS or the ResNet1D DL unmixer. A "
-                     "band-intensity image, a "
+                     "included) by NNLS or MCR-ALS. A band-intensity image, a "
                      "per-pixel composition pie map, and the overall composition — "
                      "click any pixel to see its spectrum. References + preprocessing "
                      "come from Samples.")
@@ -95,6 +96,22 @@ class RealDataPage(QWidget):
                            "used by the 'Trained model' method")
         model_b.clicked.connect(self._browse_model)
         self.model_lbl = QLabel(""); self.model_lbl.setObjectName("field")
+        dlm_b = QPushButton("Load DL model…"); dlm_b.setObjectName("ghost")
+        dlm_b.setToolTip("a DL model saved from the Recovery tab (.dlm) → physics-informed "
+                         "DL composition (+ approximate µM) for this map, on top of the NNLS unmix")
+        dlm_b.clicked.connect(self._browse_dl)
+        self.dlm_lbl = QLabel(""); self.dlm_lbl.setObjectName("field")
+        MODEL_BUS.changed.connect(self._adopt_model)       # auto-use a model trained in the Model tab
+        self._adopt_model()
+        bg_b = QPushButton("Load background…"); bg_b.setObjectName("ghost")
+        bg_b.setToolTip("measured blank/background map(s) (e.g. Pest/BLk) — a pixel "
+                        "whose spectrum matches them is judged BACKGROUND directly, "
+                        "independent of the NNLS abundances")
+        bg_b.clicked.connect(self._browse_bg)
+        self.bg_lbl = QLabel(""); self.bg_lbl.setObjectName("field")
+        self.bg_x = QPushButton("✕"); self.bg_x.setObjectName("ghost")
+        self._compact_x(self.bg_x, "clear background")
+        self.bg_x.clicked.connect(self._clear_bg); self.bg_x.setVisible(False)
         cal_b = QPushButton("Load calibration…"); cal_b.setObjectName("ghost")
         cal_b.setToolTip("a dilution-series CSV → per-pixel absolute concentration (µM)")
         cal_b.clicked.connect(self._browse_calib)
@@ -102,15 +119,6 @@ class RealDataPage(QWidget):
         self.cal_x = QPushButton("✕"); self.cal_x.setObjectName("ghost")
         self._compact_x(self.cal_x, "clear calibration")
         self.cal_x.clicked.connect(self._clear_calib); self.cal_x.setVisible(False)
-        self.chk_dlq = QCheckBox("DL spectrum→B")
-        self.chk_dlq.setToolTip("route the per-pixel spectrum→B step (the µM read-out, "
-                                "needs a calibration loaded) through the ResNet1D "
-                                "quantifier instead of NNLS fit_B — a drift-robust "
-                                "drop-in. The calibration + θ→M inversion stay NNLS. "
-                                "Needs PyTorch.")
-        dlqcol = QVBoxLayout(); dlqcol.setSpacing(2)
-        _dql = QLabel("concentration"); _dql.setObjectName("field")
-        dlqcol.addWidget(_dql); dlqcol.addWidget(self.chk_dlq)
         self.chk_auto = QCheckBox("auto (BLK)")
         self.chk_auto.setToolTip("threshold-free: a pixel is a substance when its "
                                  "strongest component is a substance (not the learned "
@@ -131,11 +139,12 @@ class RealDataPage(QWidget):
         flipcol = QVBoxLayout(); flipcol.setSpacing(2)
         _fl = QLabel("orientation"); _fl.setObjectName("field")
         flipcol.addWidget(_fl); flipcol.addWidget(self.chk_flip)
-        self.chk_rel = QCheckBox("hide low-R²"); self.chk_rel.setChecked(True)
-        self.chk_rel.setToolTip("gray out and exclude pixels whose reconstruction R² is "
-                                "below the threshold — usually SATURATED/clipped or "
-                                "artefact pixels that fit the pure spectra badly and get "
-                                "misassigned (e.g. a clipped THI peak read as DQ/TBZ)")
+        self.chk_rel = QCheckBox("drop low-R²"); self.chk_rel.setChecked(False)
+        self.chk_rel.setToolTip("OFF by default: low-R² pixels are MARKED (coral ✕) and "
+                                "counted, but still composed — a poor fit to the pure "
+                                "spectra is a warning (saturated / clipped / something "
+                                "the references don't cover), not proof the pixel is "
+                                "wrong. Tick this to exclude them from the composition.")
         self.chk_rel.toggled.connect(lambda _=False: self._on_corr())
         self.rel_thr = QDoubleSpinBox(); self.rel_thr.setDecimals(2)
         self.rel_thr.setSingleStep(0.05); self.rel_thr.setRange(0.0, 0.95)
@@ -146,16 +155,6 @@ class RealDataPage(QWidget):
         relrow = QHBoxLayout(); relrow.setSpacing(4)
         relrow.addWidget(self.chk_rel); relrow.addWidget(self.rel_thr)
         relcol.addWidget(_rl); relcol.addLayout(relrow)
-        self.pres_thr = QDoubleSpinBox(); self.pres_thr.setDecimals(2)
-        self.pres_thr.setSingleStep(0.01); self.pres_thr.setRange(0.0, 0.5)
-        self.pres_thr.setValue(0.05)
-        self.pres_thr.setToolTip("a substance present at less than this overall fraction "
-                                 "is treated as ABSENT (a spectral-leakage phantom) and "
-                                 "removed from the composition — set 0 to keep all")
-        self.pres_thr.valueChanged.connect(lambda _=0: self._on_corr())
-        prescol = QVBoxLayout(); prescol.setSpacing(2)
-        _pl = QLabel("min substance %"); _pl.setObjectName("field")
-        prescol.addWidget(_pl); prescol.addWidget(self.pres_thr)
         corr_b = QPushButton("Load correction…"); corr_b.setObjectName("ghost")
         corr_b.setToolTip("response_factors.csv from the Validate tab → convert the "
                           "surface ratio to the solution ratio")
@@ -173,17 +172,42 @@ class RealDataPage(QWidget):
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
+        # main row: only what you touch on every run
         ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x)
         ctl.addLayout(self.cmb_method)
-        ctl.addWidget(model_b); ctl.addWidget(self.model_lbl)
-        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.cal_x)
-        ctl.addLayout(dlqcol)
-        ctl.addLayout(hitcol); ctl.addLayout(self.thr); ctl.addLayout(flipcol)
-        ctl.addLayout(relcol); ctl.addLayout(prescol)
-        ctl.addWidget(corr_b); ctl.addLayout(corrcol)
+        ctl.addWidget(self.dlm_lbl)
         ctl.addStretch(1)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
         root.addLayout(ctl)
+
+        # everything else folds away — sources (models / calibration / correction) and the
+        # per-pixel thresholds are set once and then just sit there cluttering the header
+        self.opt_tgl = QPushButton(); self.opt_tgl.setObjectName("ghost")
+        self.opt_tgl.setCheckable(True); self.opt_tgl.setChecked(False)
+        self.opt_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
+        self.opt_tgl.toggled.connect(self._toggle_opts)
+        root.addWidget(self.opt_tgl)
+
+        self.optbox = QWidget(); obl = QVBoxLayout(self.optbox)
+        obl.setContentsMargins(0, 0, 0, 0); obl.setSpacing(8)
+        srow = QHBoxLayout(); srow.setSpacing(8)
+        srow.addWidget(model_b); srow.addWidget(self.model_lbl)
+        srow.addWidget(dlm_b)
+        srow.addWidget(bg_b); srow.addWidget(self.bg_lbl); srow.addWidget(self.bg_x)
+        srow.addWidget(cal_b); srow.addWidget(self.cal_lbl); srow.addWidget(self.cal_x)
+        srow.addWidget(corr_b); srow.addLayout(corrcol)
+        srow.addStretch(1)
+        obl.addLayout(srow)
+        trow = QHBoxLayout(); trow.setSpacing(10)
+        trow.addLayout(hitcol); trow.addLayout(self.thr); trow.addLayout(flipcol)
+        trow.addLayout(relcol)
+        trow.addStretch(1)
+        obl.addLayout(trow)
+        root.addWidget(self.optbox)
+        self._toggle_opts(False)
+        self.cmb_method.itemAt(1).widget().currentIndexChanged.connect(
+            lambda _=0: self._sync_controls())
+        self._sync_controls()
 
         self.status = QLabel(""); self.status.setObjectName("sub")
         root.addWidget(self.status)
@@ -226,7 +250,8 @@ class RealDataPage(QWidget):
         # 3) per-substance concentration (µM) maps + overall composition, side by side
         self.c_conc = Canvas(); self.c_comp = Canvas()
         self.card_conc, lay_conc = _card(
-            "Per-substance concentration (µM) — load a calibration to enable")
+            "Per-substance concentration (µM) — from the composition model, "
+            "or from a loaded calibration when one is given")
         lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(300)
         ccard, clay = _card("Composition (overall)")
         clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(300)
@@ -279,6 +304,13 @@ class RealDataPage(QWidget):
     def set_data_dir(self, path):
         self.data_dir = path                              # references come from Samples
         self._colors = load_colors(path)                  # remembered colour choices
+        set_substance_colors(self._colors)                # seed the shared colour state
+        if self._res is not None:
+            self._rebuild_swatches(self._res); self._redraw()
+
+    def _on_colors_changed(self):
+        """Shared colours changed (e.g. from the top-bar picker) — resync + redraw."""
+        self._colors = substance_colors()
         if self._res is not None:
             self._rebuild_swatches(self._res); self._redraw()
 
@@ -343,7 +375,8 @@ class RealDataPage(QWidget):
             save_colors(self.data_dir, self._colors)
         except Exception as exc:
             print("save colors:", exc, file=sys.stderr)
-        self._rebuild_swatches(self._res); self._redraw()
+        set_substance_colors(self._colors)                # broadcast to every page
+        COLOR_BUS.changed.emit()
 
     def _redraw(self):
         r = self._res
@@ -355,6 +388,41 @@ class RealDataPage(QWidget):
 
     def _method(self):
         return self.cmb_method.itemAt(1).widget().currentData()
+
+    def _blank_tag(self):
+        """Say on the label whether this model carries a blank class. Without one it
+        cannot answer 'nothing here', so NNLS still supplies the substance mass and the
+        background call — load a measured background map to take that over instead of
+        retraining."""
+        m = getattr(self, "dl_model", None)
+        if not m:
+            return ""
+        blank = m.get("blank")
+        if blank and blank in (m.get("subs") or []):
+            return f"  ·  {blank} class ✓"
+        return "  ·  no blank class"
+
+    def _dl_judges_bg(self):
+        """True when the loaded composition model carries a blank class AND the per-pixel
+        model method is selected — then the model alone decides background."""
+        m = getattr(self, "dl_model", None)
+        return bool(self._method() == "dlpx" and m and m.get("blank")
+                    and m.get("blank") in (m.get("subs") or []))
+
+    def _sync_controls(self):
+        """Grey out the gates that no longer get a vote, so the header shows at a glance
+        which single rule will decide background."""
+        if not hasattr(self, "thr"):        # _adopt_model can fire before the widgets exist
+            return
+        by_bg = bool(self.bg_paths)                    # a measured background map wins
+        by_dl = self._dl_judges_bg()
+        manual = not (by_bg or by_dl)
+        self.chk_auto.setEnabled(manual)
+        self.thr.itemAt(1).widget().setEnabled(manual and not self.chk_auto.isChecked())
+        why = ("a loaded background map decides background" if by_bg else
+               "the composition model's blank class decides background" if by_dl else "")
+        for w in (self.chk_auto, self.thr.itemAt(1).widget()):
+            w.setToolTip(f"not used — {why}" if why else "")
 
     def _browse_test(self):
         p, _ = QFileDialog.getOpenFileName(self, "Test map", "",
@@ -371,8 +439,60 @@ class RealDataPage(QWidget):
                                            self.data_dir, "model (*.joblib);;all (*)")
         if p:
             self.model_path = p; self.model_lbl.setText(os.path.basename(p))
-            cb = self.cmb_method.itemAt(1).widget()                 # switch to model
-            cb.setCurrentIndex(cb.findData("model"))
+            self.cmb_method.itemAt(1).widget().setCurrentIndex(2)   # switch to model
+
+    def _toggle_opts(self, on):
+        self.optbox.setVisible(on)
+        self.opt_tgl.setText(("▾  " if on else "▸  ")
+                             + "Options  (model · calibration · correction · thresholds)")
+
+    def _adopt_model(self):
+        """Adopt the composition model trained in the Model tab (Step 2), if any. Just
+        stash it + label — do NOT re-run analysis here (that would block the GUI on the
+        main thread the moment training finishes); the next Analyze picks it up."""
+        if MODEL_BUS.model is None:
+            return
+        self.dl_model = MODEL_BUS.model
+        self.dlm_lbl.setText("DL: " + (MODEL_BUS.origin or "trained model")
+                             + self._blank_tag())
+        self.dlm_lbl.setStyleSheet(""); self._sync_controls()
+
+    def _browse_dl(self):
+        p, _ = QFileDialog.getOpenFileName(self, "DL model (.dlm from Recovery)", "",
+                                           "DL / Pixel surface model (*.dlm *.psm);;all (*)")
+        if not p:
+            return
+        try:
+            if p.lower().endswith(".psm"):
+                from pixel_surface import load_pixel_surface
+                self.dl_model = load_pixel_surface(p)
+            else:
+                from dl_model import load_model
+                self.dl_model = load_model(p)
+            self.dlm_lbl.setText("DL: " + os.path.basename(p) + self._blank_tag())
+            self.dlm_lbl.setStyleSheet(""); self._sync_controls()
+            if self._res is not None:
+                self._apply(self._res)                    # refresh readout with the DL row
+        except Exception as e:
+            self.dl_model = None; self.dlm_lbl.setText("DL load failed")
+            print(e, file=sys.stderr)
+
+    def _browse_bg(self):
+        """Pick one or more MEASURED background/blank maps (e.g. Pest/BLk) — they
+        teach the analysis what 'nothing here' looks like on this substrate."""
+        ps, _ = QFileDialog.getOpenFileNames(
+            self, "Measured background map(s) (e.g. Pest/BLk)", "",
+            "maps (*.csv *.txt);;all files (*)")
+        if not ps:
+            return
+        self.bg_paths = list(ps)
+        self.bg_lbl.setText("bg: " + (os.path.basename(ps[0]) if len(ps) == 1
+                                      else f"{len(ps)} maps"))
+        self.bg_x.setVisible(True); self._sync_controls()
+
+    def _clear_bg(self):
+        self.bg_paths = []; self.bg_lbl.setText(""); self.bg_x.setVisible(False)
+        self._sync_controls()
 
     def _browse_calib(self):
         p, _ = QFileDialog.getOpenFileName(
@@ -451,41 +571,40 @@ class RealDataPage(QWidget):
             return None
         return np.array([self.rf.get(r.comps[j], 1.0) for j in r.nonbg], float)
 
-    def _present_mask(self, r):
-        """Which substances are really present: those whose RAW overall fraction (over
-        reliable hit pixels) is at least 'min substance %'. Substances below it are
-        spectral-leakage phantoms (e.g. a trace TBZ when only DQ+THI were loaded) and
-        get dropped from the composition. Always keeps at least the strongest."""
-        thr = float(self.pres_thr.value())
-        hit = self._hit(r)
-        raw = r.ratio_nb[hit].mean(axis=0) if hit.any() else r.ratio_nb.mean(axis=0)
-        keep = raw >= thr
-        if not keep.any():
-            keep = raw == raw.max()
-        return keep
-
     def _ratio_nb(self, r):
         """Per-pixel non-bg composition — response-corrected to the solution ratio when
-        that toggle is on (else raw surface), with leakage-phantom substances (below
-        'min substance %') dropped and the rest renormalised."""
+        that toggle is on, else the raw surface ratio. Nothing is deleted: a substance
+        that reads low reads low. (A 'min substance %' control used to zero out any
+        substance whose MAP-WIDE mean fell below 5% and renormalise the rest — which
+        erased exactly the trace levels this instrument exists to find, and erased them
+        map-wide even where they were locally strong.)"""
         rf = self._rf_vec(r)
         if rf is None:
             rn = r.ratio_nb.astype(float).copy()
         else:
             rn = r.A[:, r.nonbg] / np.where(rf > 0, rf, 1.0)
-        rn = rn * self._present_mask(r)                    # drop phantom substances
         s = rn.sum(axis=1, keepdims=True)
         return np.divide(rn, s, out=np.zeros_like(rn), where=s > 0)
 
+    def _flagged(self, r):
+        """Pixels whose reconstruction R² is below the threshold — ALWAYS computed and
+        always drawn/counted. A low R² means the pure references fit this pixel badly
+        (saturated, clipped, or a species the references don't cover); it is a warning
+        about the pixel, not a verdict on its composition."""
+        if getattr(r, "reliab", None) is None:
+            return np.zeros(r.n_pixels, bool)
+        return r.reliab < float(self.rel_thr.value())
+
     def _reliable(self, r):
-        """Pixels trustworthy enough to compose — reconstruction R² above the threshold.
-        Filters out saturated/clipped pixels that fit the pure spectra badly."""
-        if not self.chk_rel.isChecked() or getattr(r, "reliab", None) is None:
+        """Pixels kept in the composition. Low-R² pixels are dropped ONLY when the user
+        opts in — otherwise they are merely flagged, so nothing disappears silently."""
+        if not self.chk_rel.isChecked():
             return np.ones(r.n_pixels, bool)
-        return r.reliab >= float(self.rel_thr.value())
+        return ~self._flagged(r)
 
     def _hit(self, r):
-        """Effective hit = a substance pixel AND reliable (not saturated/artefact)."""
+        """Effective hit = a substance pixel (one rule decided that, see r.hit_rule)
+        minus any low-R² pixels the user chose to drop."""
         return r.hit & self._reliable(r)
 
     def _mean_ratio(self, r):
@@ -494,6 +613,8 @@ class RealDataPage(QWidget):
 
     # ---- run ----
     def _run(self):
+        if worker_busy(self):                             # already running — ignore
+            return
         if not self.test:
             self.status.setText("load a test map first")
             self.status.setStyleSheet(f"color:{RED};"); return
@@ -511,25 +632,22 @@ class RealDataPage(QWidget):
                           method=self._method(), baseline=cfg["baseline"],
                           trim=cfg["trim"], min_frac=self.thr_value(),
                           hit_mode="auto" if self.chk_auto.isChecked() else "threshold",
-                          calib_path=self.calib_path,
-                          use_dl_quant=self.chk_dlq.isChecked())
+                          calib_path=self.calib_path, dl_model=self.dl_model,
+                          bg_map=self.bg_paths or None)
+            if params["method"] == "dlpx" and self.dl_model is None:
+                self.status.setText("no composition model — train one in the Model tab "
+                                    "(or Load DL model…)")
+                self.status.setStyleSheet(f"color:{RED};"); return
         self.btn.setEnabled(False); self.btn.setText("Working…")
         self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
-        self._thread = QThread(); self._worker = RealWorker(params, use_model=use_model)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._progress)
-        self._worker.done.connect(self._apply)
-        self._worker.fail.connect(self._error)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.fail.connect(self._thread.quit)
-        self._thread.start()
+        start_worker(self, RealWorker(params, use_model=use_model),
+                     done=self._apply, fail=self._error, progress=self._progress)
 
     def thr_value(self):
         return float(self.thr.itemAt(1).widget().value())
 
     def _on_auto(self, checked):
-        self.thr.itemAt(1).widget().setEnabled(not checked)   # threshold unused in auto
+        self._sync_controls()                      # threshold unused in auto / model mode
 
     def _progress(self, msg):
         self.btn.setText("Unmixing…"); self.status.setText("● " + msg)
@@ -549,7 +667,8 @@ class RealDataPage(QWidget):
         mr = self._mean_ratio(r)                          # corrected when toggle on
         corrected = self._rf_vec(r) is not None
         eff_hit = self._hit(r)
-        n_excl = int((r.hit & ~self._reliable(r)).sum())  # substance pixels dropped
+        n_flag = int((r.hit & self._flagged(r)).sum())    # low-R² substance pixels
+        dropping = self.chk_rel.isChecked()
         dom = nb[int(mr.argmax())] if len(nb) else r.dominant
         self.k_dom.set(dom, TEAL)
         self.k_n.set(str(int(np.sum(mr >= 0.05))), AMBER)
@@ -560,24 +679,116 @@ class RealDataPage(QWidget):
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
         ratio = "  :  ".join(f"{nm} {mr[i] * 100:.0f}" for i, nm in enumerate(nb))
         rtag = "solution ratio" if corrected else "mean ratio"
-        excl = (f" &nbsp;·&nbsp; <span style='color:{CORAL}'>{n_excl} saturated/"
-                f"low-R² px excluded</span>" if n_excl else "")
+        excl = (f" &nbsp;·&nbsp; <span style='color:{CORAL}'>{n_flag} low-R² px "
+                f"{'excluded' if dropping else 'flagged (still composed)'}</span>"
+                if n_flag else "")
         txt = (f"<b>hit:</b> {eff_hit.mean():.0%} of pixels are a substance{excl} "
                f"&nbsp;·&nbsp; <b>{rtag}</b> (hit pixels): {ratio} &nbsp;·&nbsp; "
                f"<b>dominant:</b> {dom}"
                + ("  <span style='color:%s'>(response-corrected)</span>" % TEAL
                   if corrected else ""))
+        if getattr(r, "hit_rule", ""):        # exactly one rule decided background
+            txt += (f"<br><span style='color:{FAINT}'>background decided by: "
+                    f"{r.hit_rule}</span>")
         if getattr(r, "calibrated", False) and r.conc_avg is not None:
             um = r.conc_avg * 1e6
             cs = "  ·  ".join(f"{nm} {um[i]:.3g} µM" for i, nm in enumerate(nb)
                               if np.isfinite(um[i]) and um[i] > 0)
-            txt += f"<br><b>mean concentration</b> (hit pixels): {cs}"
+            src = "calibration" if r.calib_r2 is not None else "composition model"
+            txt += (f"<br><b>mean concentration</b> (hit pixels, {src}): {cs}")
+            if getattr(r, "conc_ood", None) is not None:
+                den = max(1, int(np.count_nonzero(r.hit)) * len(nb))
+                nbad = int(np.count_nonzero(r.conc_ood[r.hit])) if np.any(r.hit) else int(np.count_nonzero(r.conc_ood))
+                txt += (f" <span style='color:{FAINT}'>(order-of-magnitude, semi-quantitative; "
+                        f"OOD {nbad / den:.0%}; OOD values hidden)</span>")
             if r.calib_r2 is not None:
                 r2s = "  ·  ".join(f"{nm} R²={r.calib_r2[i]:.2f}" for i, nm in enumerate(nb))
                 tag = ("  ⚠ low-quality calibration — µM approximate"
                        if float(np.min(r.calib_r2)) < 0.7 else "")
                 txt += (f"<br><span style='color:{FAINT}'>calibration fit: {r2s}{tag}"
                         "  ·  click a pixel for its µM</span>")
+            # The single number that turns a measured RATIO into a CONCENTRATION ratio:
+            # each substance's signal per molar. It was invisible, so a calibration
+            # claiming one substance is hundreds of times brighter than another silently
+            # skewed every µM. Shown relative to the weakest, with a warning when the
+            # spread is large enough to dominate the answer.
+            sl = getattr(r, "calib_slope", None)
+            if sl is not None and np.all(np.isfinite(sl)) and np.min(sl) > 0:
+                rel = np.asarray(sl, float) / float(np.min(sl))
+                rs = "  ·  ".join(f"{nm} {rel[i]:.3g}×" for i, nm in enumerate(nb))
+                spread = float(rel.max())
+                warn = ""
+                if spread >= 50:
+                    warn = (f" &nbsp;<span style='color:{CORAL}'>⚠ {spread:.0f}× spread "
+                            "— check the concentration column of the calibration CSV "
+                            "(unit / decade); this factor sets the µM ratio</span>")
+                txt += (f"<br><span style='color:{FAINT}'>calibration response per "
+                        f"molar (vs weakest): {rs}</span>{warn}")
+        if getattr(self, "dl_model", None) is not None and self.test:
+            # Diagnostic: compare the deployed per-pixel path with the map-aggregate
+            # path used by Recovery/held-out evaluation. A model trained on one mean
+            # spectrum per map can look sound in Recovery yet be out-of-distribution
+            # when it is applied to individual pixels here.
+            try:
+                sel = eff_hit if eff_hit.any() else None
+                if self._method() == "dlpx":
+                    pixel_v = np.asarray(mr, float)
+                else:
+                    from dl_model import apply_model_pixels
+                    P = apply_model_pixels(self.dl_model, r.wn,
+                                           r.spectra if sel is None else r.spectra[sel])
+                    subs = self.dl_model.get("subs", [])
+                    pv = P.mean(axis=0)
+                    pixel_v = np.array([pv[subs.index(nm)] if nm in subs else 0.0
+                                        for nm in nb], float)
+                    pixel_v /= pixel_v.sum() + 1e-12
+
+                from dl_model import apply_model
+                from real_data import load_map
+                wn, cube, _mn, _c = load_map(self.test)
+                cube = np.asarray(cube, float)
+                px = (sel if sel is not None and len(sel) == len(cube)
+                      else np.ones(len(cube), bool))
+                d = apply_model(self.dl_model, wn, cube[px])
+                agg_v = np.array([d["composition"].get(nm, 0.0) for nm in nb], float)
+                agg_v /= agg_v.sum() + 1e-12
+                pixel_comp = "  ·  ".join(f"{nm} {pixel_v[i] * 100:.0f}%"
+                                           for i, nm in enumerate(nb))
+                agg_comp = "  ·  ".join(f"{nm} {agg_v[i] * 100:.0f}%"
+                                         for i, nm in enumerate(nb))
+                gap = 0.5 * float(np.abs(pixel_v - agg_v).sum())
+                if self.dl_model.get("kind") == "pixel_surface_v2":
+                    txt += (f"<br><b style='color:{BLUE}'>Pixel surface composition</b> "
+                            f"<span style='color:{FAINT}'>(mean over hit pixels)</span>: "
+                            f"{pixel_comp}")
+                else:
+                    txt += (f"<br><b style='color:{BLUE}'>DL composition - pixel mean</b>: "
+                            f"{pixel_comp}"
+                            f"<br><b style='color:{BLUE}'>DL composition - aggregate hit "
+                            f"spectrum</b>: {agg_comp} "
+                            f"<span style='color:{FAINT}'>(difference {gap:.0%})</span>")
+
+                level = self.dl_model.get("training_level")
+                ppm = self.dl_model.get("px_per_map")
+                nrows = self.dl_model.get("n_train", "?")
+                loo_paths = (self.dl_model.get("loo_eval") or {}).get("paths") or []
+                nmaps = self.dl_model.get("n_maps", len(loo_paths) or "?")
+                if level is None:                         # model saved before metadata existed
+                    if isinstance(nrows, int) and isinstance(nmaps, int) and nrows == nmaps:
+                        level, ppm = "map_mean (inferred)", 0
+                    else:
+                        level, ppm = "unknown (legacy model)", "?"
+                warning = (f" <span style='color:{CORAL}'>individual pixels were not "
+                           f"training inputs</span>" if level.startswith("map_mean") else "")
+                txt += (f"<br><span style='color:{FAINT}'>model training unit: {level} "
+                        f"(maps {nmaps}, rows {nrows}, extra pixels/map {ppm})</span>{warning}")
+
+                if d.get("uM"):
+                    um = "  ·  ".join(f"{k} ≈{v:.0f} µM" for k, v in d["uM"].items())
+                    txt += (f"<br><b style='color:{BLUE}'>DL concentration - aggregate "
+                            f"hit spectrum</b> (order-of-magnitude, semi-quantitative): {um}")
+            except Exception as e:
+                print("DL apply failed:", e, file=sys.stderr)
         self.readout.setText(txt)
 
     # ---- plots ----
@@ -626,7 +837,6 @@ class RealDataPage(QWidget):
                 img[rows, cc] = np.clip((Anb / mscale) @ cols, 0.0, 1.0)
                 ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest")
-                ax.set_title("merged", fontsize=8, color=INK)
             else:                                          # single component + colour-bar
                 sc = (sub_vmax if not r.bg_mask[k]         # substances share one axis
                       else float(np.quantile(r.A[:, k], 0.99)) or 1.0)
@@ -635,9 +845,8 @@ class RealDataPage(QWidget):
                 im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                                interpolation="nearest", cmap=cmap, vmin=0.0, vmax=sc)
                 cb = self.c_maps.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
-                cb.ax.tick_params(labelsize=5, colors=MUTE)
+                cb.ax.tick_params(labelsize=7, colors="black")
                 bg = " (bkg)" if r.bg_mask[k] else ""
-                ax.set_title(title + bg, fontsize=8, color=allcols[k])
             # no selection ring on the intensity maps — it clutters them; the pie map
             # (beside the spectrum) carries the highlight instead
             ax.set_xticks([]); ax.set_yticks([])
@@ -673,10 +882,8 @@ class RealDataPage(QWidget):
             im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                            interpolation="nearest", cmap=cmap, vmin=0.0, vmax=vmax)
             cb = self.c_conc.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            cb.ax.tick_params(labelsize=6, colors=MUTE)       # same 0..vmax on every panel
-            r2 = (f"  R²={r.calib_r2[i]:.2f}" if getattr(r, "calib_r2", None) is not None
-                  else "")
-            ax.set_title(f"{nm} (µM){r2}", fontsize=8, color=nbcols[i])
+            cb.ax.tick_params(labelsize=8, colors="black")       # same 0..vmax on every panel
+            ax.set_title(f"{nm} (µM; OOD hidden)", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
         self.c_conc.fig.tight_layout(); self.c_conc.draw_idle()
 
@@ -685,22 +892,20 @@ class RealDataPage(QWidget):
         cols = self._nb_colors(r); bg_col = self._bg_color(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux = np.unique(x); rad = (np.median(np.diff(ux)) * 0.46) if len(ux) > 1 else 0.46
-        hit = self._hit(r)                                # reliable substance pixels
-        excl = r.hit & ~self._reliable(r)                 # saturated/low-R² (flagged)
+        hit = self._hit(r)                                # substance pixels kept
+        excl = r.hit & self._flagged(r)                   # low-R² — marked either way
         # background / non-hit pixels: one fast scatter (not one patch each)
         if (~hit & ~excl).any():
             m = ~hit & ~excl
             ax.scatter(x[m], y[m], c=bg_col, marker="s", s=16, edgecolors="none")
-        if excl.any():                                    # excluded pixels marked, not silently dropped
-            ax.scatter(x[excl], y[excl], c="none", marker="x", s=22,
-                       edgecolors=CORAL, linewidths=0.9)
+        if excl.any():             # flagged pixels marked ON TOP of their pie (zorder),
+            ax.scatter(x[excl], y[excl], c=CORAL, marker="x", s=22,     # never silent
+                       linewidths=0.9, zorder=5)   # 'x' has no face: colour it directly
         if r.method == "model":                           # classifier → one class/pixel
             dom = r.ratio_nb.argmax(axis=1)
             if hit.any():
                 ax.scatter(x[hit], y[hit], c=[cols[dom[i]] for i in np.where(hit)[0]],
                            marker="s", s=16, edgecolors="none")
-            ax.set_title("predicted class per pixel (not a mixture ratio)",
-                         fontsize=8, color=INK)
         else:                                             # per-pixel pie for hit pixels
             ratio_nb = self._ratio_nb(r)                  # corrected when toggle on
             wedges, wcols = [], []
@@ -724,7 +929,7 @@ class RealDataPage(QWidget):
         handles = [Patch(facecolor=cols[i], label=r.comps[j])
                    for i, j in enumerate(r.nonbg)] + \
                   [Patch(facecolor=bg_col, label="background")]
-        ax.legend(handles=handles, fontsize=7, framealpha=0.0, labelcolor=MUTE,
+        ax.legend(handles=handles, fontsize=9, framealpha=0.0, labelcolor="black",
                   loc="upper center", bbox_to_anchor=(0.5, -0.02),
                   ncol=len(handles), frameon=False)
         self.c_pie.fig.tight_layout(); self.c_pie.draw_idle()
@@ -741,10 +946,8 @@ class RealDataPage(QWidget):
         keep = [i for i in range(len(nb)) if mr[i] >= 0.01] or [int(mr.argmax())]
         ax.pie([mr[i] for i in keep], labels=[nb[i] for i in keep],
                colors=[cols[i] for i in keep], autopct="%1.0f%%",
-               textprops={"fontsize": 8, "color": INK})
+               textprops={"fontsize": 10, "color": INK})
         ax.set_aspect("equal")
-        tag = " · solution" if self._rf_vec(r) is not None else ""
-        ax.set_title(f"hit {r.hit_frac:.0%}{tag}", fontsize=8, color=INK)
         self.c_comp.fig.tight_layout(); self.c_comp.draw_idle()
 
     def _plot_spec(self, r, i):
@@ -753,28 +956,39 @@ class RealDataPage(QWidget):
         meas = np.asarray(r.spectra[i], float)
         mm = meas.max() or 1.0
         ax.plot(axis, meas / mm, lw=1.3, color=INK, label="measured")
-        if r.templates is not None:                       # NNLS/MCR: overlay the fit
+        if r.templates is not None:
+            # A@templates rebuilt from the abundances. Under NNLS/MCR those ARE the fit
+            # coefficients, so this is the fit; under the composition model A holds
+            # probabilities, so the curve only shows which references the model picked —
+            # say so rather than letting it be read as a goodness-of-fit.
             recon = r.A[i] @ r.templates
+            lab = ("model's reference mix" if r.method == "dlpx" else "reconstructed")
             ax.plot(axis, recon / (recon.max() or 1.0), lw=1.1, color=TEAL,
-                    ls="--", label="reconstructed")
+                    ls="--", label=lab)
         xp, yp = r.coords[i]
         ratio_nb = self._ratio_nb(r)                      # corrected when toggle on
         rat = "  ·  ".join(f"{r.comps[j]} {ratio_nb[i, k] * 100:.0f}%"
                            for k, j in enumerate(r.nonbg) if ratio_nb[i, k] > 0.02)
         tag = rat if r.hit[i] else "background"
-        if not self._reliable(r)[i]:                      # saturated/low-R² warning
+        if (not r.hit[i] and getattr(r, "bg_score", None) is not None
+                and r.bg_score[i] >= r.bg_thr):
+            tag = f"background (matches measured bg, score {r.bg_score[i]:.2f})"
+        if self._flagged(r)[i]:                           # low-R² warning
             r2 = float(r.reliab[i]) if getattr(r, "reliab", None) is not None else 0.0
-            tag += f"  ⚠ low R²={r2:.2f} (saturated? — excluded)"
+            tag += (f"  ⚠ low R²={r2:.2f} — references fit this pixel badly"
+                    + (" (excluded)" if self.chk_rel.isChecked() else ""))
         if getattr(r, "conc", None) is not None and r.hit[i]:   # absolute µM per pixel
             um = r.conc[i] * 1e6
             cs = "  ·  ".join(f"{r.comps[j]} {um[k]:.3g}µM" for k, j in enumerate(r.nonbg)
                               if np.isfinite(um[k]) and um[k] > 0)
             sat = ("  ⚠sat" if r.pp_theta is not None and r.pp_theta[i] > 0.85 else "")
+            ood_names = [r.comps[j] for k, j in enumerate(r.nonbg) if not np.isfinite(um[k])]
             if cs:
                 tag += f"  |  {cs}{sat}"
-        ax.set_title(f"pixel ({xp:.0f}, {yp:.0f}) — {tag}", fontsize=8, color=INK)
-        ax.set_xlabel("wavenumber (cm⁻¹)"); ax.set_yticks([])
-        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE,
+            if ood_names:
+                tag += "  |  OOD: " + ", ".join(ood_names)
+        ax.set_xlabel("Raman shift (cm$^{-1}$)"); ax.set_yticks([])
+        ax.legend(fontsize=9, framealpha=0.0, labelcolor="black",
                   loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, frameon=False)
         self.c_spec.fig.tight_layout(); self.c_spec.draw_idle()
 
@@ -803,15 +1017,20 @@ class RealDataPage(QWidget):
                   [[nm, f"{r.mean_ratio[i]:.4f}"] for i, nm in enumerate(nb)])
         inten = r.spectra.sum(axis=1)                      # total baseline-removed signal
         cal = getattr(r, "conc", None) is not None
+        has_bg = getattr(r, "bg_score", None) is not None
         head = (["x", "y", "hit", "total_intensity"]
                 + [f"ratio_{nm}" for nm in nb] + [f"A_{c}" for c in r.comps]
-                + ([f"conc_uM_{nm}" for nm in nb] if cal else []) + ["reliability_r2"])
+                + ([f"conc_uM_{nm}" for nm in nb] if cal else []) + ["reliability_r2"]
+                + (["bg_match"] if has_bg else []))
         rows = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}", int(r.hit[i]),
                  f"{inten[i]:.4f}"]
                 + [f"{r.ratio_nb[i, k]:.4f}" for k in range(len(nb))]
                 + [f"{r.A[i, k]:.5f}" for k in range(len(r.comps))]
-                + ([f"{r.conc[i, k] * 1e6:.4g}" for k in range(len(nb))] if cal else [])
-                + [f"{r.reliab[i]:.4f}"] for i in range(r.n_pixels)]
+                + ([f"{r.conc[i, k] * 1e6:.4g}" if np.isfinite(r.conc[i, k]) else "OOD"
+                    for k in range(len(nb))] if cal else [])
+                + [f"{r.reliab[i]:.4f}"]
+                + ([f"{r.bg_score[i]:.4f}"] if has_bg else [])
+                for i in range(r.n_pixels)]
         write_csv(os.path.join(d, "per_pixel.csv"), head, rows)
         figs = [("real_intensity_maps", self.c_maps),
                 ("real_composition_pies", self.c_pie),
@@ -820,5 +1039,45 @@ class RealDataPage(QWidget):
         if getattr(r, "calibrated", False) and r.conc is not None:
             figs.append(("real_concentration_maps", self.c_conc))
         n = _save_figs(figs, d)
-        self.status.setText(f"exported 2 CSV + {n} PNG → {os.path.basename(d)}")
+        self._export_readme(d, r, nb, [f[0] for f in figs])
+        self.status.setText(f"exported README + 2 CSV + {n} PNG → {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _export_readme(self, d, r, nb, fig_names):
+        """WHAT / HOW / RESULT for a Real-data export (readable without the app)."""
+        from dataset import load_preprocess
+        cfg = load_preprocess(self.data_dir)
+        trim = cfg.get("trim")
+        window = f"{trim[0]:.0f}–{trim[1]:.0f} cm⁻¹" if trim else "full range"
+        ratio_str = " · ".join(f"{nm} {r.mean_ratio[i]:.0%}" for i, nm in enumerate(nb))
+        cal = getattr(r, "calibrated", False) and getattr(r, "conc_avg", None) is not None
+        conc_str = (" · ".join(f"{nm} {r.conc_avg[i] * 1e6:.3g} µM" for i, nm in enumerate(nb))
+                    if cal else "not computed (no calibration loaded)")
+        fig_docs = {
+            "real_intensity_maps": "per-pixel total baseline-removed band intensity.",
+            "real_composition_pies": "mean composition (pie) over the hit pixels.",
+            "real_composition": "per-pixel dominant-substance / composition map.",
+            "real_pixel_spectrum": "measured spectrum of the selected pixel.",
+            "real_concentration_maps": "per-pixel absolute concentration (µM).",
+        }
+        sections = {
+            "What this is": [
+                "A real SERS map unmixed against the pure references for per-pixel "
+                "composition (which substance, how much) and — if a calibration is loaded — "
+                "absolute concentration (µM). Background pixels are excluded."],
+            "How it was produced": [
+                f"- References: {self.data_dir}",
+                f"- Map: {os.path.basename(self.test) if getattr(self, 'test', None) else '(current)'}",
+                f"- Unmixing: {r.method.upper()} against pure reference templates",
+                f"- Baseline removal: {'on' if cfg.get('baseline') else 'off'}; "
+                f"spectral window: {window}",
+                f"- Calibration: {os.path.basename(self.calib_path) if self.calib_path else 'none (ratio only)'}"],
+            "Results": [
+                f"- Dominant substance: {r.dominant}",
+                f"- Substance pixels (hit fraction): {r.hit_frac:.0%}",
+                f"- Mean composition over hit pixels: {ratio_str}",
+                f"- Mean reconstruction R²: {r.mean_r2:.2f}",
+                f"- Mean concentration: {conc_str}"],
+        }
+        figures = [(fn, fig_docs[fn]) for fn in fig_names if fn in fig_docs]
+        write_readme(d, "UNMIXR — Real-data export", sections, figures)

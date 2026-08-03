@@ -9,16 +9,17 @@ import traceback
 import numpy as np
 from matplotlib.patches import Patch
 
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QSpinBox, QComboBox, QCheckBox, QFileDialog, QProgressBar, QScrollArea,
-    QFrame,
+    QFrame, QStackedWidget,
 )
 
 from ui_common import *
 from model_training import train_model, TrainResult
 from real_data import PEST_DEFAULT
+from page_compose import ComposePanel
 from dataset import load_preprocess
 from io_utils import write_csv
 
@@ -52,6 +53,7 @@ class ModelPage(QWidget):
         super().__init__()
         self._thread = None
         self._res = None
+        COLOR_BUS.changed.connect(self._recolor)     # top-bar picker → recolour
         self._train_params = None
         self.pest_dir = PEST_DEFAULT
         root = QVBoxLayout(self)
@@ -59,14 +61,27 @@ class ModelPage(QWidget):
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Model training"); h1.setObjectName("h1")
-        sub = QLabel("Step 2 — train. Uses the train/test division and "
-                     "preprocessing you already set in Samples (split = manual). "
-                     "Pick an algorithm; read the learning curve, confusion matrix, "
-                     "per-class F1, PCA and discriminative bands. The other splits "
-                     "(spatial / random / batch-CV) are there for comparison only.")
+        sub = QLabel("Step 2 — train the model used downstream. Composition (the model "
+                     "Recovery / Real-data apply) or a pixel classifier for the reference maps.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
+
+        # ---- mode: composition model (Step 2) vs pixel classifier ----
+        self._compose = ComposePanel()
+        seg = QHBoxLayout(); seg.setSpacing(6)
+        self.btn_comp = QPushButton("Composition model"); self.btn_comp.setObjectName("ghost")
+        self.btn_comp.setCheckable(True); self.btn_comp.setChecked(True)
+        self.btn_clf = QPushButton("Pixel classifier"); self.btn_clf.setObjectName("ghost")
+        self.btn_clf.setCheckable(True)
+        self.btn_comp.clicked.connect(lambda: self._set_mode(0))
+        self.btn_clf.clicked.connect(lambda: self._set_mode(1))
+        seg.addWidget(self.btn_comp); seg.addWidget(self.btn_clf); seg.addStretch(1)
+        root.addLayout(seg)
+
+        # classify content lives in its own container so the mode switch can swap it
+        classify_box = QWidget(); cbody = QVBoxLayout(classify_box)
+        cbody.setContentsMargins(0, 0, 0, 0); cbody.setSpacing(14)
 
         # ---- controls: row 1 = model + data + actions ----
         ctl = QHBoxLayout(); ctl.setSpacing(10)
@@ -93,7 +108,7 @@ class ModelPage(QWidget):
         self.btn.clicked.connect(self._train)
         ctl.addWidget(save_b); ctl.addWidget(load_b); ctl.addWidget(exp_b)
         ctl.addWidget(self.btn)
-        root.addLayout(ctl)
+        cbody.addLayout(ctl)
 
         # ---- controls: row 2 = split only (preprocessing comes from Samples) ----
         ctl2 = QHBoxLayout(); ctl2.setSpacing(10)
@@ -116,13 +131,13 @@ class ModelPage(QWidget):
         self.prep_lbl = QLabel(""); self.prep_lbl.setObjectName("field")
         ctl2.addSpacing(8); ctl2.addWidget(self.prep_lbl)
         ctl2.addStretch(1)
-        root.addLayout(ctl2)
+        cbody.addLayout(ctl2)
         self._refresh_prep()
 
         # progress bar — visible (busy) only while training, so it never reads as frozen
         self.pbar = QProgressBar(); self.pbar.setTextVisible(False)
         self.pbar.setFixedHeight(6); self.pbar.setVisible(False)
-        root.addWidget(self.pbar)
+        cbody.addWidget(self.pbar)
 
         # KPI row
         kpis = QHBoxLayout(); kpis.setSpacing(12)
@@ -130,7 +145,7 @@ class ModelPage(QWidget):
         self.k_tr = Kpi("train pixels"); self.k_te = Kpi("test pixels")
         for k in (self.k_acc, self.k_f1, self.k_tr, self.k_te):
             kpis.addWidget(k)
-        root.addLayout(kpis)
+        cbody.addLayout(kpis)
 
         # plot grid: 2x2 + a full-width discriminative-band row
         grid = QGridLayout(); grid.setSpacing(12)
@@ -166,7 +181,14 @@ class ModelPage(QWidget):
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(gridw)
         scroll.setStyleSheet("QScrollArea{background:transparent;}")
-        root.addWidget(scroll, 1)
+        cbody.addWidget(scroll, 1)
+
+        # stack the two modes; composition is the default (Step 2 of the workflow)
+        self._mstack = QStackedWidget()
+        self._mstack.addWidget(self._compose)     # index 0 — composition model
+        self._mstack.addWidget(classify_box)      # index 1 — pixel classifier
+        root.addWidget(self._mstack, 1)
+        self._set_mode(0)                          # composition default + active-button colour
 
         for cv, msg in [(self.c_curve, "Train to watch the learning curve"),
                         (self.c_cm, "Train to compute confusion matrix"),
@@ -184,6 +206,14 @@ class ModelPage(QWidget):
     def set_data_dir(self, path):
         """Adopt the dataset folder chosen in Samples (single source of truth)."""
         self.pest_dir = path; self.src.setText(self._short(path)); self._refresh_prep()
+        self._compose.set_data_dir(path)
+
+    def _set_mode(self, idx):
+        """Switch between the composition-model panel (0) and the pixel classifier (1)."""
+        self._mstack.setCurrentIndex(idx)
+        on = "background:%s; color:white; border-radius:7px; padding:6px 16px;" % TEAL
+        for b, active in ((self.btn_comp, idx == 0), (self.btn_clf, idx == 1)):
+            b.setChecked(active); b.setStyleSheet(on if active else "")
 
     def _spin(self, spin, lo, hi, val, label, step=1):
         col = QVBoxLayout(); col.setSpacing(2)
@@ -324,6 +354,8 @@ class ModelPage(QWidget):
 
     # ---- training ----
     def _train(self):
+        if worker_busy(self):                             # already training — ignore
+            return
         cfg = load_preprocess(self.pest_dir)              # preprocessing set in Samples
         self._refresh_prep()
         params = dict(pest_dir=self.pest_dir, backend=self.cmb.currentData(),
@@ -343,16 +375,8 @@ class ModelPage(QWidget):
         self.btn.setEnabled(False); self.btn.setText("Training…")
         self.c_curve.placeholder("Training…")
         self.pbar.setVisible(True); self.pbar.setRange(0, 0)   # busy until first step
-        self._thread = QThread()
-        self._worker = TrainWorker(params)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._progress)
-        self._worker.done.connect(self._apply)
-        self._worker.fail.connect(self._error)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.fail.connect(self._thread.quit)
-        self._thread.start()
+        start_worker(self, TrainWorker(params), done=self._apply,
+                     fail=self._error, progress=self._progress)
 
     def _progress(self, msg):
         # live status so a long run reads as working, not frozen
@@ -389,13 +413,18 @@ class ModelPage(QWidget):
         self._plot_pca(res); self._plot_bar(res); self._plot_bands(res)
         self._plot_box(res); self._plot_markers(res)
 
+    def _recolor(self):
+        """Re-draw all plots when the shared substance colours change."""
+        if self._res is not None:
+            self._apply(self._res)
+
     # ---- plots ----
     def _plot_curve(self, res):
         ax = self.c_curve.new_ax()
         col = TEAL if res.backend == "resnet" else BLUE
-        ax.plot(res.curve_x, res.curve_y, marker="o", ms=4, lw=1.4, color=col)
+        ax.plot(res.curve_x, res.curve_y, marker="o", ms=5, lw=1.8, color=col)
         ax.set_xlabel(res.curve_xlabel); ax.set_ylabel(res.curve_label)
-        ax.set_ylim(bottom=0)
+        ax.margins(y=0.25)          # autoscale y so a near-zero curve is still readable
         self.c_curve.fig.tight_layout(); self.c_curve.draw_idle()
 
     def _plot_cm(self, res):
@@ -408,7 +437,7 @@ class ModelPage(QWidget):
         frac = np.divide(cm, row, out=np.zeros(cm.shape, float), where=row > 0)
         ax.imshow(frac, cmap=CM_CMAP, aspect="equal", vmin=0, vmax=1)
         ax.set_xticks(range(len(names))); ax.set_yticks(range(len(names)))
-        ax.set_xticklabels(names, fontsize=7); ax.set_yticklabels(names, fontsize=7)
+        ax.set_xticklabels(names, fontsize=9); ax.set_yticklabels(names, fontsize=9)
         ax.set_xlabel("predicted"); ax.set_ylabel("true")
         ax.set_xticks(np.arange(-0.5, len(names)), minor=True)
         ax.set_yticks(np.arange(-0.5, len(names)), minor=True)
@@ -418,7 +447,7 @@ class ModelPage(QWidget):
             for j in range(cm.shape[1]):
                 if cm[i, j]:
                     ax.text(j, i, f"{frac[i, j] * 100:.0f}%\n({cm[i, j]})",
-                            ha="center", va="center", fontsize=7,
+                            ha="center", va="center", fontsize=9,
                             color="#ffffff" if frac[i, j] > 0.5 else INK)
         self.c_cm.fig.tight_layout(); self.c_cm.draw_idle()
 
@@ -428,7 +457,7 @@ class ModelPage(QWidget):
             m = res.pca_lab == i
             if m.any():
                 ax.scatter(res.pca_emb[m, 0], res.pca_emb[m, 1], s=12,
-                           color=SERIES[i % len(SERIES)], alpha=0.6,
+                           color=substance_color(nm, i), alpha=0.6,
                            edgecolors="none", label=nm)
         var = getattr(res, "pca_var", None)
         if var is not None and len(var) >= 2:
@@ -436,7 +465,7 @@ class ModelPage(QWidget):
             ax.set_ylabel(f"PC2 ({var[1] * 100:.1f}%)")
         else:
             ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
-        ax.legend(fontsize=7, loc="best", framealpha=0.0, labelcolor=MUTE)
+        ax.legend(fontsize=9, loc="best", framealpha=0.0, labelcolor="black")
         self.c_pca.fig.tight_layout(); self.c_pca.draw_idle()
 
     def _plot_bar(self, res):
@@ -449,9 +478,10 @@ class ModelPage(QWidget):
         ax.bar(x - w, P, w, color=BLUE, label="precision")
         ax.bar(x, R, w, color=AMBER, label="recall")
         ax.bar(x + w, F, w, color=TEAL, label="F1")
-        ax.set_xticks(x); ax.set_xticklabels(names, fontsize=7)
+        ax.set_xticks(x); ax.set_xticklabels(names, fontsize=9)
         ax.set_ylim(0, 1.05); ax.set_ylabel("score")
-        ax.legend(fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=3)
+        ax.legend(fontsize=9, framealpha=0.0, labelcolor="black", ncol=3,
+                  loc="lower center", bbox_to_anchor=(0.5, 1.005))
         self.c_bar.fig.tight_layout(); self.c_bar.draw_idle()
 
     def _plot_bands(self, res):
@@ -471,11 +501,11 @@ class ModelPage(QWidget):
         # label the strongest discriminative bands — distinct peaks, not adjacent points
         from model_training import top_bands
         for idx in top_bands(f, wn, k=min(6, len(f))):
-            ax.annotate(f"{wn[idx]:.0f}", (wn[idx], f[idx]), fontsize=7, color=INK,
+            ax.annotate(f"{wn[idx]:.0f}", (wn[idx], f[idx]), fontsize=9, color=INK,
                         ha="center", va="bottom",
                         xytext=(0, 2), textcoords="offset points")
             ax.plot([wn[idx]], [f[idx]], "o", ms=3, color=CORAL)
-        ax.set_xlabel("wavenumber (cm⁻¹)")
+        ax.set_xlabel("Raman shift (cm$^{-1}$)")
         ax.set_ylabel("PLS-DA VIP" if use_vip else "ANOVA F")
         ax.margins(y=0.15)
         self.c_bands.fig.tight_layout(); self.c_bands.draw_idle()
@@ -496,7 +526,7 @@ class ModelPage(QWidget):
             data = [vals[lab == c, j] for j in range(k)]
             data = [d if len(d) else [0.0] for d in data]
             pos = np.arange(k) + (c - (nC - 1) / 2) * width
-            col = SERIES[c % len(SERIES)]
+            col = substance_color(classes[c], c)
             bp = ax.boxplot(data, positions=pos, widths=width * 0.9,
                             patch_artist=True, showfliers=False,
                             medianprops=dict(color=INK, linewidth=0.8))
@@ -506,12 +536,13 @@ class ModelPage(QWidget):
                 for ln in bp[w]:
                     ln.set(color=col, linewidth=0.8)
         ax.set_xticks(np.arange(k))
-        ax.set_xticklabels([f"{w:.0f}" for w in wn], fontsize=8)
-        ax.set_xlabel("top discriminative band (cm⁻¹)")
-        ax.set_ylabel("intensity")
-        ax.legend(handles=[Patch(facecolor=SERIES[c % len(SERIES)], label=classes[c])
+        ax.set_xticklabels([f"{w:.0f}" for w in wn], fontsize=10)
+        ax.set_xlabel("top discriminative band (cm$^{-1}$)")
+        ax.set_ylabel("Intensity (a.u.)")
+        ax.legend(handles=[Patch(facecolor=substance_color(classes[c], c), label=classes[c])
                            for c in range(nC)],
-                  fontsize=7, framealpha=0.0, labelcolor=MUTE, ncol=min(nC, 4))
+                  fontsize=9, framealpha=0.0, labelcolor="black", ncol=min(nC, 4),
+                  loc="lower center", bbox_to_anchor=(0.5, 1.005))
         self.c_box.fig.tight_layout(); self.c_box.draw_idle()
 
     def _plot_markers(self, res):
@@ -525,25 +556,32 @@ class ModelPage(QWidget):
         if not nonbg:
             self.c_marker.placeholder("no substances"); return
         self.c_marker.fig.clear()
+        # stack the spectra vertically so each is full-width and long (not squeezed
+        # into a narrow column); export as a tall strip of wide panels.
+        self.c_marker.export_panel = (6.5, 1.6)
+        N = len(nonbg)
         for pos, ci in enumerate(nonbg):
             ax = self.c_marker.style(
-                self.c_marker.fig.add_subplot(1, len(nonbg), pos + 1))
+                self.c_marker.fig.add_subplot(N, 1, pos + 1))
             mean_c = cm[ci]
             others = np.delete(cm, ci, axis=0)
             score = mean_c - (others.max(axis=0) if len(others) else 0.0)  # uniquely high
-            col = SERIES[pos % len(SERIES)]
+            col = substance_color(res.classes[ci], pos)
             ax.plot(wn, mean_c, lw=1.0, color=col)
             ax.fill_between(wn, mean_c, color=col, alpha=0.12)
             for idx in top_bands(score, wn, k=3, min_sep=40):
                 if score[idx] <= 0:
                     continue
                 ax.axvline(wn[idx], color=CORAL, lw=0.7, ls="--", alpha=0.7)
-                ax.annotate(f"{wn[idx]:.0f}", (wn[idx], mean_c[idx]), fontsize=7,
+                ax.annotate(f"{wn[idx]:.0f}", (wn[idx], mean_c[idx]), fontsize=9,
                             color=INK, ha="center", va="bottom",
                             xytext=(0, 2), textcoords="offset points")
-            ax.set_title(res.classes[ci], fontsize=8, color=col)
-            ax.set_yticks([]); ax.tick_params(labelsize=7)
-            if pos == 0:
-                ax.set_ylabel("intensity", fontsize=8)
-            ax.set_xlabel("cm⁻¹", fontsize=8)
+            # per-trace substance label (a data label, not a plot title)
+            ax.text(0.008, 0.88, res.classes[ci], transform=ax.transAxes, color=col,
+                    fontsize=10, fontweight="bold", va="top", ha="left")
+            ax.set_yticks([]); ax.set_ylabel("Intensity (a.u.)", fontsize=10)
+            if pos == N - 1:
+                ax.set_xlabel("Raman shift (cm$^{-1}$)", fontsize=10)
+            else:
+                ax.set_xticklabels([])
         self.c_marker.fig.tight_layout(); self.c_marker.draw_idle()

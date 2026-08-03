@@ -30,6 +30,7 @@ class ValidateResult:
     response: dict                 # name -> response factor (min normalised to 1)
     corrected: list                # per mixture: corrected (solution) fractions dict
     ref: str = ""                  # substance the factors are anchored to (r≈1)
+    response_se: dict = None       # name -> standard error of the response factor
     recovery: list = None          # per mixture: {name: recovery %} (needs calib + true M)
     mean_recovery: dict = None     # name -> mean recovery % over mixtures
     calibrated: bool = False       # True if concentrations were quantified
@@ -106,6 +107,26 @@ def parse_mixture_label(basename, ref_names, base=None):
     return named
 
 
+def simplify_ratio(ratio):
+    """Reduce a parsed amount dict to the smallest whole-number ratio: {DQ:300, THI:100}
+    → {DQ:3, THI:1}, {THI:1000, TBZ:1000, DQ:10} → {THI:100, TBZ:100, DQ:1}. Only the
+    RATIO is reduced — absolute concentrations (µM) must be kept separately, since
+    reducing throws the magnitude away. Non-integer amounts are scaled by the smallest
+    value instead. Returns a new dict in the original key order."""
+    vals = [float(v) for v in ratio.values() if float(v) > 0]
+    if not vals:
+        return dict(ratio)
+    if all(abs(v - round(v)) < 1e-9 for v in vals):
+        from math import gcd
+        g = 0
+        for v in vals:
+            g = gcd(g, int(round(v)))
+        g = g or 1
+        return {k: (float(v) / g if float(v) > 0 else 0.0) for k, v in ratio.items()}
+    m = min(vals)
+    return {k: (float(v) / m if float(v) > 0 else 0.0) for k, v in ratio.items()}
+
+
 def _response_factors(rows, names):
     """Relative response factor per substance from the observed-vs-true fractions.
     r_i / r_ref = geometric mean over mixtures of (obs_i/obs_ref)·(t_ref/t_i). The
@@ -126,7 +147,13 @@ def _response_factors(rows, names):
                 logr[n].append(np.log((oi / oref) * (tref / ti)))
     rf = {n: (float(np.exp(np.mean(logr[n]))) if logr[n] else 1.0) for n in names}
     mn = min(rf.values()) or 1.0
-    return {n: rf[n] / mn for n in names}, ref
+    rfn = {n: rf[n] / mn for n in names}
+    # standard error of the (geometric) factor: it is estimated from the spread of the
+    # per-mixture log-ratios, so it carries uncertainty. se_log = SD(logr)/√n; delta method
+    # → absolute SE ≈ factor · se_log.
+    se = {n: (rfn[n] * float(np.std(logr[n], ddof=1) / np.sqrt(len(logr[n])))
+              if len(logr[n]) > 1 else 0.0) for n in names}
+    return rfn, ref, se
 
 
 def correct_fractions(obs, response, names):
@@ -141,21 +168,38 @@ def correct_fractions(obs, response, names):
 
 
 def validate_mixtures(data_dir, items, method="nnls", baseline=True, trim=None,
-                      calib_path=None, progress=None) -> ValidateResult:
+                      calib_path=None, peak_map=None, progress=None) -> ValidateResult:
     """``items`` is a list of (map_path, true_ratio[, true_conc]) — true_ratio maps
     substance → true fraction, and the optional true_conc maps substance → true
     concentration (M). Each map is unmixed against the pure references for the observed
     surface fraction (→ response factors + corrected solution ratio). If ``calib_path``
     (a dilution-series CSV) is given, the map is also quantified (competitive Langmuir)
     so we can report RECOVERY = measured / true concentration where true_conc is known."""
+    # calibration is OPTIONAL here — it only adds the RECOVERY (measured µM vs true)
+    # cross-check. Validate it once up front so a wrong/missing file degrades to
+    # ratio-only instead of killing every mixture in the loop.
+    if calib_path:
+        from io_utils import load_calibration_csv
+        try:
+            load_calibration_csv(calib_path)
+        except Exception as e:
+            if progress:
+                progress(f"calibration ignored ({e}) — ratio-only recovery")
+            calib_path = None
+
+    import os
     rows, names = [], None
-    for it in items:
+    total = len(items)
+    for k, it in enumerate(items, 1):
         path, true = it[0], it[1]
         true_conc = it[2] if len(it) > 2 else None
+        prefix = f"[{k}/{total}] {os.path.basename(path)}"
+        sub = (lambda msg, _p=prefix: progress(f"{_p} · {msg}")) if progress else None
         if progress:
-            progress(f"unmixing {path}")
+            progress(f"{prefix} — unmixing  ({total - k} left)")
         r = unmix_map(data_dir, path, method=method, baseline=baseline, trim=trim,
-                      hit_mode="auto", calib_path=calib_path, progress=progress)
+                      hit_mode="auto", calib_path=calib_path, peak_map=peak_map,
+                      progress=sub)
         nb = [r.comps[i] for i in r.nonbg]
         names = nb
         obs = {nb[k]: float(r.mean_ratio[k]) for k in range(len(nb))}
@@ -168,7 +212,7 @@ def validate_mixtures(data_dir, items, method="nnls", baseline=True, trim=None,
                      "true_conc": true_conc, "meas": meas})
     if not names:
         raise ValueError("no mixtures to validate.")
-    response, ref = _response_factors(rows, names)
+    response, ref, response_se = _response_factors(rows, names)
     corrected = [dict(zip(names, correct_fractions(r["obs"], response, names)))
                  for r in rows]
     # recovery = measured / true concentration (%), where both are known
@@ -185,4 +229,5 @@ def validate_mixtures(data_dir, items, method="nnls", baseline=True, trim=None,
     calibrated = any(r["meas"] for r in rows)
     return ValidateResult(names=names, rows=rows, response=response,
                           corrected=corrected, ref=ref, recovery=recovery,
-                          mean_recovery=mean_recovery, calibrated=calibrated)
+                          mean_recovery=mean_recovery, calibrated=calibrated,
+                          response_se=response_se)

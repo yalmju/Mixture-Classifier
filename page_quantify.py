@@ -7,7 +7,7 @@ import traceback
 
 import numpy as np
 
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QSpinBox, QCheckBox, QLineEdit, QFileDialog, QDialog, QDialogButtonBox,
@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 
 from ui_common import *
 from calibration import calibrate, quantify
-from io_utils import load_calibration_csv, load_calibration_folder, write_csv
+from io_utils import load_calibration_csv, load_calibration_folder, write_csv, write_readme
 
 
 def _prep_specs(specs, baseline=True):
@@ -380,15 +380,15 @@ class PeakPickerDialog(QDialog):
         for i, nm in enumerate(self.names):
             ax = self.canvas.style(self.canvas.fig.add_subplot(n, 1, i + 1))
             y = self.means[i]; ym = y.max() or 1.0
-            ax.plot(self.axis, y / ym, lw=1.1, color=SERIES[i % len(SERIES)])
+            ax.plot(self.axis, y / ym, lw=1.1, color=substance_color(nm, i))
             ax.axvline(self.peaks[nm], color=INK, ls="--", lw=1.1)
-            ax.annotate(f"{nm} @ {self.peaks[nm]:.0f} cm⁻¹", xy=(0.99, 0.8),
+            ax.annotate(f"{nm} @ {self.peaks[nm]:.0f} cm$^{{-1}}$", xy=(0.99, 0.8),
                         xycoords="axes fraction", ha="right", fontsize=9, color=INK)
             ax.set_yticks([])
             if i < n - 1:
                 ax.set_xticklabels([])
             else:
-                ax.set_xlabel("wavenumber (cm⁻¹)")
+                ax.set_xlabel("Raman shift (cm$^{-1}$)")
             self._axmap[ax] = i
         self.canvas.fig.tight_layout(); self.canvas.draw_idle()
 
@@ -419,6 +419,7 @@ class QuantifyPage(QWidget):
         self._acc = {}         # accumulated per-compound folders {name: (concs, specs)}
         self._axis = None      # shared wavenumber axis of the accumulated folders
         self._res = None
+        COLOR_BUS.changed.connect(self._recolor)     # top-bar picker → recolour
         self.data_dir = None   # Samples folder (for the BLK class → blank-based LOD)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
@@ -857,10 +858,51 @@ class QuantifyPage(QWidget):
             write_csv(os.path.join(d, "quantify.csv"),
                       ["compound", "C_M", "ratio", "theta", "K_fit"], rows)
         n = _save_figs([("calibration_curve", self.c_iso)], d)
-        self.src.setText(f"exported CSV + {n} PNG → {os.path.basename(d)}")
+        self._export_readme(d, r)
+        self.src.setText(f"exported README + CSV + {n} PNG → {os.path.basename(d)}")
         self.src.setStyleSheet("")
 
+    def _export_readme(self, d, r):
+        """WHAT / HOW / RESULT for a calibration export (readable without the app)."""
+        names = r["names"]; model = r.get("model", "langmuir")
+        baseline = not self.chk_baselined.isChecked()
+        pks = r.get("peaks_used") or [""] * len(names)
+        r2 = r.get("r2") or [None] * len(names)
+        lod = r.get("lod") or [float("nan")] * len(names)
+        loq = r.get("loq") or [float("nan")] * len(names)
+        band_str = " · ".join(f"{nm} {pks[i]}" for i, nm in enumerate(names) if i < len(pks) and pks[i]) \
+            or "whole-spectrum NNLS signal"
+        res_lines = []
+        for i, nm in enumerate(names):
+            parts = [nm]
+            if i < len(r2) and r2[i] is not None:
+                parts.append(f"R²={r2[i]:.2f}")
+            if i < len(lod) and np.isfinite(lod[i]):
+                parts.append(f"LOD={_fmt_conc(lod[i])}")
+            if i < len(loq) and np.isfinite(loq[i]):
+                parts.append(f"LOQ={_fmt_conc(loq[i])}")
+            res_lines.append("- " + ", ".join(parts))
+        sections = {
+            "What this is": [
+                "Per-compound calibration: each compound's marker-band signal is measured "
+                "across a dilution series and fit to a response isotherm, giving the "
+                f"curve, fit quality (R²) and detection limits (LOD/LOQ). Model: {model}."],
+            "How it was produced": [
+                f"- Compounds: {len(names)} ({', '.join(names)})",
+                f"- Marker band(s) per compound: {band_str}",
+                f"- Fit model: {model} (Langmuir isotherm or linear)",
+                f"- Baseline removal: {'on' if baseline else 'off (CSVs already corrected)'}",
+                f"- LOD basis: {r.get('lod_method', 'residual')} "
+                f"(3.3σ/slope; blank-based if a BLK class was found)"],
+            "Results": res_lines,
+        }
+        figures = [("calibration_curve", "signal (B) vs concentration with the fitted "
+                    "isotherm, R², marker band and LOD per compound.")]
+        write_readme(d, "UNMIXR — Calibration export", sections, figures)
+
     def _run(self):
+        if worker_busy(self):                             # already running — ignore
+            return
         # the per-compound peaks box (filled by VIP / Best R² / Pick) drives the fit
         peak_map = self._peaks_from_text()
         params = dict(cal=self._cal,
@@ -871,18 +913,16 @@ class QuantifyPage(QWidget):
                       use_dl_quant=self.chk_dlq.isChecked(),
                       blank=self._load_blank())     # Samples BLK → blank-based LOD
         self.btn.setEnabled(False); self.btn.setText("Working…")
-        self._thread = QThread(); self._worker = QuantWorker(params)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.done.connect(self._apply)
-        self._worker.fail.connect(self._error)
-        self._worker.done.connect(self._thread.quit)
-        self._worker.fail.connect(self._thread.quit)
-        self._thread.start()
+        start_worker(self, QuantWorker(params), done=self._apply, fail=self._error)
 
     def _error(self, tb):
         self.btn.setEnabled(True); self.btn.setText("Calibrate + quantify")
         print(tb, file=sys.stderr)
+
+    def _recolor(self):
+        """Re-draw the calibration plot when shared substance colours change."""
+        if self._res is not None:
+            self._plot_iso(self._res)
 
     def _apply(self, res):
         self._res = res
@@ -903,7 +943,7 @@ class QuantifyPage(QWidget):
         pks = res.get("peaks_used"); lod = res.get("lod"); loq = res.get("loq")
         for i, nm in enumerate(res["names"]):
             C, B, dc, db = res["iso"][i]
-            col = SERIES[i % len(SERIES)]
+            col = substance_color(nm, i)
             C = np.asarray(C, float); B = np.asarray(B, float)
             uc = np.unique(C)
             means = np.array([B[C == c].mean() for c in uc])
@@ -929,10 +969,10 @@ class QuantifyPage(QWidget):
             ax.plot(dc, db, color=col, lw=1.6, label=lab)
         ax.set_xscale("log"); ax.set_xlabel("concentration (M)")
         pk = res.get("peak_wn")
-        ax.set_ylabel(f"peak height @ {pk:.0f} cm⁻¹  (mean ± SE)" if pk
+        ax.set_ylabel(f"peak height @ {pk:.0f} cm$^{{-1}}$  (mean ± SE)" if pk
                       else ("marker-peak height (mean ± SE)" if pks
                             else "signal  B  (mean ± SE)"))
-        ax.legend(fontsize=8, framealpha=0.0, labelcolor=MUTE)
+        ax.legend(fontsize=10, framealpha=0.0, labelcolor="black")
         self.c_iso.fig.tight_layout(); self.c_iso.draw_idle()
 
     def _readout(self, res):
@@ -953,7 +993,7 @@ class QuantifyPage(QWidget):
                 p2 = (f"<td style='padding-right:12px'>gA="
                       f"{(gA[i] if gA is not None else float('nan')):.2e}</td>")
             rows.append(
-                f"<tr><td style='padding-right:12px;color:{SERIES[i%len(SERIES)]};"
+                f"<tr><td style='padding-right:12px;color:{substance_color(nm, i)};"
                 f"font-weight:600'>{nm}</td>{p1}{p2}"
                 f"<td style='padding-right:12px;color:{MUTE}'>R²={r2[i]:.2f}</td>"
                 f"<td style='padding-right:12px;color:{TEAL}'>LOD "
