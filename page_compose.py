@@ -697,6 +697,20 @@ class ComposePanel(QWidget):
         if fpr is not None:
             write_csv(os.path.join(d, "composition_roc.csv"), ["fpr", "tpr"],
                       [[f"{a:.5f}", f"{b:.5f}"] for a, b in zip(fpr, tpr)])
+        map_errors = [0.5 * sum(abs(r[2][j] - r[1][j]) for j in range(len(subs)))
+                      for r in rows]
+        write_csv(os.path.join(d, "evaluation_summary.csv"),
+                  ["metric", "value", "unit_or_note"], [
+                  ["evaluation_unit", "map", "pixels remain grouped by map"],
+                  ["experimental_batches", "1", "batch IDs not yet supplied"],
+                  ["evaluation_maps", str(len(rows)), "leave-one-map-out"],
+                  ["training_maps", str(m.get("n_maps", len(self._items_cache))), "maps"],
+                  ["training_spectra", str(m.get("n_train", 0)), "pixel spectra"],
+                  ["pixels_per_map", str(m.get("px_per_map", 0)), "configured maximum"],
+                  ["mean_map_composition_error", f"{_np.mean(map_errors):.6f}", "0.5*L1"],
+                  ["presence_threshold", "0.05", "true fraction > threshold"],
+                  ["roc_auc_micro", f"{auc_v:.6f}" if auc_v == auc_v else "",
+                   "pooled component presence; not composition accuracy"]])
         n = _save_figs([("composition_learning_curve", self.c_loss),
                         ("composition_triangle", self.c_tri),
                         ("composition_parity", self.c_parity),

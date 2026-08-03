@@ -935,6 +935,33 @@ class ValidatePage(QWidget):
                 crows.append([r["name"]] + [f"{v:.4f}" for v in nom] + [f"{v:.4f}" for v in mn] +
                              rec + [f"{composition_distance(nom, mn):.4f}"])
             write_csv(os.path.join(d, "composition_view.csv"), chead, crows)
+        if self._cres:
+            detail = []
+            for r in self._cres:
+                true_u = r.get("uM_true") or {}
+                pred_u = r.get("uM_pred") or {}
+                for s, tv in true_u.items():
+                    pv = pred_u.get(s)
+                    if tv and pv is not None and tv > 0 and pv > 0:
+                        ae = abs(float(np.log10(pv / tv)))
+                        detail.append([r.get("name", ""), s, f"{tv:.6g}",
+                                       f"{pv:.6g}", f"{ae:.6f}"])
+            if detail:
+                write_csv(os.path.join(d, "concentration_log_errors.csv"),
+                          ["map", "substance", "true_uM", "pred_uM",
+                           "abs_log10_error"], detail)
+                summary = []
+                for s in subs:
+                    e = np.array([float(row[4]) for row in detail if row[1] == s])
+                    if len(e):
+                        summary.append([s, len(e), f"{np.median(e):.6f}",
+                                        f"{np.sqrt(np.mean(e ** 2)):.6f}",
+                                        f"{np.mean(e <= np.log10(2)):.4f}",
+                                        f"{np.mean(e <= 1.0):.4f}"])
+                write_csv(os.path.join(d, "concentration_metrics.csv"),
+                          ["substance", "n_maps", "median_abs_log10_error",
+                           "rmse_log10", "fraction_within_2x",
+                           "fraction_within_10x"], summary)
         figs = [("validate_parity", self.c_parity),
                 ("validate_corrected", self.c_corr),
                 ("validate_response", self.c_resp)]

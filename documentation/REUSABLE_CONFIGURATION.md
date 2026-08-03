@@ -25,3 +25,7 @@ DQ, TBZ and THI are the current dataset, not required class names. A 1:1:1 ratio
 6. Apply it only when incoming spectra match the stored axis/preprocessing; otherwise retrain or report OOD.
 
 This is configuration portability. It does not itself prove scientific transfer to a new substrate, day, instrument or ink batch.
+
+## Current evaluation exports
+
+The single-batch workflow exports map-level composition error, per-substance MAE/RMSE/R², micro ROC-AUC with a 5% presence threshold, map/pixel/batch counts, calibration/recovery tables, and component-wise concentration absolute-log10 error with within-2x/within-10x rates. Until batch IDs are supplied, the batch count is explicitly reported as 1 and evaluation is described as leave-one-map-out within one batch.
