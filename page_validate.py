@@ -539,7 +539,7 @@ class ValidatePage(QWidget):
         importance · ligand ablation (drawn into the c_explain canvas)."""
         wnv = r["wn"]; subs = r["subs"]; attr = r["attr"]; vip = r["vip"]
         perm = r["perm"]; abl = r["abl"]
-        col = {s: substance_color(s, SUBSTANCES.index(s)) for s in subs}
+        col = {s: substance_color(s, i) for i, s in enumerate(subs)}
         fig = self.c_explain.fig; fig.clear()
         n = len(subs)
         # Constrained layout, not tight_layout: column 1 holds ONE axes spanning the
@@ -605,6 +605,10 @@ class ValidatePage(QWidget):
         comp = dres if dres else cres
         self._res = res; self._cres = comp; self._is_dl = bool(dres)
         self._nnls_cres = cres            # keep the classical result for the side-by-side
+        from dataset import is_blank
+        raw_subs = (list(self._shared_model.get("subs", [])) if dres
+                    else list(comp[0].get("subs", [])) if comp else [])
+        self._comp_subs = [s for s in raw_subs if not is_blank(s)]
         self.btn.setEnabled(True); self.btn.setText("Validate")
         self.progbar.setVisible(False); self.cancel_btn.setVisible(False)
         self.tgl.setChecked(False)                          # auto-collapse inputs → show results
@@ -717,21 +721,23 @@ class ValidatePage(QWidget):
 
     # ---- composition view (drift · recovery) ----
     def _recovery(self, res, min_frac=0.03):
+        subs = list(self._comp_subs)
         """Per-substance apparent recovery (%) over true mixtures (≥2 nominal
         components). Components below ``min_frac`` (trace, e.g. a 1% ternary spike) are
         EXCLUDED: recovery = pred/true blows up for a tiny denominator (0.01 → 0.04 =
         400%) and makes the metric meaningless. {substance: [pct, ...]}."""
-        per = {s: [] for s in SUBSTANCES}
+        per = {s: [] for s in subs}
         for r in res:
             nom = r["nominal"]
             if nom is None or int(np.count_nonzero(nom)) < 2:
                 continue
-            for i, s in enumerate(SUBSTANCES):
+            for i, s in enumerate(subs):
                 if nom[i] > min_frac:
                     per[s].append(r["mean"][i] / nom[i] * 100)
         return per
 
     def _tri_frame(self, ax, rec=None):
+        subs = list(self._comp_subs)
         A, B, C = bary([1, 0, 0]), bary([0, 0, 1]), bary([0, 1, 0])   # DQ, THI, TBZ
         # faint interior grid parallel to each edge (25/50/75%) → gives the plot a scale
         for t in (0.25, 0.5, 0.75):
@@ -740,12 +746,12 @@ class ValidatePage(QWidget):
                         [P[1] + t * (Q[1] - P[1]), P[1] + t * (R[1] - P[1])],
                         color=FAINT, lw=0.5, alpha=0.45, zorder=0)
         ax.plot([A[0], B[0], C[0], A[0]], [A[1], B[1], C[1], A[1]], color=INK, lw=1.0, zorder=1)
-        for f, s, ha, va, dx, dy in [([1, 0, 0], "DQ", "center", "bottom", 0, 0.05),
-                                     ([0, 0, 1], "THI", "right", "top", -0.03, -0.02),
-                                     ([0, 1, 0], "TBZ", "left", "top", 0.03, -0.02)]:
+        for f, s, ha, va, dx, dy in [([1, 0, 0], subs[0], "center", "bottom", 0, 0.05),
+                                     ([0, 0, 1], subs[2], "right", "top", -0.03, -0.02),
+                                     ([0, 1, 0], subs[1], "left", "top", 0.03, -0.02)]:
             p = bary(f)
             lab = s
-            col = substance_color(s, SUBSTANCES.index(s))
+            col = substance_color(s, subs.index(s))
             if rec and rec.get(s):
                 v = rec[s]
                 mu = float(np.mean(v))
@@ -758,6 +764,9 @@ class ValidatePage(QWidget):
         ax.set_aspect("equal"); ax.axis("off")
 
     def _plot_triangle(self, res):
+        if len(self._comp_subs) != 3:
+            self.c_tri.placeholder("Ternary plot is available only for exactly 3 substances")
+            return
         """Draw the recovery drift triangle (graph + legend only; the card header in the
         app and the exported README supply the description)."""
         import matplotlib.pyplot as _plt
@@ -794,6 +803,7 @@ class ValidatePage(QWidget):
         self.c_tri.fig.tight_layout(); self.c_tri.draw_idle()
 
     def _plot_reldrift(self, res):
+        subs = list(self._comp_subs)
         recs = [r for r in res if r["nominal"] is not None]
         if not recs:
             self.c_rel.new_ax(); self.c_rel.placeholder("no nominal ratios"); return
@@ -835,7 +845,7 @@ class ValidatePage(QWidget):
                     if si is None:                          # 3-component panel: no single
                         col = "#3f4650"                     # dominant substance → neutral dark
                     else:
-                        col = substance_color(SUBSTANCES[si], si)
+                        col = substance_color(subs[si], si)
                     ax.barh(cursor, norm[k], height=0.66, alpha=0.85, color=col)
                     ypos.append(cursor)
                     ynames.append(recs[k]["name"].replace("_corrected", ""))
@@ -849,18 +859,19 @@ class ValidatePage(QWidget):
             for t, c in zip(ax.get_yticklabels(), ycols):
                 t.set_color(c)
             for si, yc in spans:
-                ax.text(103, yc, f"{SUBSTANCES[si]}-dom", va="center", ha="left", fontsize=8,
-                        fontweight="bold", color=substance_color(SUBSTANCES[si], si))
+                ax.text(103, yc, f"{subs[si]}-dom", va="center", ha="left", fontsize=8,
+                        fontweight="bold", color=substance_color(subs[si], si))
             ax.set_xlim(0, 125)
             ax.set_title(title, fontsize=9, color=INK)
             ax.set_xlabel("drift (% of this group's worst)")
         fig.tight_layout(); self.c_rel.draw_idle()
 
     def _plot_recovery(self, res):
+        subs = list(self._comp_subs)
         ax = self.c_rec.new_ax()
         per = self._recovery(res)
-        x = np.arange(len(SUBSTANCES))
-        for i, s in enumerate(SUBSTANCES):
+        x = np.arange(len(subs))
+        for i, s in enumerate(subs):
             col = substance_color(s, i)
             v = per[s]
             mu = float(np.mean(v)) if v else 0.0
@@ -873,14 +884,15 @@ class ValidatePage(QWidget):
                 ax.text(i, max(v) + 4, f"{mu:.0f}±{se:.0f}%", ha="center", va="bottom",
                         fontsize=9, color=INK)
         ax.axhline(100, color=MUTE, ls="--", lw=1.0)
-        ax.set_xticks(x); ax.set_xticklabels(SUBSTANCES)
+        ax.set_xticks(x); ax.set_xticklabels(subs)
         ax.set_ylabel("apparent recovery (%)")
-        allv = [w for s in SUBSTANCES for w in per[s]] + [100]
+        allv = [w for s in subs for w in per[s]] + [100]
         ax.set_ylim(0, max(allv) * 1.15 + 8)
         self.c_rec.fig.tight_layout(); self.c_rec.draw_idle()
 
     # ---- export ----
     def _export(self):
+        subs = list(getattr(self, "_comp_subs", []))
         if self._res is None:
             self.status.setText("validate first, then export"); self.status.setStyleSheet(f"color:{RED};"); return
         d = QFileDialog.getExistingDirectory(self, "Export folder")
@@ -913,13 +925,13 @@ class ValidatePage(QWidget):
         write_csv(os.path.join(d, "validation_table.csv"), head, rows)
         if self._cres:                                   # composition data (redraws triangle/recovery/drift)
             crecs = [r for r in self._cres if r.get("nominal") is not None]
-            chead = ["mixture"] + [f"true_{s}" for s in SUBSTANCES] + \
-                    [f"measured_{s}" for s in SUBSTANCES] + \
-                    [f"recovery_{s}_pct" for s in SUBSTANCES] + ["drift"]
+            chead = ["mixture"] + [f"true_{s}" for s in subs] + \
+                    [f"measured_{s}" for s in subs] + \
+                    [f"recovery_{s}_pct" for s in subs] + ["drift"]
             crows = []
             for r in crecs:
                 nom = np.asarray(r["nominal"], float); mn = np.asarray(r["mean"], float)
-                rec = [f"{mn[i] / nom[i] * 100:.1f}" if nom[i] > 0 else "" for i in range(len(SUBSTANCES))]
+                rec = [f"{mn[i] / nom[i] * 100:.1f}" if nom[i] > 0 else "" for i in range(len(subs))]
                 crows.append([r["name"]] + [f"{v:.4f}" for v in nom] + [f"{v:.4f}" for v in mn] +
                              rec + [f"{composition_distance(nom, mn):.4f}"])
             write_csv(os.path.join(d, "composition_view.csv"), chead, crows)
@@ -940,6 +952,9 @@ class ValidatePage(QWidget):
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _export_pub_triangles(self, d):
+        subs = list(self._comp_subs)
+        if len(subs) != 3:
+            return 0
         """Also write the publication-style ternaries (accuracy field + RGB composition)
         from the same composition data the in-app drift triangle uses. Recovery keeps
         the full set on purpose — it is the tab where the ternaries ARE the result."""
@@ -953,7 +968,7 @@ class ValidatePage(QWidget):
             return 0
         rows = [(r["name"], list(np.asarray(r["nominal"], float)),
                  list(np.asarray(r["mean"], float))) for r in recs]
-        cols = [substance_color(s, i) for i, s in enumerate(SUBSTANCES)]
+        cols = [substance_color(s, i) for i, s in enumerate(subs)]
         n = 0
         nn_ = getattr(self, "_nnls_cres", None)     # NNLS beside the model, same mixtures
         if nn_ and getattr(self, "_is_dl", False):
@@ -962,7 +977,7 @@ class ValidatePage(QWidget):
                 nrecs = [r for r in nn_ if r.get("nominal") is not None]
                 nrows = [(r["name"], list(np.asarray(r["nominal"], float)),
                           list(np.asarray(r["mean"], float))) for r in nrecs]
-                compare_triangles(nrows, rows, list(SUBSTANCES), cols,
+                compare_triangles(nrows, rows, list(subs), cols,
                                   labels=("NNLS (classical)", "model")).savefig(
                     _os.path.join(d, "drift_triangle_vs_nnls.png"), dpi=EXPORT_DPI,
                     transparent=True, bbox_inches="tight", pad_inches=0.01)
@@ -972,7 +987,7 @@ class ValidatePage(QWidget):
         for fn, name in ((accuracy_triangle, "drift_triangle_accuracy"),
                          (rgb_triangle, "drift_triangle_rgb")):
             try:
-                fig = fn(rows, list(SUBSTANCES), cols)
+                fig = fn(rows, list(subs), cols)
                 fig.savefig(_os.path.join(d, name + ".png"), dpi=EXPORT_DPI,
                             transparent=True, bbox_inches="tight", pad_inches=0.01)
                 n += 1

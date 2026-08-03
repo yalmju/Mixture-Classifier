@@ -19,3 +19,4 @@ scripts/*.png
 # generated caches
 composition_cache.pkl
 
+archive/data_legacy/

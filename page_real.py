@@ -586,14 +586,24 @@ class RealDataPage(QWidget):
         s = rn.sum(axis=1, keepdims=True)
         return np.divide(rn, s, out=np.zeros_like(rn), where=s > 0)
 
+    def _saturated(self, r):
+        """Detect ADC-like flat tops (three adjacent channels at the spectrum maximum)."""
+        y = np.asarray(r.spectra, float)
+        if y.ndim != 2 or y.shape[1] < 3:
+            return np.zeros(r.n_pixels, bool)
+        mx = np.nanmax(y, axis=1)
+        tol = np.maximum(np.abs(mx) * 1e-6, 1e-12)
+        top = y >= (mx[:, None] - tol[:, None])
+        return np.any(top[:, :-2] & top[:, 1:-1] & top[:, 2:], axis=1)
+
     def _flagged(self, r):
         """Pixels whose reconstruction R² is below the threshold — ALWAYS computed and
         always drawn/counted. A low R² means the pure references fit this pixel badly
         (saturated, clipped, or a species the references don't cover); it is a warning
         about the pixel, not a verdict on its composition."""
-        if getattr(r, "reliab", None) is None:
-            return np.zeros(r.n_pixels, bool)
-        return r.reliab < float(self.rel_thr.value())
+        low_r2 = (np.zeros(r.n_pixels, bool) if getattr(r, "reliab", None) is None
+                  else r.reliab < float(self.rel_thr.value()))
+        return low_r2 | self._saturated(r)
 
     def _reliable(self, r):
         """Pixels kept in the composition. Low-R² pixels are dropped ONLY when the user
@@ -739,71 +749,6 @@ class RealDataPage(QWidget):
                             "(unit / decade); this factor sets the µM ratio</span>")
                 txt += (f"<br><span style='color:{FAINT}'>calibration response per "
                         f"molar (vs weakest): {rs}</span>{warn}")
-        if getattr(self, "dl_model", None) is not None and self.test:
-            # Diagnostic: compare the deployed per-pixel path with the map-aggregate
-            # path used by Recovery/held-out evaluation. A model trained on one mean
-            # spectrum per map can look sound in Recovery yet be out-of-distribution
-            # when it is applied to individual pixels here.
-            try:
-                sel = eff_hit if eff_hit.any() else None
-                if self._method() == "dlpx":
-                    pixel_v = np.asarray(mr, float)
-                else:
-                    from dl_model import apply_model_pixels
-                    P = apply_model_pixels(self.dl_model, r.wn,
-                                           r.spectra if sel is None else r.spectra[sel])
-                    subs = self.dl_model.get("subs", [])
-                    pv = P.mean(axis=0)
-                    pixel_v = np.array([pv[subs.index(nm)] if nm in subs else 0.0
-                                        for nm in nb], float)
-                    pixel_v /= pixel_v.sum() + 1e-12
-
-                from dl_model import apply_model
-                from real_data import load_map
-                wn, cube, _mn, _c = load_map(self.test)
-                cube = np.asarray(cube, float)
-                px = (sel if sel is not None and len(sel) == len(cube)
-                      else np.ones(len(cube), bool))
-                d = apply_model(self.dl_model, wn, cube[px])
-                agg_v = np.array([d["composition"].get(nm, 0.0) for nm in nb], float)
-                agg_v /= agg_v.sum() + 1e-12
-                pixel_comp = "  ·  ".join(f"{nm} {pixel_v[i] * 100:.0f}%"
-                                           for i, nm in enumerate(nb))
-                agg_comp = "  ·  ".join(f"{nm} {agg_v[i] * 100:.0f}%"
-                                         for i, nm in enumerate(nb))
-                gap = 0.5 * float(np.abs(pixel_v - agg_v).sum())
-                if self.dl_model.get("kind") == "pixel_surface_v2":
-                    txt += (f"<br><b style='color:{BLUE}'>Pixel surface composition</b> "
-                            f"<span style='color:{FAINT}'>(mean over hit pixels)</span>: "
-                            f"{pixel_comp}")
-                else:
-                    txt += (f"<br><b style='color:{BLUE}'>DL composition - pixel mean</b>: "
-                            f"{pixel_comp}"
-                            f"<br><b style='color:{BLUE}'>DL composition - aggregate hit "
-                            f"spectrum</b>: {agg_comp} "
-                            f"<span style='color:{FAINT}'>(difference {gap:.0%})</span>")
-
-                level = self.dl_model.get("training_level")
-                ppm = self.dl_model.get("px_per_map")
-                nrows = self.dl_model.get("n_train", "?")
-                loo_paths = (self.dl_model.get("loo_eval") or {}).get("paths") or []
-                nmaps = self.dl_model.get("n_maps", len(loo_paths) or "?")
-                if level is None:                         # model saved before metadata existed
-                    if isinstance(nrows, int) and isinstance(nmaps, int) and nrows == nmaps:
-                        level, ppm = "map_mean (inferred)", 0
-                    else:
-                        level, ppm = "unknown (legacy model)", "?"
-                warning = (f" <span style='color:{CORAL}'>individual pixels were not "
-                           f"training inputs</span>" if level.startswith("map_mean") else "")
-                txt += (f"<br><span style='color:{FAINT}'>model training unit: {level} "
-                        f"(maps {nmaps}, rows {nrows}, extra pixels/map {ppm})</span>{warning}")
-
-                if d.get("uM"):
-                    um = "  ·  ".join(f"{k} ≈{v:.0f} µM" for k, v in d["uM"].items())
-                    txt += (f"<br><b style='color:{BLUE}'>DL concentration - aggregate "
-                            f"hit spectrum</b> (order-of-magnitude, semi-quantitative): {um}")
-            except Exception as e:
-                print("DL apply failed:", e, file=sys.stderr)
         self.readout.setText(txt)
 
     # ---- plots ----
@@ -885,7 +830,7 @@ class RealDataPage(QWidget):
         um_all = r.conc * 1e6
         vmask = hit[:, None] & np.isfinite(um_all) & (um_all > 0)
         vals = um_all[vmask]
-        vmax = float(np.quantile(vals, 0.98)) if vals.size else 1.0
+        vmax = float(np.quantile(vals, 0.90)) if vals.size else 1.0
         vmax = vmax or 1.0
         from matplotlib.colors import LinearSegmentedColormap
         for i, nm in enumerate(nb):
@@ -894,11 +839,13 @@ class RealDataPage(QWidget):
                           um_all[:, i], np.nan)
             grid = np.full((ny, nx), np.nan); grid[rows, cc] = um
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", nbcols[i]])
+            cmap.set_bad("#0b0d10")
+            ax.set_facecolor("#0b0d10")
             im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                            interpolation="nearest", cmap=cmap, vmin=0.0, vmax=vmax)
-            cb = self.c_conc.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cb = self.c_conc.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, shrink=0.48, aspect=14)
             cb.ax.tick_params(labelsize=8, colors="black")       # same 0..vmax on every panel
-            ax.set_title(f"{nm} (µM; OOD hidden)", fontsize=9)
+            ax.set_title(f"{nm} (µM; scale capped at hit-pixel P90)", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
         self.c_conc.fig.tight_layout(); self.c_conc.draw_idle()
 

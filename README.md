@@ -68,8 +68,8 @@ model capacity.
 - `triangle_figs.py` — Recovery/triangle export figures.
 
 **Documentation and archive:**
-- `docs/NNLS_HIT_MLP_AND_APPARENT_CONCENTRATION.md` — current Real/Recovery workflow and interpretation.
-- `docs/GENERALIZATION_EVALUATION.md` — cross-condition stress-test results and deployment limits.
+- `documentation/NNLS_HIT_MLP_AND_APPARENT_CONCENTRATION.md` — current Real/Recovery workflow and interpretation.
+- `documentation/REUSABLE_CONFIGURATION.md` — data-driven configuration and reuse contract.
 - `archive/experiments/` — offline benchmarks and research prototypes; not imported by UNMIXR.
 - `archive/docs_legacy/` — generated figures, reports and superseded findings.
 - `archive/planning/` — historical plans and TODO notes.
@@ -99,7 +99,7 @@ one standard. Two honest limits:
 
 For the current Real-panel workflow—dynamic NNLS hit screening, MLP inference,
 equal-volume mixture labels, apparent SERS-equivalent µM maps, and uncertainty
-reporting—see [NNLS-hit MLP and apparent concentration](docs/NNLS_HIT_MLP_AND_APPARENT_CONCENTRATION.md).
+reporting—see [NNLS-hit MLP and apparent concentration](documentation/NNLS_HIT_MLP_AND_APPARENT_CONCENTRATION.md).
 The component-wise apparent values are not constrained to sum to the applied solution
 concentration.
 

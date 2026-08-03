@@ -14,7 +14,7 @@ import matplotlib
 import numpy as np
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QComboBox, QSpinBox,
+    QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QComboBox, QSpinBox, QDoubleSpinBox,
     QCheckBox, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QProgressBar,
 )
@@ -83,7 +83,6 @@ class TrainComposeWorker(QObject):
     def run(self):
         try:
             import multiprocessing as mp
-            from composition import SUBSTANCES
             ctx = mp.get_context("spawn")
             q = ctx.Queue()
             proc = ctx.Process(target=_train_subprocess, args=(self.params, q), daemon=True)
@@ -111,16 +110,19 @@ class TrainComposeWorker(QObject):
             proc.join(timeout=5)
             # train-set recovery is computed IN-MEMORY inside train_model (no map reload,
             # which was holding the GIL and freezing the GUI). Reorder to SUBSTANCES.
-            subs = model["subs"]; sidx = {s: j for j, s in enumerate(subs)}
+            from dataset import is_blank
+            all_subs = list(model["subs"])
+            subs = [s for s in all_subs if not is_blank(s)]
+            sidx = {s: j for j, s in enumerate(all_subs)}
             # prefer the leave-one-out predictions when they were computed — the honest number
-            te = (model.get("test_eval") or model.get("loo_eval")
+            te = (model.get("loo_eval") or model.get("test_eval")
                   or model.get("train_eval", {}))
             tvs = te.get("true", []); pvs = te.get("pred", [])
             errs = []; rows = []
             for i in range(len(tvs)):
-                tv = [float(tvs[i][sidx[s]]) if s in sidx else 0.0 for s in SUBSTANCES]
-                pv = [float(pvs[i][sidx[s]]) if s in sidx else 0.0 for s in SUBSTANCES]
-                errs.append(0.5 * sum(abs(pv[j] - tv[j]) for j in range(len(SUBSTANCES))))
+                tv = [float(tvs[i][sidx[s]]) for s in subs]
+                pv = [float(pvs[i][sidx[s]]) for s in subs]
+                errs.append(0.5 * sum(abs(pv[j] - tv[j]) for j in range(len(subs))))
                 rows.append((f"mix {i + 1}", tv, pv))
             self.done.emit((model, float(np.mean(errs)) if errs else float("nan"), rows))
         except Exception:
@@ -128,7 +130,7 @@ class TrainComposeWorker(QObject):
 
 
 class ComposePanel(QWidget):
-    METHODS = [("MLP (deep)", "mlp"), ("PLS", "pls"),
+    METHODS = [("MLP", "mlp"), ("PLS", "pls"),
                ("Random Forest", "rf"), ("1D-CNN", "cnn")]
 
     def __init__(self):
@@ -198,9 +200,9 @@ class ComposePanel(QWidget):
                                   "the model can answer 'nothing here' instead of spreading "
                                   "every spectrum across the substances")
         self.sp_px = QSpinBox(); self.sp_px.setRange(0, 400); self.sp_px.setSingleStep(20)
-        self.sp_px.setValue(20); self.sp_px.setPrefix("pixels/map "); self.sp_px.setObjectName("field")
-        self.sp_px.setToolTip("extra training rows per map: 0 = one mean spectrum per map "
-                              "(34 rows total), higher = also use that many of the brightest "
+        self.sp_px.setValue(400); self.sp_px.setPrefix("pixels/map "); self.sp_px.setObjectName("field")
+        self.sp_px.setToolTip("individual hit-pixel training rows per map: 0 = one mean spectrum per map "
+                              "(one row per map), higher = use that many individual "
                               "individual pixels, all labelled with the map's ratio. More rows "
                               "fight overfitting; splits stay grouped by map either way.")
         self.chk_screen = QCheckBox("NNLS-screen ink first")
@@ -208,11 +210,18 @@ class ComposePanel(QWidget):
         self.chk_screen.setToolTip("Use the same NNLS hit/background gate as Real data, then train "
                                    "the model only on accepted SERS-ink pixels. The model estimates "
                                    "composition/concentration but cannot change the spatial hit mask.")
+        self.sp_hit = QDoubleSpinBox(); self.sp_hit.setRange(0.0, 1.0)
+        self.sp_hit.setDecimals(3); self.sp_hit.setSingleStep(0.025); self.sp_hit.setValue(0.15)
+        self.sp_hit.setPrefix("hit fraction "); self.sp_hit.setObjectName("field")
+        self.sp_hit.setToolTip("Minimum NNLS substance fraction for the hit/background gate.")
+        self.chk_equal_volume = QCheckBox("equal-volume mixtures")
+        self.chk_equal_volume.setChecked(True); self.chk_equal_volume.setObjectName("field")
+        self.chk_equal_volume.setToolTip("Use when Samples concentrations are source solutions mixed at equal volumes; disable when they already are final concentrations.")
         self.sp_nt = QSpinBox(); self.sp_nt.setRange(20, 1000); self.sp_nt.setSingleStep(20)
         self.sp_nt.setValue(300); self.sp_nt.setPrefix("trees "); self.sp_nt.setObjectName("field")
         mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
         for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px,
-                  self.chk_screen, self.chk_blank):
+                  self.chk_screen, self.sp_hit, self.chk_equal_volume, self.chk_blank):
             mrow.addWidget(w)
         mrow.addStretch(1)
         self.train_b = QPushButton("Train"); self.train_b.setObjectName("primary")
@@ -339,6 +348,7 @@ class ComposePanel(QWidget):
         self.sp_px.setVisible(True)          # applies to every method
         self.chk_blank.setVisible(True)
         self.chk_screen.setVisible(True)
+        self.sp_hit.setVisible(self.chk_screen.isChecked())
 
     def _opts(self):
         from dataset import load_preprocess
@@ -350,7 +360,9 @@ class ComposePanel(QWidget):
                     n_components=self.sp_nc.value(), n_trees=self.sp_nt.value(),
                     px_per_map=self.sp_px.value(),
                     include_blank=self.chk_blank.isChecked(),
-                    nnls_screen=self.chk_screen.isChecked(), screen_min_frac=0.15)
+                    nnls_screen=self.chk_screen.isChecked(),
+                    screen_min_frac=self.sp_hit.value(),
+                    equal_volume_mix=self.chk_equal_volume.isChecked())
 
     def _train(self):
         items = self._items_cache
@@ -430,11 +442,11 @@ class ComposePanel(QWidget):
     def _done_bench(self, bench):
         """Plot the LOO comparison: composition error per method + overlaid detection ROC."""
         import numpy as _np
-        from composition import SUBSTANCES
-        subs = bench.get("subs", list(SUBSTANCES))
+        subs = list(bench.get("subs", []))
         methods = [m for m in ("nnls", "pls", "rf", "cnn", "mlp") if m in bench]
         label = {"nnls": "NNLS", "pls": "PLS", "rf": "RF", "cnn": "1D-CNN", "mlp": "MLP"}
         self._bench = {}
+        self._bench_subs = subs
         self._err_title.setText("Method comparison — composition error, leave-one-out "
                                 "(lower = better)")
         self._roc_title.setText("Method comparison — detection ROC, leave-one-out")
@@ -444,8 +456,8 @@ class ComposePanel(QWidget):
             T = _np.asarray(bench[m]["true"], float); P = _np.asarray(bench[m]["pred"], float)
             errs.append(float((0.5 * _np.abs(P - T).sum(1)).mean()))
             rows = [(f"mix {i+1}",
-                     [T[i][subs.index(s)] if s in subs else 0.0 for s in SUBSTANCES],
-                     [P[i][subs.index(s)] if s in subs else 0.0 for s in SUBSTANCES])
+                     [float(v) for v in T[i]],
+                     [float(v) for v in P[i]])
                     for i in range(len(T))]
             self._bench[m] = rows
             aucs[m] = self._roc(rows)
@@ -463,7 +475,7 @@ class ComposePanel(QWidget):
                 continue
             axr.plot(fpr, tpr, lw=2.4 if m == "mlp" else 1.4,
                      color=TEAL if m == "mlp" else SERIES[j % len(SERIES)],
-                     label=f"{label[m]}  (AUC {a:.3f})")
+                     label=f"{label[m]} (AUC {a:.3f}; n={len(rows)})")
         axr.set_xlabel("false positive rate"); axr.set_ylabel("true positive rate")
         axr.set_xlim(-0.02, 1.02); axr.set_ylim(-0.02, 1.02); axr.set_aspect("equal")
         axr.legend(fontsize=8, framealpha=0, loc="lower right")
@@ -512,10 +524,18 @@ class ComposePanel(QWidget):
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
         errtxt = f"{err:.0%}" if err == err else "—"
-        kind = ("independent test batch" if model.get("test_eval")
-                else "leave-one-out" if model.get("loo_eval") else "train-set")
-        self.status.setText(f"done — {m} · {model.get('n_train', 0)} train mixtures · {kind} error {errtxt}. "
-                            "Recovery & Real-data now use this model; Save to keep it.")
+        kind = ("leave-one-map-out" if model.get("loo_eval")
+                else "independent test batch" if model.get("test_eval") else "train-set")
+        independent = ""
+        if model.get("test_eval"):
+            _te = model["test_eval"]
+            _tt = np.asarray(_te.get("true", []), float)
+            _tp = np.asarray(_te.get("pred", []), float)
+            if len(_tt):
+                _ie = (0.5 * np.abs(_tp - _tt).sum(1)).mean()
+                independent = f"; independent test (n={len(_tt)}) error {_ie:.0%}"
+        self.status.setText(f"done — {m} · {model.get('n_train', 0)} training spectra · {kind} error {errtxt}. "
+                            f"Recovery & Real-data now use this model{independent}; Save to keep it.")
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _fail(self, tb):
@@ -527,12 +547,18 @@ class ComposePanel(QWidget):
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
 
+    def _result_subs(self):
+        if self._model and self._model.get("subs"):
+            from dataset import is_blank
+            return [s for s in self._model["subs"] if not is_blank(s)]
+        return list(getattr(self, "_bench_subs", []))
+
     def _plot_parity(self, rows):
         """Predicted vs true fraction, one series per substance (on the diagonal = exact)."""
-        from composition import SUBSTANCES
+        subs = self._result_subs()
         ax = self.c_parity.new_ax()                        # app's cnsplots style
         ax.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0, zorder=1)
-        for j, s in enumerate(SUBSTANCES):
+        for j, s in enumerate(subs):
             tv = [r[1][j] for r in rows]; pv = [r[2][j] for r in rows]
             ax.scatter(tv, pv, s=34, alpha=0.8, edgecolors="white", linewidths=0.5,
                        color=substance_color(s, j), label=s, zorder=3)
@@ -544,16 +570,16 @@ class ComposePanel(QWidget):
     def _plot_error(self, rows):
         """Mean absolute fraction error per substance (with the spread as an error bar)."""
         import numpy as _np
-        from composition import SUBSTANCES
+        subs = self._result_subs()
         ax = self.c_err.new_ax()                           # app's cnsplots style
         means, sds, cols = [], [], []
-        for j, s in enumerate(SUBSTANCES):
+        for j, s in enumerate(subs):
             e = _np.array([abs(r[2][j] - r[1][j]) for r in rows]) if rows else _np.zeros(1)
             means.append(float(e.mean())); sds.append(float(e.std()))
             cols.append(substance_color(s, j))
-        x = _np.arange(len(SUBSTANCES))
+        x = _np.arange(len(subs))
         ax.bar(x, means, yerr=sds, capsize=4, color=cols, edgecolor="white", alpha=0.9)
-        ax.set_xticks(x); ax.set_xticklabels(SUBSTANCES)
+        ax.set_xticks(x); ax.set_xticklabels(subs)
         ax.set_ylabel("mean |predicted − true| fraction")
         self.c_err.fig.tight_layout(); self.c_err.draw_idle()
 
@@ -561,10 +587,10 @@ class ComposePanel(QWidget):
         """Detection framing of the regression: 'substance present' = true fraction > thr,
         score = predicted fraction. Returns (fpr, tpr, auc) micro-averaged over substances."""
         import numpy as _np
-        from composition import SUBSTANCES
+        subs = self._result_subs()
         y = _np.concatenate([[1 if r[1][j] > thr else 0 for r in rows]
-                             for j in range(len(SUBSTANCES))]) if rows else _np.zeros(0)
-        s = _np.concatenate([[r[2][j] for r in rows] for j in range(len(SUBSTANCES))]) \
+                             for j in range(len(subs))]) if rows else _np.zeros(0)
+        s = _np.concatenate([[r[2][j] for r in rows] for j in range(len(subs))]) \
             if rows else _np.zeros(0)
         if len(y) == 0 or y.min() == y.max():
             return None, None, float("nan")
@@ -583,7 +609,7 @@ class ComposePanel(QWidget):
                     va="center", color=MUTE, transform=ax.transAxes); ax.axis("off")
         else:
             ax.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0)
-            ax.plot(fpr, tpr, color=TEAL, lw=2.0, label=f"AUC {a:.3f}")
+            ax.plot(fpr, tpr, color=TEAL, lw=2.0, label=f"AUC {a:.3f} (n={len(rows)} maps; presence only)")
             ax.set_xlabel("false positive rate"); ax.set_ylabel("true positive rate")
             ax.set_xlim(-0.02, 1.02); ax.set_ylim(-0.02, 1.02); ax.set_aspect("equal")
             ax.legend(fontsize=9, framealpha=0, loc="lower right")
@@ -602,15 +628,19 @@ class ComposePanel(QWidget):
     def _plot_triangle(self, rows):
         """Ternary simplex: true (open) → predicted (filled, green=accurate) per mixture."""
         from composition import bary
+        subs = self._result_subs()
+        if len(subs) != 3:
+            self.c_tri.placeholder("Ternary plot is available only for exactly 3 substances")
+            return
         ax = self.c_tri.new_ax()                           # app's cnsplots style
         fig = self.c_tri.fig
         A, B, C = bary([1, 0, 0]), bary([0, 0, 1]), bary([0, 1, 0])   # DQ · THI · TBZ corners
         ax.plot([A[0], B[0], C[0], A[0]], [A[1], B[1], C[1], A[1]], color=INK, lw=1.0, zorder=1)
         # corner labels OFFSET away from the vertex so they never sit on the lines/points
         for f, s, col, dx, dy, ha, va in [
-                ([1, 0, 0], "DQ", substance_color("DQ", 0), 0, 0.05, "center", "bottom"),
-                ([0, 0, 1], "THI", substance_color("THI", 2), -0.03, -0.05, "right", "top"),
-                ([0, 1, 0], "TBZ", substance_color("TBZ", 1), 0.03, -0.05, "left", "top")]:
+                ([1, 0, 0], subs[0], substance_color(subs[0], 0), 0, 0.05, "center", "bottom"),
+                ([0, 0, 1], subs[2], substance_color(subs[2], 2), -0.03, -0.05, "right", "top"),
+                ([0, 1, 0], subs[1], substance_color(subs[1], 1), 0.03, -0.05, "left", "top")]:
             p = bary(f)
             ax.text(p[0] + dx, p[1] + dy, s, ha=ha, va=va, fontsize=11,
                     fontweight="bold", color=col)
@@ -634,7 +664,7 @@ class ComposePanel(QWidget):
             return self._export_eval_only()
         import numpy as _np
         from collections import OrderedDict
-        from composition import SUBSTANCES
+        subs = self._result_subs()
         from io_utils import write_csv, write_readme
         d = QFileDialog.getExistingDirectory(self, "Export composition-model results",
                                              self.data_dir)
@@ -643,14 +673,14 @@ class ComposePanel(QWidget):
         rows = self._rows; m = self._model
         # per-mixture true vs predicted fraction
         write_csv(os.path.join(d, "composition_loo_predictions.csv"),
-                  ["mixture"] + [f"true_{s}" for s in SUBSTANCES]
-                  + [f"pred_{s}" for s in SUBSTANCES] + ["composition_error"],
+                  ["mixture"] + [f"true_{s}" for s in subs]
+                  + [f"pred_{s}" for s in subs] + ["composition_error"],
                   [[r[0]] + [f"{v:.4f}" for v in r[1]] + [f"{v:.4f}" for v in r[2]]
-                   + [f"{0.5 * sum(abs(r[2][j] - r[1][j]) for j in range(len(SUBSTANCES))):.4f}"]
+                   + [f"{0.5 * sum(abs(r[2][j] - r[1][j]) for j in range(len(subs))):.4f}"]
                    for r in rows])
         # per-substance metrics
         mrows = []
-        for j, s in enumerate(SUBSTANCES):
+        for j, s in enumerate(subs):
             e = _np.array([abs(r[2][j] - r[1][j]) for r in rows])
             tv = _np.array([r[1][j] for r in rows]); pv = _np.array([r[2][j] for r in rows])
             ss = float(((tv - tv.mean()) ** 2).sum())
@@ -675,7 +705,7 @@ class ComposePanel(QWidget):
         # ONE ternary only — the on-screen `composition_triangle` above. The extra
         # ternaries this used to write (vs-NNLS side-by-side, accuracy-shaded, RGB)
         # said the same thing three more times and buried the rest of the export.
-        err = float(_np.mean([0.5 * sum(abs(r[2][j] - r[1][j]) for j in range(len(SUBSTANCES)))
+        err = float(_np.mean([0.5 * sum(abs(r[2][j] - r[1][j]) for j in range(len(subs)))
                               for r in rows]))
         write_readme(d, "UNMIXR — Composition model (Step 2)", OrderedDict([
             ("What this is", [
@@ -713,7 +743,7 @@ class ComposePanel(QWidget):
     def _export_eval_only(self):
         """Save a Benchmark / 5-fold result when no model has been trained in this session."""
         import numpy as _np
-        from composition import SUBSTANCES
+        subs = self._result_subs()
         from io_utils import write_csv
         bench = getattr(self, "_bench", None); kf = getattr(self, "_kfold_res", None)
         if not bench and not kf:
@@ -734,8 +764,8 @@ class ComposePanel(QWidget):
                     rows_out.append([m, nm] + [f"{v:.4f}" for v in tv]
                                     + [f"{v:.4f}" for v in pv])
             write_csv(os.path.join(d, "benchmark_predictions.csv"),
-                      ["method", "mixture"] + [f"true_{s}" for s in SUBSTANCES]
-                      + [f"pred_{s}" for s in SUBSTANCES], rows_out)
+                      ["method", "mixture"] + [f"true_{s}" for s in subs]
+                      + [f"pred_{s}" for s in subs], rows_out)
             n += _save_figs([("benchmark_error", self.c_err),
                              ("benchmark_roc", self.c_roc)], d)
         if kf:
@@ -765,14 +795,16 @@ class ComposePanel(QWidget):
             self.status.setStyleSheet(f"color:{RED};"); return
         self._model = model
         self.save_b.setEnabled(True)
-        from composition import SUBSTANCES
-        subs = model["subs"]; sidx = {s: j for j, s in enumerate(subs)}
+        from dataset import is_blank
+        all_subs = list(model["subs"])
+        subs = [s for s in all_subs if not is_blank(s)]
+        sidx = {s: j for j, s in enumerate(all_subs)}
         te = model.get("test_eval") or model.get("loo_eval") or model.get("train_eval") or {}
         tvs = te.get("true", []); pvs = te.get("pred", [])
         rows = []
         for i in range(min(len(tvs), len(pvs))):
-            tv = [float(tvs[i][sidx[s]]) if s in sidx else 0.0 for s in SUBSTANCES]
-            pv = [float(pvs[i][sidx[s]]) if s in sidx else 0.0 for s in SUBSTANCES]
+            tv = [float(tvs[i][sidx[s]]) if s in sidx else 0.0 for s in subs]
+            pv = [float(pvs[i][sidx[s]]) if s in sidx else 0.0 for s in subs]
             rows.append((f"mix {i + 1}", tv, pv))
         if rows:
             self._rows = rows
