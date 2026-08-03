@@ -113,7 +113,7 @@ class RealDataPage(QWidget):
         self._compact_x(self.bg_x, "clear background")
         self.bg_x.clicked.connect(self._clear_bg); self.bg_x.setVisible(False)
         cal_b = QPushButton("Load calibration…"); cal_b.setObjectName("ghost")
-        cal_b.setToolTip("a dilution-series CSV → per-pixel absolute concentration (µM)")
+        cal_b.setToolTip("a dilution-series CSV → per-pixel apparent SERS-equivalent concentration (µM)")
         cal_b.clicked.connect(self._browse_calib)
         self.cal_lbl = QLabel(""); self.cal_lbl.setObjectName("field")
         self.cal_x = QPushButton("✕"); self.cal_x.setObjectName("ghost")
@@ -250,7 +250,7 @@ class RealDataPage(QWidget):
         # 3) per-substance concentration (µM) maps + overall composition, side by side
         self.c_conc = Canvas(); self.c_comp = Canvas()
         self.card_conc, lay_conc = _card(
-            "Per-substance concentration (µM) — from the composition model, "
+            "Apparent SERS-equivalent concentration (µM) — from the composition model, "
             "or from a loaded calibration when one is given")
         lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(300)
         ccard, clay = _card("Composition (overall)")
@@ -691,11 +691,26 @@ class RealDataPage(QWidget):
             txt += (f"<br><span style='color:{FAINT}'>background decided by: "
                     f"{r.hit_rule}</span>")
         if getattr(r, "calibrated", False) and r.conc_avg is not None:
-            um = r.conc_avg * 1e6
-            cs = "  ·  ".join(f"{nm} {um[i]:.3g} µM" for i, nm in enumerate(nb)
-                              if np.isfinite(um[i]) and um[i] > 0)
+            med = (r.conc_median if getattr(r, "conc_median", None) is not None
+                   else r.conc_avg) * 1e6
+            p10 = (r.conc_p10 if getattr(r, "conc_p10", None) is not None
+                   else r.conc_avg) * 1e6
+            p90 = (r.conc_p90 if getattr(r, "conc_p90", None) is not None
+                   else r.conc_avg) * 1e6
+            ci_lo = (r.conc_ci_low if getattr(r, "conc_ci_low", None) is not None
+                     else r.conc_median) * 1e6
+            ci_hi = (r.conc_ci_high if getattr(r, "conc_ci_high", None) is not None
+                     else r.conc_median) * 1e6
+            se = (r.conc_se if getattr(r, "conc_se", None) is not None
+                  else np.zeros_like(r.conc_median)) * 1e6
+            cs = "  ·  ".join(
+                f"{nm} {med[i]:.3g} ± {se[i]:.2g} µM "
+                f"(median ± spatial-bootstrap SE; P10–P90 {p10[i]:.3g}–{p90[i]:.3g}; "
+                f"95% CI {ci_lo[i]:.3g}–{ci_hi[i]:.3g})"
+                for i, nm in enumerate(nb) if np.isfinite(med[i]) and med[i] > 0)
             src = "calibration" if r.calib_r2 is not None else "composition model"
-            txt += (f"<br><b>mean concentration</b> (hit pixels, {src}): {cs}")
+            txt += (f"<br><b>apparent SERS-equivalent concentration</b> "
+                    f"(hit-pixel median, {src}): {cs}")
             if getattr(r, "conc_ood", None) is not None:
                 den = max(1, int(np.count_nonzero(r.hit)) * len(nb))
                 nbad = int(np.count_nonzero(r.conc_ood[r.hit])) if np.any(r.hit) else int(np.count_nonzero(r.conc_ood))
@@ -854,7 +869,7 @@ class RealDataPage(QWidget):
         self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
 
     def _plot_conc(self, r):
-        """Per-substance absolute concentration (µM) heat-maps — only when a
+        """Per-substance apparent SERS-equivalent concentration (µM) heat-maps — only when a
         dilution-series calibration has been applied."""
         if not getattr(r, "calibrated", False) or r.conc is None:
             self.card_conc.setVisible(False)
@@ -1050,21 +1065,28 @@ class RealDataPage(QWidget):
         trim = cfg.get("trim")
         window = f"{trim[0]:.0f}–{trim[1]:.0f} cm⁻¹" if trim else "full range"
         ratio_str = " · ".join(f"{nm} {r.mean_ratio[i]:.0%}" for i, nm in enumerate(nb))
-        cal = getattr(r, "calibrated", False) and getattr(r, "conc_avg", None) is not None
-        conc_str = (" · ".join(f"{nm} {r.conc_avg[i] * 1e6:.3g} µM" for i, nm in enumerate(nb))
-                    if cal else "not computed (no calibration loaded)")
+        cal = getattr(r, "calibrated", False) and getattr(r, "conc_median", None) is not None
+        se_arr = (r.conc_se if getattr(r, "conc_se", None) is not None
+                  else np.zeros_like(r.conc_median)) if cal else None
+        conc_str = (" · ".join(
+            f"{nm} {r.conc_median[i] * 1e6:.3g} ± {se_arr[i] * 1e6:.2g} µM "
+            f"(median ± spatial-bootstrap SE; P10–P90 "
+            f"{r.conc_p10[i] * 1e6:.3g}–{r.conc_p90[i] * 1e6:.3g}; "
+            f"95% CI {r.conc_ci_low[i] * 1e6:.3g}–{r.conc_ci_high[i] * 1e6:.3g})"
+            for i, nm in enumerate(nb)) if cal else "not computed (no calibration loaded)")
         fig_docs = {
             "real_intensity_maps": "per-pixel total baseline-removed band intensity.",
             "real_composition_pies": "mean composition (pie) over the hit pixels.",
             "real_composition": "per-pixel dominant-substance / composition map.",
             "real_pixel_spectrum": "measured spectrum of the selected pixel.",
-            "real_concentration_maps": "per-pixel absolute concentration (µM).",
+            "real_concentration_maps": "per-pixel apparent SERS-equivalent concentration (µM).",
         }
         sections = {
             "What this is": [
                 "A real SERS map unmixed against the pure references for per-pixel "
                 "composition (which substance, how much) and — if a calibration is loaded — "
-                "absolute concentration (µM). Background pixels are excluded."],
+                "apparent SERS-equivalent concentration (µM). Background pixels are excluded; "
+                "component values are not constrained to sum to the applied concentration."],
             "How it was produced": [
                 f"- References: {self.data_dir}",
                 f"- Map: {os.path.basename(self.test) if getattr(self, 'test', None) else '(current)'}",
@@ -1077,7 +1099,7 @@ class RealDataPage(QWidget):
                 f"- Substance pixels (hit fraction): {r.hit_frac:.0%}",
                 f"- Mean composition over hit pixels: {ratio_str}",
                 f"- Mean reconstruction R²: {r.mean_r2:.2f}",
-                f"- Mean concentration: {conc_str}"],
+                f"- Median concentration across hit pixels: {conc_str}"],
         }
         figures = [(fn, fig_docs[fn]) for fn in fig_names if fn in fig_docs]
         write_readme(d, "UNMIXR — Real-data export", sections, figures)

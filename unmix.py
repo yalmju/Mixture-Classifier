@@ -44,6 +44,12 @@ class UnmixResult:
     calibrated: bool = False     # True if a dilution-series calibration was applied
     conc: np.ndarray = None      # (n_pix, Knb) per-pixel absolute concentration (M)
     conc_avg: np.ndarray = None  # (Knb,) mean concentration over hit pixels (M)
+    conc_median: np.ndarray = None  # (Knb,) median over hit pixels (M)
+    conc_p10: np.ndarray = None  # (Knb,) hit-pixel 10th percentile (M)
+    conc_p90: np.ndarray = None  # (Knb,) hit-pixel 90th percentile (M)
+    conc_ci_low: np.ndarray = None   # spatial-bootstrap 95% CI of median (M)
+    conc_ci_high: np.ndarray = None  # spatial-bootstrap 95% CI of median (M)
+    conc_se: np.ndarray = None        # spatial-bootstrap SE of median (M)
     conc_ood: np.ndarray = None  # (n_pix, Knb) invalid/OOD concentration estimate
     conc_ranges: np.ndarray = None  # (Knb, 2) reportable calibration range (M)
     pp_theta: np.ndarray = None  # (n_pix,) total surface coverage Σθ per pixel
@@ -390,13 +396,39 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
         calibrated = True
 
+    conc_median = conc_p10 = conc_p90 = conc_ci_low = conc_ci_high = conc_se = None
+    if calibrated and conc is not None:
+        vals = conc[hit] if hit.any() else conc
+        with np.errstate(invalid="ignore"):
+            conc_median = np.nanmedian(vals, axis=0)
+            conc_p10 = np.nanpercentile(vals, 10, axis=0)
+            conc_p90 = np.nanpercentile(vals, 90, axis=0)
+        # Scan-line cluster bootstrap preserves within-line spatial correlation instead
+        # of treating neighbouring hotspot pixels as independent replicates.
+        xy = coord[hit] if hit.any() else coord
+        axis = int(np.argmin([len(np.unique(xy[:, 0])), len(np.unique(xy[:, 1]))]))
+        labels = xy[:, axis]
+        groups = [np.where(labels == v)[0] for v in np.unique(labels)]
+        rng = np.random.default_rng(0)
+        boot = np.full((1000, vals.shape[1]), np.nan)
+        for b in range(len(boot)):
+            chosen = rng.integers(0, len(groups), len(groups))
+            idx = np.concatenate([groups[j] for j in chosen])
+            boot[b] = np.nanmedian(vals[idx], axis=0)
+        conc_ci_low = np.nanpercentile(boot, 2.5, axis=0)
+        conc_ci_high = np.nanpercentile(boot, 97.5, axis=0)
+        conc_se = np.nanstd(boot, axis=0, ddof=1)
+
     return UnmixResult(
         comps=names, bg_mask=bg_mask, nonbg=nonbg, method=method, wn=wn,
         coords=coord, spectra=spectra.astype(np.float32), templates=templates,
         A=A, ratio_nb=ratio_nb, hit=hit, reliab=reliab, n_pixels=len(X),
         hit_frac=hit_frac, mean_ratio=mean_ratio, dominant=dominant,
         mean_r2=float(reliab.mean()), calibrated=calibrated, conc=conc,
-        conc_avg=conc_avg, pp_theta=pp_theta, calib_r2=calib_r2,
+        conc_avg=conc_avg, conc_median=conc_median, conc_p10=conc_p10, conc_p90=conc_p90,
+        conc_ci_low=conc_ci_low, conc_ci_high=conc_ci_high,
+        conc_se=conc_se,
+        pp_theta=pp_theta, calib_r2=calib_r2,
         calib_slope=calib_slope, conc_ood=conc_ood, conc_ranges=conc_ranges,
         bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
 

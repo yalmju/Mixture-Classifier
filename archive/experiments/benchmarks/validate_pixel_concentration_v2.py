@@ -34,7 +34,12 @@ def main():
               "calibration_range_uM": [0.1, 1000.0], "calibration": calibration,
               "real_260723": {"hit_fraction": r.hit_frac,
                   "composition": dict(zip(subs, map(float, r.mean_ratio))),
-                  "mean_uM": dict(zip(subs, map(float, r.conc_avg * 1e6))),
+                  "median_uM": dict(zip(subs, map(float, r.conc_median * 1e6))),
+                  "p10_uM": dict(zip(subs, map(float, r.conc_p10 * 1e6))),
+                  "p90_uM": dict(zip(subs, map(float, r.conc_p90 * 1e6))),
+                  "median_ci95_low_uM": dict(zip(subs, map(float, r.conc_ci_low * 1e6))),
+                  "median_ci95_high_uM": dict(zip(subs, map(float, r.conc_ci_high * 1e6))),
+                  "median_se_uM": dict(zip(subs, map(float, r.conc_se * 1e6))),
                   "ood_fraction": dict(zip(subs, map(float, r.conc_ood[r.hit].mean(0))))}}
     print(json.dumps(result, indent=2))
 

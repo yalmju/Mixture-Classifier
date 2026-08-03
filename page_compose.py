@@ -198,16 +198,21 @@ class ComposePanel(QWidget):
                                   "the model can answer 'nothing here' instead of spreading "
                                   "every spectrum across the substances")
         self.sp_px = QSpinBox(); self.sp_px.setRange(0, 400); self.sp_px.setSingleStep(20)
-        self.sp_px.setValue(0); self.sp_px.setPrefix("pixels/map "); self.sp_px.setObjectName("field")
+        self.sp_px.setValue(20); self.sp_px.setPrefix("pixels/map "); self.sp_px.setObjectName("field")
         self.sp_px.setToolTip("extra training rows per map: 0 = one mean spectrum per map "
                               "(34 rows total), higher = also use that many of the brightest "
                               "individual pixels, all labelled with the map's ratio. More rows "
                               "fight overfitting; splits stay grouped by map either way.")
+        self.chk_screen = QCheckBox("NNLS-screen ink first")
+        self.chk_screen.setChecked(True); self.chk_screen.setObjectName("field")
+        self.chk_screen.setToolTip("Use the same NNLS hit/background gate as Real data, then train "
+                                   "the model only on accepted SERS-ink pixels. The model estimates "
+                                   "composition/concentration but cannot change the spatial hit mask.")
         self.sp_nt = QSpinBox(); self.sp_nt.setRange(20, 1000); self.sp_nt.setSingleStep(20)
         self.sp_nt.setValue(300); self.sp_nt.setPrefix("trees "); self.sp_nt.setObjectName("field")
         mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
         for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px,
-                  self.chk_blank):
+                  self.chk_screen, self.chk_blank):
             mrow.addWidget(w)
         mrow.addStretch(1)
         self.train_b = QPushButton("Train"); self.train_b.setObjectName("primary")
@@ -333,6 +338,7 @@ class ComposePanel(QWidget):
         self.sp_nt.setVisible(m == "rf")
         self.sp_px.setVisible(True)          # applies to every method
         self.chk_blank.setVisible(True)
+        self.chk_screen.setVisible(True)
 
     def _opts(self):
         from dataset import load_preprocess
@@ -343,7 +349,8 @@ class ComposePanel(QWidget):
                     seed=self.sp_seed.value(), use_pretrain=False,
                     n_components=self.sp_nc.value(), n_trees=self.sp_nt.value(),
                     px_per_map=self.sp_px.value(),
-                    include_blank=self.chk_blank.isChecked())
+                    include_blank=self.chk_blank.isChecked(),
+                    nnls_screen=self.chk_screen.isChecked(), screen_min_frac=0.15)
 
     def _train(self):
         items = self._items_cache
@@ -678,7 +685,8 @@ class ComposePanel(QWidget):
                 "never saw it. The saved model itself is fit on all of them."]),
             ("How it was produced", [
                 f"- Pure references: {self.data_dir}",
-                f"- Mixtures: {m.get('n_train', 0)} known-ratio maps (from Samples)",
+                f"- Mixture maps: {m.get('n_maps') or len(self._items_cache)} "
+                f"(training rows after aggregation/pixel sampling: {m.get('n_train', 0)})",
                 f"- Method: {m.get('method', 'mlp').upper()}"
                 + (f" · epochs {self.sp_ep.value()} · seed {self.sp_seed.value()}"
                    if m.get('method') in ('mlp', 'cnn') else ""),
