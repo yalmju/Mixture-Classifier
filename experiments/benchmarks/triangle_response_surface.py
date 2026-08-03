@@ -80,12 +80,14 @@ def draw(method, pred, filename):
     ax.plot([TOP[0], BL[0], BR[0], TOP[0]], [TOP[1], BL[1], BR[1], TOP[1]],
             color="#1c2430", lw=1.3, zorder=3)
 
-    # Identical nominal sample positions in both figures; point colour gives true group.
-    nominal_xy = bary(Y)
-    for g in range(3):
-        pts = nominal_xy[TRUE_DOM == g]
-        ax.scatter(pts[:, 0], pts[:, 1], s=74, color=GROUP_HEX[g], alpha=0.74,
-                   edgecolors="white", linewidths=0.9, zorder=4)
+    # Marker position = prediction; marker colour = closeness to the true composition.
+    predicted_xy = bary(pred)
+    accuracy = np.clip(1.0 - 0.5 * np.abs(pred - Y).sum(axis=1), 0.0, 1.0)
+    sc = ax.scatter(predicted_xy[:, 0], predicted_xy[:, 1], s=64, c=accuracy,
+                    cmap="RdYlGn", vmin=0.0, vmax=1.0, edgecolors="white",
+                    linewidths=0.9, alpha=0.96, zorder=4)
+    cb = fig.colorbar(sc, ax=ax, fraction=0.040, pad=0.035)
+    cb.set_label("composition accuracy\n(green = correct, red = poor)", fontsize=9)
     for frac, text, dy, colour in (([0, 0, 1], "THI", 0.055, GROUP_HEX[2]),
                                    ([0, 1, 0], "TBZ", -0.060, GROUP_HEX[1]),
                                    ([1, 0, 0], "DQ", -0.060, GROUP_HEX[0])):
@@ -99,10 +101,6 @@ def draw(method, pred, filename):
     areas = np.bincount(dominant, minlength=3) / len(dominant)
     ax.set_aspect("equal"); ax.axis("off")
     ax.set_xlim(-0.14, 1.14); ax.set_ylim(-0.12, H + 0.10)
-    handles = [Line2D([], [], marker="o", mfc=GROUP_HEX[g], mec="white", ls="",
-                      ms=10, label=GROUP_NAME[g]) for g in range(3)]
-    fig.legend(handles=handles, loc="lower center", ncol=3, fontsize=10.5,
-               framealpha=0, bbox_to_anchor=(0.5, 0.018))
     fig.text(0.5, 0.002, f"{method}  -  held-out mean composition error {err:.1%}",
              ha="center", va="bottom", fontsize=10.5, fontweight="bold", color="#1c2430")
     fig.savefig(os.path.join(OUT, filename), dpi=160, facecolor="white",
@@ -111,8 +109,58 @@ def draw(method, pred, filename):
     return err, areas
 
 
+def draw_triptych(filename="triangle_response_comparison.png"):
+    """Actual ideal RGB, NNLS distortion, and DL recovery in one comparable figure."""
+    gx, gy, xx, yy, inside, nominal = simplex_grid()
+    panels = [("Actual composition", nominal, None, Y),
+              ("NNLS", response_surface(normalize(P_NNLS), nominal, inside), P_NNLS, P_NNLS),
+              ("DL", response_surface(normalize(P_DL), nominal, inside), P_DL, P_DL)]
+    fig, axes = plt.subplots(1, 3, figsize=(15.2, 5.4))
+    for ax, (title, surface, pred, points) in zip(axes, panels):
+        rgb = 0.86 * (surface @ GROUP_RGB) + 0.14
+        image = np.dstack([rgb, np.where(inside, 0.94, 0.0)])
+        ax.imshow(image, extent=[gx[0], gx[-1], gy[0], gy[-1]], origin="lower",
+                  interpolation="bilinear", zorder=0)
+        for t in (0.25, 0.5, 0.75):
+            for p, q, r in ((BR, TOP, BL), (TOP, BR, BL), (BL, BR, TOP)):
+                ax.plot([p[0] + t * (q[0] - p[0]), p[0] + t * (r[0] - p[0])],
+                        [p[1] + t * (q[1] - p[1]), p[1] + t * (r[1] - p[1])],
+                        color="white", lw=0.45, alpha=0.30, zorder=1)
+        ax.plot([TOP[0], BL[0], BR[0], TOP[0]], [TOP[1], BL[1], BR[1], TOP[1]],
+                color="#1c2430", lw=1.2, zorder=3)
+        point_xy = bary(points)
+        if pred is None:
+            ax.scatter(point_xy[:, 0], point_xy[:, 1], s=40, facecolors="white",
+                       edgecolors="#344054", linewidths=0.75, alpha=0.94, zorder=4)
+        else:
+            accuracy = np.clip(1.0 - 0.5 * np.abs(normalize(pred) - Y).sum(1), 0.0, 1.0)
+            ax.scatter(point_xy[:, 0], point_xy[:, 1], s=44, c=accuracy, cmap="RdYlGn",
+                       vmin=0.0, vmax=1.0, edgecolors="white", linewidths=0.75,
+                       alpha=0.96, zorder=4)
+        for frac, text, dy, colour in (([0, 0, 1], "THI", 0.045, GROUP_HEX[2]),
+                                       ([0, 1, 0], "TBZ", -0.052, GROUP_HEX[1]),
+                                       ([1, 0, 0], "DQ", -0.052, GROUP_HEX[0])):
+            p = bary(frac); ax.text(p[0], p[1] + dy, text, ha="center",
+                va="bottom" if text == "THI" else "top", fontsize=12,
+                fontweight="bold", color=colour)
+        subtitle = "ideal RGB reference" if pred is None else \
+            f"held-out error {np.mean(0.5 * np.abs(normalize(pred) - Y).sum(1)):.1%}"
+        ax.set_title(title + "\n" + subtitle, fontsize=13, fontweight="bold", color="#1c2430")
+        ax.set_aspect("equal"); ax.axis("off")
+        ax.set_xlim(-0.10, 1.10); ax.set_ylim(-0.09, H + 0.08)
+    fig.legend([Line2D([], [], marker="o", mfc="white", mec="#344054", ls="", ms=7)],
+               ["control: actual mixture composition"], loc="lower center", framealpha=0,
+               bbox_to_anchor=(0.45, 0.01), fontsize=10.5)
+    sm = plt.cm.ScalarMappable(norm=plt.Normalize(0.0, 1.0), cmap="RdYlGn")
+    cb = fig.colorbar(sm, ax=axes, fraction=0.018, pad=0.018, shrink=0.82)
+    cb.set_label("composition accuracy\n(green = correct, red = poor)", fontsize=10)
+    cb.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
+    fig.subplots_adjust(left=0.02, right=0.91, top=0.88, bottom=0.12, wspace=0.08)
+    fig.savefig(os.path.join(OUT, filename), dpi=180, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
 if __name__ == "__main__":
     e1, a1 = draw("NNLS", P_NNLS, "triangle_response_nnls.png")
     e2, a2 = draw("DL", P_DL, "triangle_response_dl.png")
+    draw_triptych()
     print(f"NNLS error {e1:.1%}, dominant areas DQ/TBZ/THI {a1.round(3)}")
     print(f"DL error {e2:.1%}, dominant areas DQ/TBZ/THI {a2.round(3)}")
