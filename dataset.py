@@ -24,7 +24,9 @@ import json
 import os
 import re
 
-BLANK_ALIASES = {"blk", "blank", "background", "bg", "none"}
+# INK is the SERS-ink/substrate signal, not a pesticide.
+# Treat it as background for the hit gate, composition denominator, and UI.
+BLANK_ALIASES = {"blk", "blank", "background", "bg", "none", "ink"}
 _SUFFIX = "_corrected"
 # CSVs that live beside the maps but are NOT maps — never treat them as references
 _NON_MAP = {"samples.csv", "mixtures.csv"}
@@ -73,9 +75,17 @@ def discover_references(data_dir):
     map found: non-blank classes alphabetical, blank class(es) last. Prefers
     *_corrected.csv; if none, falls back to any *.csv in the reference dir."""
     rd = reference_dir(data_dir)
-    files = sorted(glob.glob(os.path.join(rd, "*_corrected.csv")))
-    if not files:
-        files = sorted(glob.glob(os.path.join(rd, "*.csv")))
+    # Prefer *_corrected.csv PER MAP, not for the folder as a whole. The old rule took
+    # every *_corrected.csv and only fell back to plain *.csv when there were none, so
+    # dropping a single corrected file into a folder of plain ones silently deleted every
+    # other reference: adding INK-2_corrected.csv / INK-3_corrected.csv left DQ, TBZ, THI
+    # and BLK — all plain .csv — invisible, and training then ran against INK alone.
+    corrected = sorted(glob.glob(os.path.join(rd, "*_corrected.csv")))
+    superseded = {os.path.basename(p)[: -len("_corrected.csv")].lower() for p in corrected}
+    files = corrected + [p for p in sorted(glob.glob(os.path.join(rd, "*.csv")))
+                         if not p.endswith("_corrected.csv")
+                         and os.path.splitext(os.path.basename(p))[0].lower() not in superseded]
+    files = sorted(files)
     files = [p for p in files if os.path.basename(p).lower() not in _NON_MAP]
     pairs = [(class_name(p), p) for p in files]
     non_blank = [(n, p) for n, p in pairs if not is_blank(n)]
