@@ -116,39 +116,97 @@ def _r2_lin_on_means(C, B, m, b):
     return 1.0 - float(np.sum((mean_B - pred) ** 2)) / sst if sst > 0 else 0.0
 
 
-def _lod_loq(C, B):
-    """IUPAC calibration-curve limit of detection / quantification. Fit a line to the
-    low-concentration (still-linear) region, take σ = residual standard deviation and
-    m = slope, then LOD = 3.3·σ/m and LOQ = 10·σ/m (both in M). Returns (lod, loq),
-    NaN when it can't be estimated (too few points, flat/negative slope)."""
+def _response_window(C, B, min_slope=0.5):
+    """Concentration range over which the signal ACTUALLY tracks concentration.
+
+    The LOD slope used to be fitted over a hardcoded "lowest ~5 concentrations". On a
+    geometric dilution grid that window is wrong in both directions: for a strongly
+    adsorbing compound it sits on the saturated plateau, and for a weakly adsorbing one
+    it sits below the onset. On the pesticide set the measured response windows are
+    DQ 500–1000, TBZ 10–50 and THI 0.5–5 µM, while the hardcoded window was 0.1–10 µM —
+    so DQ's slope, and therefore its LOD, was measured where DQ does not respond at all.
+
+    Instead take the local log–log slope between consecutive concentrations (1 =
+    proportional to concentration, 0 = floor or saturation) and keep the longest
+    consecutive stretch at or above ``min_slope``. Returns (lo, hi) in the units of
+    ``C``, or (nan, nan) when no stretch of the curve responds."""
     C = np.asarray(C, float); B = np.asarray(B, float)
     uc = np.unique(C)
     if len(uc) < 3:
         return float("nan"), float("nan")
-    lin_uc = uc[:max(3, min(len(uc), 5))]          # lowest ~5 concs ≈ linear region
-    mask = np.isin(C, lin_uc)
-    Cl, Bl = C[mask], B[mask]
-    if len(np.unique(Cl)) < 2:
+    mb = np.array([B[C == c].mean() for c in uc])
+    ok = (uc > 0) & (mb > 0)                       # log–log needs both positive
+    if ok.sum() < 3:
+        return float("nan"), float("nan")
+    uc, mb = uc[ok], mb[ok]
+    slope = np.diff(np.log10(mb)) / np.diff(np.log10(uc))
+    runs, cur = [], []
+    for i, s in enumerate(slope):
+        if s >= min_slope:
+            cur.append(i)
+        elif cur:
+            runs.append(cur); cur = []
+    if cur:
+        runs.append(cur)
+    if not runs:
+        return float("nan"), float("nan")
+    best = max(runs, key=len)
+    return float(uc[best[0]]), float(uc[best[-1] + 1])
+
+
+def _lod_fit_points(C, B):
+    """Points the LOD slope is fitted on: the measured response window when the curve
+    has one, else the lowest ~5 concentrations as before. Returns (Cl, Bl, lo, hi) with
+    (lo, hi) NaN when the fallback was used — callers report that, because a LOD from a
+    non-responding stretch is not a detection limit."""
+    C = np.asarray(C, float); B = np.asarray(B, float)
+    lo, hi = _response_window(C, B)
+    if np.isfinite(lo) and np.isfinite(hi):
+        mask = (C >= lo) & (C <= hi)
+    else:
+        uc = np.unique(C)
+        mask = np.isin(C, uc[:max(3, min(len(uc), 5))])
+        lo = hi = float("nan")
+    return C[mask], B[mask], lo, hi
+
+
+def _lod_loq(C, B):
+    """IUPAC calibration-curve limit of detection / quantification. Fit a line over the
+    compound's measured response window (``_lod_fit_points``), take σ = residual
+    standard deviation and m = slope, then LOD = 3.3·σ/m and LOQ = 10·σ/m (both in M).
+    Returns (lod, loq), NaN when it can't be estimated (too few points, flat/negative
+    slope)."""
+    C = np.asarray(C, float); B = np.asarray(B, float)
+    if len(np.unique(C)) < 3:
+        return float("nan"), float("nan")
+    Cl, Bl, _lo, _hi = _lod_fit_points(C, B)
+    # σ here is the scatter about the fitted line, so it needs at least one degree of
+    # freedom. A response window of only two concentrations fits exactly, σ collapses to
+    # float noise and the LOD comes out absurdly small — report "not estimable" instead.
+    if len(np.unique(Cl)) < 3:
         return float("nan"), float("nan")
     m, b = np.polyfit(Cl, Bl, 1)
     if m <= 0:
         return float("nan"), float("nan")
     resid = Bl - (m * Cl + b)
-    sigma = float(np.std(resid, ddof=1)) if len(resid) > 2 else float(np.std(resid))
-    if sigma <= 0:
+    sigma = float(np.std(resid, ddof=1))
+    if sigma <= 1e-9 * float(np.max(np.abs(Bl)) or 1.0):
         return float("nan"), float("nan")
     return 3.3 * sigma / m, 10.0 * sigma / m
 
 
 def _lod_from_blank(C, B, blank_vals):
-    """Blank-based LOD/LOQ (the SERS-appropriate form): slope from the low-range
-    linear calibration, σ from the ACTUAL blank replicates measured the same way as B
-    (the paper/substrate BLK). LOD = 3.3·σ_blank/slope, LOQ = 10·σ_blank/slope."""
+    """Blank-based LOD/LOQ (the SERS-appropriate form): slope over the compound's
+    measured response window (``_lod_fit_points``), σ from the ACTUAL blank replicates
+    measured the same way as B (the paper/substrate BLK).
+    LOD = 3.3·σ_blank/slope, LOQ = 10·σ_blank/slope.
+
+    σ_blank is only meaningful when the blank comes from the same substrate and session
+    as the calibration; a blank measured elsewhere shifts the floor and the LOD with it.
+    """
     C = np.asarray(C, float); B = np.asarray(B, float)
     blank_vals = np.asarray(blank_vals, float)
-    uc = np.unique(C)
-    lin_uc = uc[:max(3, min(len(uc), 5))]
-    mask = np.isin(C, lin_uc); Cl, Bl = C[mask], B[mask]
+    Cl, Bl, _lo, _hi = _lod_fit_points(C, B)
     if len(np.unique(Cl)) < 2 or len(blank_vals) < 2:
         return float("nan"), float("nan")
     m, b = np.polyfit(Cl, Bl, 1)
@@ -199,6 +257,7 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
         return bands, ms
 
     iso, r2, K_fit, gA_fit, peaks_used, lods, loqs, lods_e = [], [], [], [], [], [], [], []
+    lod_wins = []
     for name, (C, specs) in zip(names, dilutions):
         pk = peak.get(name) if isinstance(peak, dict) else peak
         bands, masks = _band_masks(pk)
@@ -225,11 +284,13 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
         else:
             lod, loq = _lod_loq(C, B)
         lods.append(lod); loqs.append(loq)
+        lod_wins.append(_response_window(C, B))        # where the slope was actually fitted
         lods_e.append(_empirical_lod(C, B, bv))        # measured (non-extrapolated) LOD
     per_cmpd = isinstance(peak, dict)
     return {"names": names, "K_true": None, "K_fit": np.array(K_fit),
             "gA_fit": np.array(gA_fit), "iso": iso, "r2": r2, "model": model,
             "lod": lods, "loq": loqs, "lod_emp": lods_e, "lod_method": lod_method,
+            "lod_window": lod_wins,
             "parity": (np.array([]), np.array([]), np.array([], int)),
             "log_err": float("nan"), "example": None, "example_true": None,
             "selectivity": float("nan"),
@@ -257,6 +318,7 @@ def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
     lod_method = "blank" if blank_B is not None else "residual"
 
     iso, r2, K_out, gA_out, lods, loqs, lods_e = [], [], [], [], [], [], []
+    lod_wins = []
     for i in range(calib.n):
         C = np.asarray(calib.C_series[i], float); B = np.asarray(calib.B_series[i], float)
         dense = np.geomspace(C.min(), C.max(), 200)
@@ -275,6 +337,7 @@ def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
         else:
             lod, loq = _lod_loq(C, B)
         lods.append(lod); loqs.append(loq)
+        lod_wins.append(_response_window(C, B))        # where the slope was actually fitted
         lods_e.append(_empirical_lod(C, B, bv))
     K_out = np.array(K_out); gA_out = np.array(gA_out)
 
@@ -283,6 +346,7 @@ def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
         return {"names": calib.names, "K_true": lab["K_true"], "K_fit": K_out,
                 "gA_fit": gA_out, "iso": iso, "r2": r2, "model": model,
                 "lod": lods, "loq": loqs, "lod_emp": lods_e, "lod_method": lod_method,
+            "lod_window": lod_wins,
                 "parity": (np.array([]), np.array([]), np.array([], int)),
                 "log_err": float("nan"), "example": None,
                 "example_true": None, "selectivity": float("nan")}
@@ -313,6 +377,7 @@ def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
         "names": calib.names, "K_true": lab["K_true"], "K_fit": K_out,
         "gA_fit": gA_out, "iso": iso, "r2": r2, "model": model,
         "lod": lods, "loq": loqs, "lod_emp": lods_e, "lod_method": lod_method,
+            "lod_window": lod_wins,
         "parity": (np.array(true_flat), np.array(est_flat), np.array(col_flat, int)),
         "log_err": log_err, "example": quants[ex],
         "example_true": lab["val_true"][ex],
