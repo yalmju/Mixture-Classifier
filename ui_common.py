@@ -62,7 +62,7 @@ from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout, QSizePolicy
 
 
 APP_NAME = "UNMIXR"
-VERSION = "1.0"
+VERSION = "1.0.1"
 
 # ---- cross-platform UI font stacks ---------------------------------------
 # Segoe UI / Consolas are Windows-only; naming them alone leaves macOS and Linux
