@@ -41,17 +41,27 @@ from scipy.optimize import nnls
 # --------------------------------------------------------------------------
 # Forward model (for simulation / what-if)
 # --------------------------------------------------------------------------
-def coverages(C, K):
-    """Competitive Langmuir surface coverage theta_i for concentrations C."""
+def coverages(C, K, m=None):
+    """Competitive surface coverage theta_i for concentrations C.
+
+    ``m=None`` is competitive Langmuir (one kind of site, no interaction). ``m`` (per
+    compound, >0) switches to the competitive **Sips / Langmuir-Freundlich** form
+    num_i = (K_i C_i)**m_i, which is what a heterogeneous binding-energy distribution
+    gives; m=1 reduces to Langmuir exactly. The DQ dilution series prefers m<1 clearly
+    (Freundlich 1/n = 0.35, R² 0.98 vs Langmuir 0.89) while THI prefers m=1, so the
+    exponent is per compound rather than global."""
     C = np.asarray(C, float)
     K = np.asarray(K, float)
     num = K * C
+    if m is not None:
+        m = np.asarray(m, float)
+        num = np.power(np.clip(num, 0.0, None), m)
     return num / (1.0 + num.sum())
 
 
-def forward_spectrum(C, K, A, P, gain=1.0):
-    """Noise-free observed spectrum for concentrations C."""
-    th = coverages(C, K)
+def forward_spectrum(C, K, A, P, gain=1.0, m=None):
+    """Noise-free observed spectrum for concentrations C. ``m`` -> Sips (see coverages)."""
+    th = coverages(C, K, m)
     return gain * (A * th) @ P            # (n,)·(n,feat) -> feat
 
 

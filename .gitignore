@@ -20,3 +20,10 @@ scripts/*.png
 composition_cache.pkl
 
 archive/data_legacy/
+
+# analysis caches — regenerate with documentation/scripts/*.py
+documentation/scripts/*.npz
+documentation/scripts/*.pkl
+documentation/scripts/*_signals*.json
+tmp/
+*.log

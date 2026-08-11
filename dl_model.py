@@ -28,6 +28,26 @@ def _refs(data_dir, baseline, trim):
     return subs, wn, mask, P, lo, hi
 
 
+def _nuisance_refs(data_dir, baseline, mask):
+    """Unit templates for what sits on the substrate but is NOT an analyte — INK, BLK.
+
+    `dataset.BLANK_ALIASES` counts "ink" as blank, so these never enter the unmixing
+    basis. The printed ink is real and large, though: its NNLS coefficient runs 0.06–1.5×
+    the analyte total (median 0.40) and its template has cosine 0.73 with DQ — closer than
+    DQ is to TBZ. Handing them to the simulator as nuisance lets the physics pre-training
+    see ink-shaped intensity that is NOT DQ. Returns (n_nu, n_feat) or None."""
+    from unmix import _templates, _baseline_removed, _l2
+    from dataset import is_blank
+    try:
+        names, wn, means = _templates(data_dir, baseline, None)
+    except Exception:
+        return None
+    idx = [i for i, n in enumerate(names) if is_blank(n)]
+    if not idx:
+        return None
+    return _l2(_baseline_removed(means[idx][:, mask], baseline))
+
+
 def _composition_features(x, mode="log1p_raw"):
     """Composition features that preserve between-pixel intensity; no row-wise L2."""
     x = np.clip(np.asarray(x, float), 0, None)
@@ -207,7 +227,8 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                 method="mlp", epochs=300, seed=0, use_pretrain=True, epoch_diagnostics=False,
                 n_components=8, n_trees=300, loo=False, test_items=None, px_per_map=0,
                 include_blank=False, noise_aug=0, nnls_screen=True,
-                screen_min_frac=0.15, equal_volume_mix=False):
+                screen_min_frac=0.15, equal_volume_mix=False, sim_nuisance=True,
+                sim_iso=None):
     """Train a composition model (+ µM if absolute concentrations given) on ALL mixtures.
     items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
 
@@ -225,6 +246,12 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         raise ValueError("need ≥2 reference substances.")
     aug_rng = np.random.default_rng(int(seed))
     X, Xabs, Y, Cabs, paths, abs_paths = [], [], [], [], [], []
+    # Splitting groups by COMPOSITION, not by map. The same mixture measured twice is two
+    # maps but one condition; grouping by map lets a repeat of the held-out condition stay
+    # in training, and the held-out number comes back flattered. `paths` stays the map (it
+    # is what pooling, the map count and the per-path annotation need) and `conds` is the
+    # parallel key used wherever a train/test boundary is drawn.
+    conds, abs_conds = [], []
     screen_stats = []
     for k, it in enumerate(items):
         if progress and (k % 3 == 0 or k == len(items) - 1):   # breathe during map loading
@@ -241,19 +268,27 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             screen_stats.append({"path": it[0], **smeta})
         else:
             _w, cube, _m, _c = load_map(it[0]); local_mask = mask
+        # The CONDITION key. A string, not a tuple: these live in a numpy object array and
+        # `arr == key` on tuples broadcasts element-wise instead of comparing whole keys.
+        ckey = "r:" + ",".join(f"{v:.6f}" for v in vec)
+        # The concentration head splits on ratio AND absolute µM — two maps at the same
+        # ratio but different concentration are genuinely different conditions for it,
+        # while for composition they are the same one.
+        akey = ckey + "|c:" + (",".join(f"{float(conc.get(s, 0.0)):.12g}" for s in subs)
+                               if conc else "none")
         for j, ya in enumerate(_map_spectra(cube, local_mask, px_per_map, baseline_correct=not nnls_screen)):
             X.append(_composition_features(ya)); Y.append(vec)
-            paths.append(it[0])                       # group key: the MAP, not the row
+            paths.append(it[0]); conds.append(ckey)   # map for pooling, condition for splits
             for yn in (_noisy_copies(ya, noise_aug, aug_rng) if (noise_aug and j) else ()):
                 X.append(_composition_features(yn)); Y.append(vec)
-                paths.append(it[0])                   # same map → same split group
+                paths.append(it[0]); conds.append(ckey)   # same map → same split group
             # The µM head trains on the SAME rows as the composition head. It used to
             # see one mean spectrum per map — a few dozen examples, none of them a
             # pixel — and was then asked for a per-pixel concentration, which is the
             # out-of-distribution case that returned ~0 µM for a substance the
             # composition head was calling 61%.
             Xabs.append(ya)
-            abs_paths.append(it[0])
+            abs_paths.append(it[0]); abs_conds.append(akey)
             if conc:
                 stock = [float(conc.get(s, 0.0)) for s in subs]
                 # Stored values are source-solution concentrations. Components were
@@ -280,19 +315,23 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                     _w, cube, _m, _c = load_map(pth)
                 except Exception:
                     continue
+                # Blanks keep the MAP as their split group. Grouping every blank into one
+                # "blank condition" would make a fold that holds it out train with no
+                # background examples at all.
                 for ya in _map_spectra(cube, mask, px_per_map or 60, spread=True):
                     X.append(_composition_features(ya))
                     Y.append([0.0] * len(subs) + [1.0])
-                    paths.append(pth)
+                    paths.append(pth); conds.append(pth)
                     for yn in _noisy_copies(ya, noise_aug, aug_rng):   # blank at low SNR too
                         X.append(_composition_features(yn))
-                        Y.append([0.0] * len(subs) + [1.0]); paths.append(pth)
+                        Y.append([0.0] * len(subs) + [1.0])
+                        paths.append(pth); conds.append(pth)
             for i in range(len(Y)):                      # widen the mixture labels
                 if len(Y[i]) == len(subs):
                     Y[i] = list(Y[i]) + [0.0]
             subs = list(subs) + [blank_name]
     X = np.array(X, np.float32); Xabs = np.array(Xabs); Y = np.array(Y, np.float32)
-    paths = np.array(paths, object)
+    paths = np.array(paths, object); conds = np.array(conds, object)
     if len(X) < 3:
         raise ValueError("need ≥3 mixtures to train.")
 
@@ -302,12 +341,39 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             from io_utils import load_calibration_csv
             from calibration import calibrate
             ax_c, nc, dils = load_calibration_csv(calib_path); mc = (ax_c >= lo) & (ax_c <= hi)
-            dil = [(dils[nc.index(s)][0], np.asarray(dils[nc.index(s)][1])[:, mc]) for s in subs if s in nc]
-            if len(dil) == len(subs):
-                cal = calibrate(dil, P, subs); rng = np.random.default_rng(0)
-                Xs, Cs = simulate_mixtures(P, cal.K, cal.gA, 5000, rng, noise=0.015, baseline=0.03, gain_lo=0.8, gain_hi=1.25)
+            # `subs` may already carry the blank class appended above, but the calibration
+            # only has the ANALYTES and P only has analyte rows. Gating on len(subs) made
+            # 3 != 4 whenever include_blank was on, so the whole physics pre-training was
+            # skipped — silently, no exception, nothing in the log. Compare against the
+            # analyte count instead, and pad the pre-training targets with a zero blank
+            # column so their width matches Y.
+            asubs = subs[:-1] if blank_name else list(subs)
+            dil = [(dils[nc.index(s)][0], np.asarray(dils[nc.index(s)][1])[:, mc])
+                   for s in asubs if s in nc]
+            if len(dil) == len(asubs):
+                cal = calibrate(dil, P, asubs); rng = np.random.default_rng(0)
+                # `sim_iso="sips_dq"` 는 DQ 만 Sips 지수로 시뮬레이션한다. DQ 희석계열은
+                # Freundlich 를 뚜렷이 선호하고(R² 0.98 vs 0.89) THI 는 Langmuir 를
+                # 선호하므로, 전부 바꾸지 않고 성분별로 둔다. m=1 은 Langmuir 와 동일.
+                iso_m = None
+                if sim_iso == "sips_dq":
+                    from calibration import fit_sips
+                    iso_m = np.ones(len(asubs))
+                    for _i, _s in enumerate(asubs):
+                        if _s.upper().startswith("DQ"):
+                            iso_m[_i] = fit_sips(cal.C_series[_i], cal.B_series[_i])[2]
+                    if progress:
+                        progress("sim isotherm m = " + np.array2string(iso_m, precision=3))
+                Xs, Cs = simulate_mixtures(P, cal.K, cal.gA, 5000, rng, noise=0.015,
+                                           baseline=0.03, gain_lo=0.8, gain_hi=1.25,
+                                           iso_m=iso_m,
+                                           nuisance=(_nuisance_refs(data_dir, baseline, mask)
+                                                     if sim_nuisance else None))
                 Xs = _composition_features(Xs).astype(np.float32)
-                pre = (Xs, np.array([_ratio(c) for c in Cs]).astype(np.float32))
+                Yp = np.array([_ratio(c) for c in Cs]).astype(np.float32)
+                if blank_name:                     # simulated mixtures always hold analytes
+                    Yp = np.hstack([Yp, np.zeros((len(Yp), 1), np.float32)])
+                pre = (Xs, Yp)
         except Exception:
             pre = None
 
@@ -360,10 +426,10 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         # maps for a validation split to mean something.
         selection = None
         selected_epochs = int(epochs)
-        if len(va_sel_diag := _group_validation_indices(paths, seed=seed)[1]) and epoch_diagnostics:
+        if len(va_sel_diag := _group_validation_indices(conds, seed=seed)[1]) and epoch_diagnostics:
             if progress:
                 progress("recording the held-out epoch curve (diagnostic only)")
-            tr_sel = _group_validation_indices(paths, seed=seed)[0]
+            tr_sel = _group_validation_indices(conds, seed=seed)[0]
             selection = train_composition(
                 X[tr_sel], Y[tr_sel], len(subs), pretrain=pre, seed=seed,
                 epochs_ft=epochs, X_val=X[va_sel_diag], Y_val=Y[va_sel_diag], progress=progress)
@@ -420,18 +486,28 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             }
     loo_eval = None
     if loo and len(X) >= 3:                     # honest metrics: predict each held-out mixture
-        uniq = list(dict.fromkeys(paths.tolist()))     # leave one MAP out, not one row
+        # Leave one CONDITION out: every map of that composition leaves together, so a
+        # repeat measurement cannot sit in training while its twin is being scored.
+        uniq = list(dict.fromkeys(conds.tolist()))
         tv, pv, pl = [], [], []
-        for i, mp in enumerate(uniq):
+        for i, ck in enumerate(uniq):
             if progress:
-                progress(f"leave-one-map-out {i + 1}/{len(uniq)}")
-            te = np.where(paths == mp)[0]; tr = np.where(paths != mp)[0]
+                progress(f"leave-one-condition-out {i + 1}/{len(uniq)}")
+            te = np.where(conds == ck)[0]; tr = np.where(conds != ck)[0]
+            if not len(tr):
+                continue
             pred = _fit_predict(method, X[tr], Y[tr], X[te], pre=pre, epochs=epochs,
                                 seed=seed + i, n_components=n_components,
                                 n_trees=n_trees, P_ref=P)
-            tv.append(Y[te[0]].tolist()); pv.append(np.asarray(pred, float).mean(0).tolist())
-            pl.append(mp)
-        loo_eval = {"true": tv, "pred": pv, "paths": pl}
+            pred = np.asarray(pred, float)
+            # Report one row per held-out MAP — downstream (_annotate, Recovery) looks
+            # these up by file path, and a per-map number is also what the user reads.
+            te_paths = paths[te]
+            for mp in dict.fromkeys(te_paths.tolist()):
+                sel = te_paths == mp
+                tv.append(Y[te[0]].tolist()); pv.append(pred[sel].mean(0).tolist())
+                pl.append(mp)
+        loo_eval = {"true": tv, "pred": pv, "paths": pl, "level": "condition"}
 
     uM = None
     # The concentration head covers the COMPOUNDS only. A blank class has no
@@ -448,7 +524,12 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         hv = np.array(have)
         C = np.array([list(Cabs[i])[:len(conc_subs)] if Cabs[i] is not None
                       else [0.0] * len(conc_subs) for i in range(len(Xabs))], float)
+        # `gp` stays the MAP — it is the POOLING key (the label is one number per map, so
+        # the loss compares the per-map median) and the context-feature key. `gcond` is the
+        # SPLITTING key. Conflating the two would pool repeats of one condition into a
+        # single pseudo-map and change what the head is trained to predict.
         gp = np.asarray(abs_paths, object)[hv]
+        gcond = np.asarray(abs_conds, object)[hv]
         from dl_quantify import surface_composition
         Rabs = surface_composition(_composition_features(Xabs[hv], 'legacy_l2'), P)
         Xctx = _concentration_context_features(Xabs[hv], gp, Rabs)
@@ -472,9 +553,9 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                     pred, truth, beta=0.5)
             return map_term
 
-        # Select capacity using entire held-out maps, never random pixels from a map.
+        # Select capacity using entire held-out CONDITIONS, never random pixels from a map.
         # Fixed budget here too, for the same reason as the composition head above.
-        tr_sel, va_sel = _group_validation_indices(gp, seed=seed + 17)
+        tr_sel, va_sel = _group_validation_indices(gcond, seed=seed + 17)
         selected_uM_epochs = int(epochs); selection_uM_val = []; best_val = float("inf"); stale = 0
         if len(va_sel) and epoch_diagnostics:
             smu = Xctx[tr_sel].mean(0); ssd = Xctx[tr_sel].std(0) + 1e-8
@@ -528,20 +609,20 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
               "selected_epochs": selected_uM_epochs,
               "selection_val_loss": (best_val if selection_uM_val else None),
               "selection_val_history": selection_uM_val,
-              "selection_level": "map",
+              "selection_level": "condition",
               "n_maps": len(dict.fromkeys(gp.tolist())), "n_pixels": len(hv)}
 
-        # Concentration validation follows the same leave-one-map-out boundary as
+        # Concentration validation follows the same leave-one-CONDITION-out boundary as
         # composition. Each held-out map is pooled from its pixel predictions.
         if loo:
             loo_true, loo_pred, loo_paths = [], [], []
-            unique_maps = list(dict.fromkeys(gp.tolist()))
-            for fold_i, held_map in enumerate(unique_maps):
-                te = np.where(gp == held_map)[0]; tr = np.where(gp != held_map)[0]
+            unique_conds = list(dict.fromkeys(gcond.tolist()))
+            for fold_i, held in enumerate(unique_conds):
+                te = np.where(gcond == held)[0]; tr = np.where(gcond != held)[0]
                 if len(te) == 0 or len(tr) < 3:
                     continue
                 if progress:
-                    progress(f"concentration leave-one-map-out {fold_i + 1}/{len(unique_maps)}")
+                    progress(f"concentration leave-one-condition-out {fold_i + 1}/{len(unique_conds)}")
                 ftrain = _concentration_context_features(Xabs[hv][tr], gp[tr], Rabs[tr])
                 fmu = ftrain.mean(0); fsd = ftrain.std(0) + 1e-8
                 fX = torch.tensor(((ftrain - fmu) / fsd).astype(np.float32))
@@ -567,11 +648,17 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                 test_x = torch.tensor(((ftest - fmu) / fsd).astype(np.float32))
                 with torch.no_grad():
                     logits = fnet(test_x).numpy()
-                loo_true.append((C[hv][te[0]] * 1e6).tolist())
-                loo_pred.append((10.0 ** np.clip(np.median(logits, axis=0), -3.0, 6.0)).tolist())
-                loo_paths.append(held_map)
+                # One row per held-out MAP, pooled over that map's own pixels — the
+                # downstream lookup is by file path, and a condition can hold several maps.
+                te_paths = gp[te]
+                for mp in dict.fromkeys(te_paths.tolist()):
+                    sel = np.where(te_paths == mp)[0]
+                    loo_true.append((C[hv][te[sel[0]]] * 1e6).tolist())
+                    loo_pred.append((10.0 ** np.clip(np.median(logits[sel], axis=0),
+                                                     -3.0, 6.0)).tolist())
+                    loo_paths.append(mp)
             uM["loo_eval"] = {"true_uM": loo_true, "pred_uM": loo_pred,
-                              "paths": loo_paths}
+                              "paths": loo_paths, "level": "condition"}
 
     return {"subs": subs, "lo": lo, "hi": hi, "n_feat": int(mask.sum()), "P": P,
             "feature_mode": "log1p_raw",
@@ -632,20 +719,39 @@ def apply_model(model, wn, cube):
     return out
 
 
-def kfold_stability(data_dir, items, method="mlp", folds=5, progress=None, **kw):
+def kfold_stability(data_dir, items, method="mlp", folds=5, progress=None, seed=0, **kw):
     """Repeat the held-out check over every fold of an even 1-in-``folds`` split (start
     offsets 0..folds-1) so a single lucky/unlucky test set cannot set the headline number.
-    Returns {"errors": [...per fold], "mean", "sd"} of the composition error."""
-    order = sorted(range(len(items)), key=lambda i: os.path.basename(items[i][0]))
+    Returns {"errors": [...per fold], "mean", "sd"} of the composition error.
+
+    Folds are drawn over CONDITIONS, not maps. The old version sorted maps by basename and
+    strided ``pos % folds``; repeats of one mixture sort adjacently ('1-1', '1-2', '1-3'),
+    so that stride guaranteed they landed in different folds — the held-out map always had
+    a twin in training. Grouping by composition and shuffling the groups removes both the
+    leak and the systematic ordering."""
+    from dl_quantify import _ratio as _r
+    subs0 = _refs(data_dir, kw.get("baseline", True), kw.get("trim"))[0]
+
+    def _ck(it):
+        v = _r([float(it[1].get(s, 0.0)) for s in subs0])
+        return "r:" + ",".join(f"{x:.6f}" for x in v)
+
+    groups = {}
+    for i, it in enumerate(items):
+        groups.setdefault(_ck(it), []).append(i)
+    keys = sorted(groups)                       # sorted first so the shuffle is reproducible
+    order = np.random.default_rng(int(seed)).permutation(len(keys))
     errs = []
     for f in range(int(folds)):
-        te = [items[i] for pos, i in enumerate(order) if pos % folds == f]
-        tr = [items[i] for pos, i in enumerate(order) if pos % folds != f]
+        te_keys = {keys[i] for pos, i in enumerate(order) if pos % folds == f}
+        te = [items[i] for k in te_keys for i in groups[k]]
+        tr = [items[i] for k in keys if k not in te_keys for i in groups[k]]
         if len(tr) < 3 or not te:
             continue
         if progress:
             progress(f"fold {f + 1}/{folds} — {len(tr)} train / {len(te)} test")
-        m = train_model(data_dir, tr, method=method, test_items=te, progress=None, **kw)
+        m = train_model(data_dir, tr, method=method, test_items=te, progress=None,
+                        seed=seed, **kw)
         ev = m.get("test_eval")
         if not ev:
             continue
@@ -673,10 +779,11 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
         vec = _ratio([float(it[1].get(s, 0.0)) for s in subs])
         if vec.sum() <= 0:
             continue
+        ckey = "r:" + ",".join(f"{v:.6f}" for v in vec)
         _w, cube, _m, _c = load_map(it[0])
         for ya in _map_spectra(cube, mask, px_per_map):
             X.append(_composition_features(ya)); Y.append(vec)
-            gkey.append(it[0])                        # group = the MAP
+            gkey.append(ckey)                         # group = the CONDITION, not the map
     X = np.array(X, np.float32); Y = np.array(Y, np.float32)
     gkey = np.array(gkey, object)
     if len(X) < 3:
@@ -693,7 +800,8 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
             if len(dil) == len(subs):
                 cal = calibrate(dil, P, subs); rng = np.random.default_rng(0)
                 Xs, Cs = simulate_mixtures(P, cal.K, cal.gA, 5000, rng, noise=0.015,
-                                           baseline=0.03, gain_lo=0.8, gain_hi=1.25)
+                                           baseline=0.03, gain_lo=0.8, gain_hi=1.25,
+                                           nuisance=_nuisance_refs(data_dir, baseline, mask))
                 Xs = _composition_features(Xs).astype(np.float32)
                 pre = (Xs, np.array([_ratio(c) for c in Cs]).astype(np.float32))
         except Exception:
@@ -705,7 +813,7 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
         tv, pv = [], []
         for i, mp in enumerate(uniq):
             if progress:
-                progress(f"{meth.upper()} leave-one-map-out {i + 1}/{len(uniq)}  "
+                progress(f"{meth.upper()} leave-one-condition-out {i + 1}/{len(uniq)}  "
                          f"[{mi + 1}/{len(methods)} methods]")
             te = np.where(gkey == mp)[0]; tr = np.where(gkey != mp)[0]
             pred = _fit_predict(meth, X[tr], Y[tr], X[te], pre=pre, epochs=epochs,

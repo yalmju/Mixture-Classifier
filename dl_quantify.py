@@ -39,7 +39,7 @@ from competitive import forward_spectrum
 # --------------------------------------------------------------------------
 def simulate_mixtures(P, K, A, n, rng, *, c_lo=1e-7, c_hi=1e-3, p_present=0.6,
                       gain_lo=0.7, gain_hi=1.4, noise=0.01, baseline=0.0,
-                      min_present=1):
+                      min_present=1, nuisance=None, nu_lo=0.05, nu_hi=1.5, iso_m=None):
     """Generate ``n`` physics-forward mixture spectra with known concentrations.
 
     P (n_comp, n_feat) unit templates, K (1/M), A (brightness) from a calibration.
@@ -48,8 +48,17 @@ def simulate_mixtures(P, K, A, n, rng, *, c_lo=1e-7, c_hi=1e-3, p_present=0.6,
     a random gain in [gain_lo, gain_hi] models substrate drift; Gaussian ``noise``
     (fraction of the spectrum max) and a smooth ``baseline`` ramp are added.
 
+    ``nuisance`` (n_nu, n_feat) holds unit templates of things that are ON the substrate
+    but are NOT analytes — the printed INK above all. Leaving them out teaches the model
+    an ink-free world, and then any ink-shaped intensity in a real map gets read as the
+    analyte it most resembles (INK·DQ cosine is 0.73, higher than DQ·TBZ). Each sample
+    adds ``u · Σ B_analyte · nuisance_j`` with u log-uniform in [nu_lo, nu_hi]; the
+    default band matches the measured ink/analyte ratio (0.06–1.49, median 0.40).
+    ``None`` reproduces the old ink-free behaviour exactly.
+
     Returns (X (n, n_feat) float32 spectra, C (n, n_comp) concentrations in M)."""
     P = np.asarray(P, float); K = np.asarray(K, float); A = np.asarray(A, float)
+    NU = None if nuisance is None else np.atleast_2d(np.asarray(nuisance, float))
     n_comp, n_feat = P.shape
     X = np.zeros((n, n_feat), np.float32)
     C = np.zeros((n, n_comp), np.float32)
@@ -61,7 +70,13 @@ def simulate_mixtures(P, K, A, n, rng, *, c_lo=1e-7, c_hi=1e-3, p_present=0.6,
         c = np.zeros(n_comp)
         c[present] = 10 ** rng.uniform(np.log10(c_lo), np.log10(c_hi), present.sum())
         gain = rng.uniform(gain_lo, gain_hi)
-        y = forward_spectrum(c, K, A, P, gain=gain)
+        y = forward_spectrum(c, K, A, P, gain=gain, m=iso_m)
+        if NU is not None:                              # ink / substrate nuisance
+            from competitive import coverages
+            b_sum = float((gain * A * coverages(c, K, iso_m)).sum())
+            for row in NU:
+                u = 10 ** rng.uniform(np.log10(nu_lo), np.log10(nu_hi))
+                y = y + u * b_sum * row
         if baseline > 0:                                # random smooth ramp/curve
             b = baseline * (y.max() or 1.0)
             y = y + b * (rng.uniform(-1, 1) * axis + rng.uniform(-1, 1) * axis ** 2)
@@ -287,7 +302,8 @@ def _spec_net(n_feat, n_comp, hidden=(256, 64)):
 
 
 def train_composition(X, Y, n_comp, *, pretrain=None, epochs_pre=25, epochs_ft=350,
-                      lr=3e-4, seed=0, progress=None):
+                      lr=3e-4, seed=0, progress=None, X_val=None, Y_val=None,
+                      patience=40, min_delta=1e-4):
     """Fit spectrum → composition (softmax, L1 loss). ``pretrain=(Xp, Yp)`` warms up on
     physics-simulated (spectrum, composition) first. ``progress`` (called every few epochs
     with a message) both lets a GUI worker breathe and reports the loss. The returned dict
@@ -312,18 +328,39 @@ def train_composition(X, Y, n_comp, *, pretrain=None, epochs_pre=25, epochs_ft=3
             net.train()
             for xb, yb in dl:
                 opt.zero_grad(); loss(xb, yb).backward(); opt.step()
-    hist = []
+    hist = []; val_hist = []; best_state = None; best_val = float("inf")
+    best_epoch = int(epochs_ft); stale = 0
+    Xv = (torch.tensor(np.asarray(X_val, np.float32))
+          if X_val is not None and len(X_val) else None)
+    Yv = (torch.tensor(np.asarray(Y_val, np.float32))
+          if Y_val is not None and len(Y_val) else None)
     if len(X):
         opt = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=1e-3)
         Xt = torch.tensor(X); Yt = torch.tensor(Y)
         for ep in range(epochs_ft):
             net.train(); opt.zero_grad(); l = loss(Xt, Yt); l.backward(); opt.step()
             hist.append(float(l.detach()))
+            if Xv is not None:
+                net.eval()
+                with torch.no_grad():
+                    vl = float(loss(Xv, Yv))
+                val_hist.append(vl)
+                if vl < best_val - float(min_delta):
+                    best_val = vl; best_epoch = ep + 1; stale = 0
+                    best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
+                else:
+                    stale += 1
             if progress and (ep % 10 == 0 or ep == epochs_ft - 1):   # breathe + report
-                progress(f"epoch {ep + 1}/{epochs_ft}  loss {hist[-1]:.3f}")
+                suffix = f"  val {val_hist[-1]:.3f}" if val_hist else ""
+                progress(f"epoch {ep + 1}/{epochs_ft}  loss {hist[-1]:.3f}{suffix}")
+            if Xv is not None and stale >= int(patience):
+                break
+    if best_state is not None:
+        net.load_state_dict(best_state)
     net.eval()
     return dict(state={k: v.clone() for k, v in net.state_dict().items()},
-                n_feat=n_feat, n_comp=n_comp, hist=hist)
+                n_feat=n_feat, n_comp=n_comp, hist=hist, val_hist=val_hist,
+                best_epoch=best_epoch, best_val=(best_val if val_hist else None))
 
 
 def predict_composition(model, X):
