@@ -4,15 +4,20 @@
   여백도 없이** 삼각형만 나온다 — 붙일 자리 크기에 맞춰 `--size` 로 뽑는다.
   나머지 패널은 Origin 에서 다시 그릴 수 있게 `export_origin.py` 가 CSV 를 낸다.
 
-  파일명은 패널 문자다. 순서를 바꾸려면 아래 PANELS 의 문자만 고치면 된다.
+  파일명은 패널 문자다. 순서를 바꾸려면 FIGURES / DELEGATED / TABLES 의 키만 고친다.
 
-    a  삼각형 — 참 조성 RGB                        (그림 그대로 사용)
-    b  삼각형 — 정확도 음영 + 참→예측 화살표        (그림 그대로 사용)
-    c  격자 — 위=참 / 아래=예측
-    d  격자 — 오차 히트맵
-    e  조건별 조성 파이
-    f  조건별 10×10 픽셀 조성맵
-    g  농도 회수 — 파리티 3개 + 배수오차 누적분포
+    a  삼각형 — NNLS (고농도)      PNG   export_nnls.py
+    b  단일성분 등온선                    export_isotherm.py
+    c  등몰 삼원 농도 시리즈              export_tert.py
+    d  방법 비교 (5방법)                  bench64.py     ← 따로 실행, 1–3시간
+    e  검출 ROC                           bench64.py     ← d 와 같이 나온다
+    f  상대 드리프트                      export_drift.py
+    g  삼각형 — 정확도 (학습 모델)  PNG   여기서 그림
+    h  농도 회수 (파리티 + CDF)           export_origin.py 의 표를 옮긴다
+    i  격자 — 위=참 / 아래=예측           64조건 판. 첨부 도판에 없던 새 패널이라 i 부터.
+    j  격자 — 오차 히트맵 (블록별 행렬)
+    k  조건별 조성 파이
+    l  조건별 10×10 픽셀 조성맵
 
   주의: matplotlib 의 글자 크기는 **점(pt)** 단위라 그림 크기를 줄이면 글자만 상대적으로
   커진다. 삼각형을 작게 뽑을 때는 `--fontscale` 로 같이 줄여야 비율이 맞는다.
@@ -20,7 +25,7 @@
   실행:
       python3 -u panels.py                          기본 크기로 전부
       python3 -u panels.py --size 3.4,3.3 --fontscale 0.55     삼각형만 작게
-      python3 -u panels.py --only a,b
+      python3 -u panels.py --only a,g       삼각형만
 """
 import os, sys, csv, json, pickle
 import numpy as np
@@ -130,7 +135,7 @@ def _read(name):
 
 
 def _conc_tables():
-    """패널 g 의 표. `export_origin.py` 가 낸 것을 그대로 넘긴다 — 숫자 출처는 하나."""
+    """패널 h 의 표. `export_origin.py` 가 낸 것을 그대로 넘긴다 — 숫자 출처는 하나."""
     out = []
     for tag, fn in (("parity", "concentration_parity.csv"),
                     ("fold_cdf", "concentration_fold_cdf.csv"),
@@ -140,31 +145,25 @@ def _conc_tables():
     return out
 
 
-# 첨부 도판의 문자 체계를 따른다. a·g 만 그림이고(Origin 으로 옮기기 어렵다)
-# 나머지는 표다. b·c·d·e·f·h 는 각자 전용 스크립트가 내므로 여기서는 부르기만 한다 —
-# 계산이 두 군데 있으면 반드시 갈라진다.
-#
-#   a  삼각형 — 참 조성 RGB          여기서 그림
-#   b  단일성분 등온선                export_isotherm.py
-#   c  등몰 삼원 농도 시리즈          export_tert.py
-#   d  방법 비교 (NNLS/PLS/RF/CNN/MLP) bench64.py   (오래 걸림, 따로 실행)
-#   e  검출 ROC                       bench64.py   (d 와 같이 나온다)
-#   f  상대 드리프트                   export_drift.py
-#   g  삼각형 — 정확도 + 드리프트      여기서 그림
-#   h  농도 회수                       export_origin.py → fig_h_concentration.py
-#
-# 64조건 격자를 보여주는 판(격자 true/pred · 오차 · 파이 · 픽셀맵)은 첨부 도판에 없던
-# 새 패널이라 i 부터 붙인다. 기존 문자를 밀면 이미 조판한 것이 어긋난다.
+# 문자 체계는 파일 첫머리 표에 있다. 전용 스크립트가 있는 패널은 여기서 **부르기만**
+# 한다 — 계산이 두 군데 있으면 반드시 갈라진다. d·e 는 1–3시간이라 자동으로 부르지
+# 않는다(bench64.py 를 직접 돌린다).
 FIGURES = {
-    "a": ("triangle_true_rgb", _tri(TF.rgb_triangle)),
+    # g 만 여기서 그린다. a 는 같은 그림을 NNLS 로 그린 것이고, 세트를 골라야 해서
+    # export_nnls.py 로 넘긴다 — 고농도가 논지에 쓰는 판이다 (저농도 NNLS 는 초록이라
+    # "선형 분해가 부족하다" 를 못 받친다. CLAIM_nnls_vs_learned_2026-08-12.md).
     "g": ("triangle_accuracy", _tri(TF.accuracy_triangle)),
 }
 DELEGATED = {
-    "b": ("isotherm", "export_isotherm.py"),
-    "c": ("tert_series", "export_tert.py"),
-    "f": ("drift", "export_drift.py"),
+    "a": ("triangle_nnls", "export_nnls.py",
+          ["--set", "high", "--size", opt("--size", "5.2,5.0"),
+           "--fontscale", opt("--fontscale", "1.0")] + (["--bare"] if BARE else [])),
+    "b": ("isotherm", "export_isotherm.py", []),
+    "c": ("tert_series", "export_tert.py", []),
+    "f": ("drift", "export_drift.py", []),
 }
 TABLES = {
+    "h": ("concentration_recovery", _conc_tables),
     "i": ("grid_true_vs_predicted",
           lambda: [("", *GF.condition_table(rows_pct, keys, SUB))]),
     "j": ("grid_error",
@@ -184,10 +183,11 @@ for letter, (name, make) in FIGURES.items():
     print(f"  ✓ panel_{letter}_{name}.png   (그림 — 그대로 사용)")
 
 import subprocess
-for letter, (name, script) in DELEGATED.items():
+for letter, (name, script, extra) in DELEGATED.items():
     if ONLY and letter not in ONLY:
         continue
-    r = subprocess.run([sys.executable, "-u", f"{HERE}/{script}"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-u", f"{HERE}/{script}"] + extra,
+                       capture_output=True, text=True)
     if r.returncode:
         print(f"  ✗ {letter}  {name} — {script} 실패:\n{r.stderr.strip()[-400:]}")
     else:
@@ -210,4 +210,4 @@ for letter, (name, make) in TABLES.items():
 print("\n삼각형(a·g)만 PNG — 배경 투명 · 600 dpi. 나머지는 CSV 이고 Origin 에서 그린다.")
 print("j 는 히트맵이라 블록마다 행렬 한 장씩이다 (Origin heat map 은 행렬을 받는다).")
 print("d·e (방법 비교 · ROC) 는 bench64.py 를 따로 돌려야 한다 — 1–3시간.")
-print("패널 문자를 바꾸려면 FIGURES / TABLES 의 키만 고치면 된다.")
+print("패널 문자를 바꾸려면 FIGURES / DELEGATED / TABLES 의 키만 고치면 된다.")
