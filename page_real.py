@@ -275,10 +275,6 @@ class RealDataPage(QWidget):
         self.c_maps.mpl_connect("button_press_event", self._on_click)
         self.c_pie.mpl_connect("button_press_event", self._on_click)
 
-        self.readout = QLabel(""); self.readout.setObjectName("sub")
-        self.readout.setWordWrap(True); self.readout.setTextFormat(Qt.TextFormat.RichText)
-        self.readout.setStyleSheet(f"font-size:15px; color:{INK};")   # readable summary
-        root.addWidget(self.readout)
 
     # ---- small builders ----
     def _compact_x(self, b, tip):
@@ -473,7 +469,7 @@ class RealDataPage(QWidget):
             self.dlm_lbl.setText("DL: " + os.path.basename(p) + self._blank_tag())
             self.dlm_lbl.setStyleSheet(""); self._sync_controls()
             if self._res is not None:
-                self._apply(self._res)                    # refresh readout with the DL row
+                self._apply(self._res)                    # redraw with the DL model in play
         except Exception as e:
             self.dl_model = None; self.dlm_lbl.setText("DL load failed")
             print(e, file=sys.stderr)
@@ -693,10 +689,7 @@ class RealDataPage(QWidget):
         self.status.setStyleSheet(f"color:{MUTE};")
         nb = [r.comps[i] for i in r.nonbg]
         mr = self._mean_ratio(r)                          # corrected when toggle on
-        corrected = self._rf_vec(r) is not None
         eff_hit = self._hit(r)
-        n_flag = int((r.hit & self._flagged(r)).sum())    # low-R² substance pixels
-        dropping = self.chk_rel.isChecked()
         dom = nb[int(mr.argmax())] if len(nb) else r.dominant
         self.k_dom.set(dom, TEAL)
         self.k_n.set(str(int(np.sum(mr >= 0.05))), AMBER)
@@ -705,69 +698,6 @@ class RealDataPage(QWidget):
         self._rebuild_swatches(r)
         self._plot_maps(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
-        ratio = "  :  ".join(f"{nm} {mr[i] * 100:.0f}" for i, nm in enumerate(nb))
-        rtag = "solution ratio" if corrected else "mean ratio"
-        excl = (f" &nbsp;·&nbsp; <span style='color:{CORAL}'>{n_flag} low-R² px "
-                f"{'excluded' if dropping else 'flagged (still composed)'}</span>"
-                if n_flag else "")
-        txt = (f"<b>hit:</b> {eff_hit.mean():.0%} of pixels are a substance{excl} "
-               f"&nbsp;·&nbsp; <b>{rtag}</b> (hit pixels): {ratio} &nbsp;·&nbsp; "
-               f"<b>dominant:</b> {dom}"
-               + ("  <span style='color:%s'>(response-corrected)</span>" % TEAL
-                  if corrected else ""))
-        if getattr(r, "hit_rule", ""):        # exactly one rule decided background
-            txt += (f"<br><span style='color:{FAINT}'>background decided by: "
-                    f"{r.hit_rule}</span>")
-        if getattr(r, "calibrated", False) and r.conc_avg is not None:
-            med = (r.conc_median if getattr(r, "conc_median", None) is not None
-                   else r.conc_avg) * 1e6
-            p10 = (r.conc_p10 if getattr(r, "conc_p10", None) is not None
-                   else r.conc_avg) * 1e6
-            p90 = (r.conc_p90 if getattr(r, "conc_p90", None) is not None
-                   else r.conc_avg) * 1e6
-            ci_lo = (r.conc_ci_low if getattr(r, "conc_ci_low", None) is not None
-                     else r.conc_median) * 1e6
-            ci_hi = (r.conc_ci_high if getattr(r, "conc_ci_high", None) is not None
-                     else r.conc_median) * 1e6
-            se = (r.conc_se if getattr(r, "conc_se", None) is not None
-                  else np.zeros_like(r.conc_median)) * 1e6
-            cs = "  ·  ".join(
-                f"{nm} {med[i]:.3g} ± {se[i]:.2g} µM "
-                f"(median ± spatial-bootstrap SE; P10–P90 {p10[i]:.3g}–{p90[i]:.3g}; "
-                f"95% CI {ci_lo[i]:.3g}–{ci_hi[i]:.3g})"
-                for i, nm in enumerate(nb) if np.isfinite(med[i]) and med[i] > 0)
-            src = "calibration" if r.calib_r2 is not None else "composition model"
-            txt += (f"<br><b>apparent SERS-equivalent concentration</b> "
-                    f"(hit-pixel median, {src}): {cs}")
-            if getattr(r, "conc_ood", None) is not None:
-                den = max(1, int(np.count_nonzero(r.hit)) * len(nb))
-                nbad = int(np.count_nonzero(r.conc_ood[r.hit])) if np.any(r.hit) else int(np.count_nonzero(r.conc_ood))
-                txt += (f" <span style='color:{FAINT}'>(order-of-magnitude, semi-quantitative; "
-                        f"OOD {nbad / den:.0%}; OOD values hidden)</span>")
-            if r.calib_r2 is not None:
-                r2s = "  ·  ".join(f"{nm} R²={r.calib_r2[i]:.2f}" for i, nm in enumerate(nb))
-                tag = ("  ⚠ low-quality calibration — µM approximate"
-                       if float(np.min(r.calib_r2)) < 0.7 else "")
-                txt += (f"<br><span style='color:{FAINT}'>calibration fit: {r2s}{tag}"
-                        "  ·  click a pixel for its µM</span>")
-            # The single number that turns a measured RATIO into a CONCENTRATION ratio:
-            # each substance's signal per molar. It was invisible, so a calibration
-            # claiming one substance is hundreds of times brighter than another silently
-            # skewed every µM. Shown relative to the weakest, with a warning when the
-            # spread is large enough to dominate the answer.
-            sl = getattr(r, "calib_slope", None)
-            if sl is not None and np.all(np.isfinite(sl)) and np.min(sl) > 0:
-                rel = np.asarray(sl, float) / float(np.min(sl))
-                rs = "  ·  ".join(f"{nm} {rel[i]:.3g}×" for i, nm in enumerate(nb))
-                spread = float(rel.max())
-                warn = ""
-                if spread >= 50:
-                    warn = (f" &nbsp;<span style='color:{CORAL}'>⚠ {spread:.0f}× spread "
-                            "— check the concentration column of the calibration CSV "
-                            "(unit / decade); this factor sets the µM ratio</span>")
-                txt += (f"<br><span style='color:{FAINT}'>calibration response per "
-                        f"molar (vs weakest): {rs}</span>{warn}")
-        self.readout.setText(txt)
 
     # ---- plots ----
     def _flip(self):
