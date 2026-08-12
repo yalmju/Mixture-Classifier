@@ -53,24 +53,26 @@ model capacity.
 
 ## Files
 
-**App:**
-- `UNMIXR.py` — the PyQt6 app (entry point); every tab is native with embedded matplotlib.
+**UNMIXR application:**
+- `UNMIXR.py` — PyQt6 entry point.
+- `page_samples.py`, `page_model.py`, `page_quantify.py`, `page_validate.py`, `page_real.py` — application tabs.
+- `page_compose.py` — composition-model panel embedded in Model.
+- `ui_common.py` and `assets/` — shared UI runtime and icons.
 
-**UI-agnostic cores** (numpy / scipy / sklearn — reusable from any front-end):
-- `dataset.py` — turn a data folder into a dataset spec: discover reference maps, group batches into classes, read/write `samples.csv` and the mixture manifest (Samples page).
-- `model_training.py` — train a classifier on the reference maps with honest spatial / batch / random splits (Model page).
-- `predict.py` — apply the references to an unknown sample; per-pixel NNLS composition + dominant-component map (Predict page).
-- `calibration.py` — Langmuir isotherm fit, coverage→M inversion, competition judgment (Quantify page). `build_synthetic_lab()` gives a fully-known ground truth — `python calibration.py`.
-- `real_data.py` — load the maps, run the detection strategies + response-factor calibration (Real data page). `python real_data.py` prints the strategy table.
+**Core analysis:**
+- `dataset.py`, `real_data.py`, `io_utils.py` — dataset manifests and Raman-map I/O.
+- `unmix.py`, `classify.py`, `validate.py`, `composition.py` — dynamic NNLS hit screening, map inference and Recovery.
+- `dl_model.py`, `dl_quantify.py`, `pixel_surface.py`, `dl_explain.py` — MLP composition/concentration and interpretation.
+- `model_training.py`, `sers_mixture.py`, `unmix_net.py`, `resnet1d.py` — selectable Model/Quantify backends.
+- `calibration.py`, `competitive.py`, `synthetic.py` — calibration and competitive-adsorption physics.
+- `triangle_figs.py` — Recovery/triangle export figures.
 
-**Analysis engine:**
-- `sers_mixture.py` — component-DETECTION pipeline (which compounds present).
-- `competitive.py` — concentration-RATIO recovery under competitive Langmuir adsorption.
-- `competitive_compare.py` — explain competitive adsorption from measured mixtures (additive residual + Langmuir-vs-linear + partner displacement).
-- `synthetic.py` — synthetic SERS generator (competitive adsorption) so everything runs with zero real data.
-- `resnet1d.py` — ResNet1D multi-label detector (PyTorch), the Molecules-2025 architecture; the "ResNet1D" Model backend.
-
-**Folders:** `examples/` sample CSVs · `docs/` project status / reference pages · `assets/` the app icon.
+**Documentation and archive:**
+- `documentation/NNLS_HIT_MLP_AND_APPARENT_CONCENTRATION.md` — current Real/Recovery workflow and interpretation.
+- `documentation/REUSABLE_CONFIGURATION.md` — data-driven configuration and reuse contract.
+- `archive/experiments/` — offline benchmarks and research prototypes; not imported by UNMIXR.
+- `archive/docs_legacy/` — generated figures, reports and superseded findings.
+- `archive/planning/` — historical plans and TODO notes.
 
 ## Concentration ratios under competitive adsorption (`competitive.py`)
 
@@ -94,6 +96,12 @@ one standard. Two honest limits:
    or **per-pixel voting / standard addition**.
 
 ## Absolute concentration in µM
+
+For the current Real-panel workflow—dynamic NNLS hit screening, MLP inference,
+equal-volume mixture labels, apparent SERS-equivalent µM maps, and uncertainty
+reporting—see [NNLS-hit MLP and apparent concentration](documentation/NNLS_HIT_MLP_AND_APPARENT_CONCENTRATION.md).
+The component-wise apparent values are not constrained to sum to the applied solution
+concentration.
 
 Ratios cancel the unknown substrate gain, so they need no anchor; absolute µM does.
 Two routes, both in `calibration.py` / the **Quantify** page:

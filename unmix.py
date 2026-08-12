@@ -44,8 +44,20 @@ class UnmixResult:
     calibrated: bool = False     # True if a dilution-series calibration was applied
     conc: np.ndarray = None      # (n_pix, Knb) per-pixel absolute concentration (M)
     conc_avg: np.ndarray = None  # (Knb,) mean concentration over hit pixels (M)
+    conc_median: np.ndarray = None  # (Knb,) median over hit pixels (M)
+    conc_p10: np.ndarray = None  # (Knb,) hit-pixel 10th percentile (M)
+    conc_p90: np.ndarray = None  # (Knb,) hit-pixel 90th percentile (M)
+    conc_ci_low: np.ndarray = None   # spatial-bootstrap 95% CI of median (M)
+    conc_ci_high: np.ndarray = None  # spatial-bootstrap 95% CI of median (M)
+    conc_se: np.ndarray = None        # spatial-bootstrap SE of median (M)
+    conc_ood: np.ndarray = None  # (n_pix, Knb) invalid/OOD concentration estimate
+    conc_ranges: np.ndarray = None  # (Knb, 2) reportable calibration range (M)
     pp_theta: np.ndarray = None  # (n_pix,) total surface coverage Σθ per pixel
     calib_r2: np.ndarray = None  # (Knb,) isotherm fit R² per substance
+    calib_slope: np.ndarray = None  # (Knb,) gA*K — signal per molar at low C
+    bg_score: np.ndarray = None  # (n_pix,) match to the MEASURED background (0..1)
+    bg_thr: float = None         # score at/above which a pixel is judged background
+    hit_rule: str = ""           # which single rule decided background vs substance
 
 
 def _baseline_removed(cube, baseline):
@@ -93,8 +105,116 @@ def _templates(data_dir, baseline, progress):
     return names, wn, np.array(means)
 
 
+def vip_bands(axis, ref_spectra, names, k=2, min_purity=0.5, lo=400.0, hi=1800.0):
+    """Per-compound VIP-style marker band(s): among each compound's REAL peaks, the
+    one(s) where its L2-normalised reference SHAPE most exceeds every OTHER compound
+    (least cross-talk). L2-normalising first removes the response-factor bias so a
+    strong emitter doesn't win every band. Returns {name: [wavenumbers]}.
+
+    UI-agnostic mirror of the Quantify page's ``_vip_peaks`` so Validate / Real can
+    unmix on the same discriminative bands the user quantifies on."""
+    from scipy.signal import find_peaks
+    axis = np.asarray(axis, float)
+    R = np.asarray(ref_spectra, float)
+    R = R / (np.linalg.norm(R, axis=1, keepdims=True) + 1e-12)      # shape, not magnitude
+    band = (axis >= lo) & (axis <= hi)
+    if band.sum() < 5:
+        band = np.ones(len(axis), bool)
+    out = {}
+    for i, nm in enumerate(names):
+        others = np.delete(R, i, axis=0)
+        omax = others.max(axis=0) if len(others) else np.zeros(R.shape[1])
+        score = R[i] - omax                                        # one-vs-rest separation
+        idx, _ = find_peaks(R[i], prominence=(R[i].max() or 1.0) * 0.05)
+        idx = [j for j in idx if band[j]]
+        if not idx:
+            idx = [int(np.argmax(np.where(band, score, -np.inf)))]
+        ordered = sorted(idx, key=lambda j: score[j], reverse=True)
+        chosen = []
+        for j in ordered:                                          # up to k CLEAN bands
+            pur = float(np.clip(score[j] / (R[i][j] + 1e-12), 0.0, 1.0))
+            if not chosen or (pur >= min_purity and len(chosen) < k):
+                chosen.append(float(axis[j]))
+            if len(chosen) >= k:
+                break
+        out[nm] = chosen
+    return out
+
+
+def compute_vip_bands(data_dir, baseline=True, trim=None, k=2, lo=400.0, hi=1800.0):
+    """Load the references in ``data_dir`` and return (nb_names, {name: [wavenumbers]})
+    of the non-background substances' VIP marker bands — for the Validate UI to show
+    and edit before it drives the VIP-band NNLS."""
+    names, wn, means = _templates(data_dir, baseline, None)
+    if trim is not None:
+        lo_t, hi_t = trim
+        m = (wn >= lo_t) & (wn <= hi_t)
+        if m.sum() >= 10:
+            means = means[:, m]; wn = wn[m]
+    nonbg = [i for i in range(len(names)) if not is_blank(names[i])]
+    nb_names = [names[i] for i in nonbg]
+    ref = _baseline_removed(means[nonbg], baseline)
+    return nb_names, vip_bands(wn, ref, nb_names, k=k, lo=lo, hi=hi)
+
+
+def _bg_match(X, mu, V):
+    """Per-row R² of reconstructing X from the background subspace (mean ``mu`` +
+    principal directions ``V``). 1 = the pixel is fully explained by background."""
+    Z = X - mu
+    rec = Z @ V.T @ V
+    ss_res = ((Z - rec) ** 2).sum(axis=1)
+    ss_tot = ((X - X.mean(axis=1, keepdims=True)) ** 2).sum(axis=1)
+    return np.clip(1.0 - np.divide(ss_res, ss_tot, out=np.ones_like(ss_res),
+                                   where=ss_tot > 0), 0.0, 1.0)
+
+
+def _bg_subspace(bg_paths, wn, baseline, trim, n_comp=6):
+    """Learn the MEASURED background from blank map(s): (mu, V, thr) where mu + V
+    span the background spectra (same preprocessing as the test pixels) and thr is
+    a self-calibrated match score — fit on half the background pixels, thr = the
+    5th percentile of the OTHER half's scores, so ~95% of true background passes
+    without hand-tuning. A test pixel scoring >= thr is judged background."""
+    rows = []
+    for p in bg_paths:
+        wn_b, cube, _m, _c = load_map(p)
+        wn_b = np.asarray(wn_b, float); cube = np.asarray(cube, float)
+        if trim is not None:
+            lo, hi = trim
+            mb = (wn_b >= lo) & (wn_b <= hi)
+            if mb.sum() >= 10:
+                wn_b = wn_b[mb]; cube = cube[:, mb]
+        Xb = _baseline_removed(cube, baseline)
+        if len(wn_b) != len(wn) or not np.allclose(wn_b, wn):
+            Xb = np.stack([np.interp(wn, wn_b, y) for y in Xb])
+        rows.append(_l2(Xb))
+    B = np.vstack(rows)
+    if len(B) >= 8:                       # held-out half keeps the threshold honest
+        fit, hold = B[0::2], B[1::2]
+    else:
+        fit, hold = B, B
+    mu = fit.mean(axis=0)
+    k = int(min(n_comp, max(1, len(fit) - 1)))
+    _u, _s, Vt = np.linalg.svd(fit - mu, full_matrices=False)
+    V = Vt[:k]
+    thr = float(np.quantile(_bg_match(hold, mu, V), 0.05))
+    return mu, V, thr
+
+
+def _vip_fit_mask(wn, peak_map, window, min_pts):
+    """Boolean mask over ``wn`` = union of each compound's VIP band ± window. None when
+    no peak_map, or too few points to fit ``min_pts`` components (falls back to full)."""
+    if not peak_map:
+        return None
+    mask = np.zeros(len(wn), bool)
+    for bands in peak_map.values():
+        for b in np.atleast_1d(bands):
+            mask |= (wn >= float(b) - window) & (wn <= float(b) + window)
+    return mask if mask.sum() >= max(min_pts, 3) else None
+
+
 def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
               min_frac=0.05, hit_mode="threshold", calib_path=None,
+              peak_map=None, peak_window=10.0, dl_model=None, bg_map=None,
               progress=None) -> UnmixResult:
     """Unmix ``test_path`` against the substances in ``data_dir`` (background
     included) by ``method`` ('nnls' or 'mcr'). ``hit_mode`` decides which pixels
@@ -102,7 +222,24 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     directly (a pixel is a hit when its strongest component is a substance, not the
     blank — threshold-free), 'threshold' uses ``min_frac`` (the substances must make
     up at least that fraction of the pixel). If ``calib_path`` (a dilution-series
-    CSV) is given, also recover per-pixel absolute concentration (M)."""
+    CSV) is given, also recover per-pixel absolute concentration (M).
+
+    ``peak_map`` ({name: [wavenumbers]}) restricts the NNLS fit to each compound's VIP
+    marker-band windows (± ``peak_window`` cm⁻¹): the composition is then decomposed on
+    the least-cross-talk discriminative bands instead of the whole spectrum. Display /
+    band-image spectra stay full; only the abundance fit (and its reconstruction R²) use
+    the masked region. Ignored for method='mcr'.
+
+    ``bg_map`` (path or list of paths to MEASURED blank/background maps, e.g. Pest/BLk)
+    judges each pixel background vs substance directly: pixels whose spectrum is
+    explained by the measured-background subspace are background no matter what the
+    unmix says — so the hit decision no longer leans on NNLS abundances.
+
+    NOTE: the measured substrate is deliberately NOT subtracted from the spectra the
+    composition model reads. That was tried and measurably hurt (see the commit that
+    reverted it): the model is trained on spectra that still carry their own substrate,
+    so handing it background-subtracted input is a fresh distribution mismatch, and the
+    background basis shaves real substance signal along with the substrate."""
     names, wn, means = _templates(data_dir, baseline, progress)
     wn_u, cube_u, _mean_u, coord = load_map(test_path)
 
@@ -122,20 +259,74 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     bg_mask = np.array([is_blank(c) for c in names])
     nonbg = [i for i in range(K) if not bg_mask[i]]
 
+    bg_score = bg_thr = None
+    if bg_map:
+        paths = [bg_map] if isinstance(bg_map, str) else list(bg_map)
+        if progress:
+            progress("learning the measured background")
+        mu_b, V_b, bg_thr = _bg_subspace(paths, wn, baseline, trim)
+        bg_score = _bg_match(X, mu_b, V_b)
+
     if method == "mcr":
         if progress:
             progress("MCR-ALS refining component spectra")
         A, templates = _mcr_als(X, templates, progress=progress)
+        fit_T, fit_X = templates, X                        # peak_map ignored for MCR
+    elif method == "dl":
+        if progress:
+            progress("training ResNet1D unmixer on the references")
+        try:
+            from unmix_net import unmixer_from_templates
+        except ImportError as e:
+            raise RuntimeError("the ResNet1D (DL) method needs PyTorch") from e
+        net = unmixer_from_templates(names, templates, epochs=40, n_train=6000, seed=0)
+        A = net.predict_abundance(X)
+        fit_T, fit_X = templates, X
     else:
-        A = np.zeros((len(X), K))
-        for i, y in enumerate(X):
-            A[i], _ = nnls(templates.T, y)
+        # optional: fit only on the VIP marker-band windows (least cross-talk). Keeps
+        # `templates`/`spectra` full for display; A + reliab use the masked region.
+        fit_mask = _vip_fit_mask(wn, peak_map, peak_window, K)
+        if fit_mask is not None:
+            fit_T = _l2(_baseline_removed(means, baseline)[:, fit_mask])
+            fit_X = _l2(spectra[:, fit_mask])
+            if progress:
+                progress(f"VIP-band NNLS — {int(fit_mask.sum())}/{len(wn)} points")
+        else:
+            fit_T, fit_X = templates, X
+        A = np.zeros((len(fit_X), K))
+        for i, y in enumerate(fit_X):
+            A[i], _ = nnls(fit_T.T, y)
             if progress and i % 300 == 0:
-                progress(f"NNLS unmixing — pixel {i}/{len(X)}")
+                progress(f"NNLS unmixing — pixel {i}/{len(fit_X)}")
+    A_ls = A                             # least-squares abundances, for the R² QC
+    if method == "dlpx" and dl_model is not None:
+        # the trained composition model, run per pixel: it replaces the abundance
+        # channels. The reliability (R²) mask stays on the NNLS reconstruction
+        # (A_ls) — the model outputs are probabilities, not fit coefficients, so
+        # reconstructing from them would misread nearly every pixel as low-R².
+        if progress:
+            progress("composition model — per-pixel prediction")
+        from dl_model import apply_model_pixels
+        A_ls = A.copy()
+        Pk = apply_model_pixels(dl_model, wn, spectra)              # (n_px, n_subs)
+        sub_names = dl_model.get("subs", [])
+        blank = dl_model.get("blank")
+        if blank and blank in sub_names:
+            # the model judges background itself: use its channels directly, including
+            # the blank one, so hit/background no longer depends on NNLS
+            for j, nm in enumerate(sub_names):
+                tgt = nm if nm in names else next((c for c in names if is_blank(c)), None)
+                if tgt in names:
+                    A[:, names.index(tgt)] = Pk[:, j]
+        else:
+            tot = A[:, nonbg].sum(1, keepdims=True)                 # keep NNLS' substance mass
+            for j, nm in enumerate(sub_names):
+                if nm in names:
+                    A[:, names.index(nm)] = Pk[:, j] * tot[:, 0]
 
-    recon = A @ templates
-    ss_res = np.sum((X - recon) ** 2, axis=1)
-    ss_tot = np.sum((X - X.mean(axis=1, keepdims=True)) ** 2, axis=1)
+    recon = A_ls @ fit_T
+    ss_res = np.sum((fit_X - recon) ** 2, axis=1)
+    ss_tot = np.sum((fit_X - fit_X.mean(axis=1, keepdims=True)) ** 2, axis=1)
     reliab = np.clip(1.0 - np.divide(ss_res, ss_tot, out=np.ones_like(ss_res),
                                      where=ss_tot > 0), 0.0, 1.0)
 
@@ -144,23 +335,89 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     Anb = A[:, nonbg]
     nb_tot = Anb.sum(axis=1, keepdims=True)
     ratio_nb = np.divide(Anb, nb_tot, out=np.zeros_like(Anb), where=nb_tot > 0)
-    if hit_mode == "auto":                            # BLK-based: strongest wins
-        hit = ~bg_mask[A.argmax(axis=1)]
+    # ---- background vs substance: NNLS decides, the model composes ----------
+    # The composition model's blank channel was given this call and it buried the
+    # signal: pixels whose spectrum plainly shows a THI peak came back "background",
+    # and a letters map with visible ink read 1% hit. The point of the experiment is
+    # that ink marks where the signal is, so the call goes back to the least-squares
+    # abundances — the same rule the NNLS method uses, on the same templates, which
+    # reads that map at 44% hit. The model is left doing what it is good at: saying
+    # WHICH substances a hit pixel holds. A loaded background map still overrides,
+    # since that is a direct measurement of this sample's own substrate.
+    ls_tot = A_ls.sum(axis=1, keepdims=True)
+    ls_frac = np.divide(A_ls, ls_tot, out=np.zeros_like(A_ls), where=ls_tot > 0)
+    if bg_score is not None:
+        hit = bg_score < bg_thr
+        hit_rule = f"measured background map (match < {bg_thr:.2f})"
+    elif hit_mode == "auto":                          # strongest least-squares component
+        hit = ~bg_mask[A_ls.argmax(axis=1)]
+        hit_rule = "strongest reference component is a substance (NNLS, auto)"
     else:                                             # substance share above threshold
-        hit = frac[:, nonbg].sum(axis=1) >= min_frac
+        hit = ls_frac[:, nonbg].sum(axis=1) >= min_frac
+        hit_rule = f"NNLS substance share ≥ {min_frac:.2f}"
     hit_frac = float(hit.mean())
     mean_ratio = ratio_nb[hit].mean(axis=0) if hit.any() else ratio_nb.mean(axis=0)
     dominant = [names[i] for i in nonbg][int(mean_ratio.argmax())] if nonbg else names[0]
 
     # ---- optional: per-pixel ABSOLUTE concentration via Langmuir calibration ----
     calibrated, conc, conc_avg, pp_theta, calib_r2 = False, None, None, None, None
+    conc_ood, conc_ranges = None, None
+    calib_slope = None
+    # Concentration from the MODEL when one is driving the composition: the same µM head
+    # the summary line reports, run per pixel. The Langmuir path stays available and wins
+    # when a calibration is explicitly loaded.
+    if (method == "dlpx" and dl_model is not None and dl_model.get("uM")
+            and not calib_path and nonbg):
+        from dl_model import apply_uM_pixels
+        if progress:
+            progress("composition model — per-pixel concentration")
+        um, unames, um_meta = apply_uM_pixels(dl_model, wn, spectra, return_meta=True)
+        if um is not None:
+            conc = np.zeros((len(spectra), len(nonbg)))
+            conc_ood = np.zeros((len(spectra), len(nonbg)), dtype=bool)
+            conc_ranges = np.full((len(nonbg), 2), np.nan)
+            for k, j in enumerate(nonbg):
+                if names[j] in unames:
+                    conc[:, k] = um[:, unames.index(names[j])] * 1e-6      # µM -> M
+                    ui = unames.index(names[j])
+                    if um_meta.get("component_ood") is not None:
+                        conc_ood[:, k] = um_meta["component_ood"][:, ui]
+                    if um_meta.get("ranges_M") is not None:
+                        conc_ranges[k] = um_meta["ranges_M"] [ui]
+            conc[~hit] = 0.0
+            with np.errstate(invalid="ignore"):
+                conc_avg = np.nanmean(conc[hit], axis=0) if hit.any() else np.nanmean(conc, axis=0)
+            calibrated = True
     if calib_path and nonbg:
         nb_names = [names[i] for i in nonbg]
         pures = ref_templates[nonbg]                       # calibrate against the references
-        conc, pp_theta, calib_r2 = _quantify_map(
+        conc, pp_theta, calib_r2, calib_slope = _quantify_map(
             calib_path, nb_names, pures, spectra, wn, trim, baseline, hit, progress)
         conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
         calibrated = True
+
+    conc_median = conc_p10 = conc_p90 = conc_ci_low = conc_ci_high = conc_se = None
+    if calibrated and conc is not None:
+        vals = conc[hit] if hit.any() else conc
+        with np.errstate(invalid="ignore"):
+            conc_median = np.nanmedian(vals, axis=0)
+            conc_p10 = np.nanpercentile(vals, 10, axis=0)
+            conc_p90 = np.nanpercentile(vals, 90, axis=0)
+        # Scan-line cluster bootstrap preserves within-line spatial correlation instead
+        # of treating neighbouring hotspot pixels as independent replicates.
+        xy = coord[hit] if hit.any() else coord
+        axis = int(np.argmin([len(np.unique(xy[:, 0])), len(np.unique(xy[:, 1]))]))
+        labels = xy[:, axis]
+        groups = [np.where(labels == v)[0] for v in np.unique(labels)]
+        rng = np.random.default_rng(0)
+        boot = np.full((1000, vals.shape[1]), np.nan)
+        for b in range(len(boot)):
+            chosen = rng.integers(0, len(groups), len(groups))
+            idx = np.concatenate([groups[j] for j in chosen])
+            boot[b] = np.nanmedian(vals[idx], axis=0)
+        conc_ci_low = np.nanpercentile(boot, 2.5, axis=0)
+        conc_ci_high = np.nanpercentile(boot, 97.5, axis=0)
+        conc_se = np.nanstd(boot, axis=0, ddof=1)
 
     return UnmixResult(
         comps=names, bg_mask=bg_mask, nonbg=nonbg, method=method, wn=wn,
@@ -168,13 +425,21 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         A=A, ratio_nb=ratio_nb, hit=hit, reliab=reliab, n_pixels=len(X),
         hit_frac=hit_frac, mean_ratio=mean_ratio, dominant=dominant,
         mean_r2=float(reliab.mean()), calibrated=calibrated, conc=conc,
-        conc_avg=conc_avg, pp_theta=pp_theta, calib_r2=calib_r2)
+        conc_avg=conc_avg, conc_median=conc_median, conc_p10=conc_p10, conc_p90=conc_p90,
+        conc_ci_low=conc_ci_low, conc_ci_high=conc_ci_high,
+        conc_se=conc_se,
+        pp_theta=pp_theta, calib_r2=calib_r2,
+        calib_slope=calib_slope, conc_ood=conc_ood, conc_ranges=conc_ranges,
+        bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
 
 
 def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
                   progress=None):
     """Absolute concentration (M) per pixel for the non-background substances, from
-    a dilution-series calibration. Returns (conc (n,Knb), theta (n,), r2 (Knb,))."""
+    a dilution-series calibration. Returns (conc (n,Knb), theta (n,), r2 (Knb,),
+    slope (Knb,)) where slope = gA*K is each substance's signal per molar at low
+    concentration — the number that sets how a measured ratio becomes a concentration
+    ratio, and the one worth showing when the two disagree."""
     axis_c, names_c, dils = load_calibration_csv(calib_path)
     cidx = {n: k for k, n in enumerate(names_c)}
     missing = [c for c in nb_names if c not in cidx]
@@ -207,7 +472,7 @@ def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
             progress(f"quantifying — pixel {n}/{len(idx)}")
         q = quantify(spectra[i], pures, calib)
         conc[i] = q["C"]; theta[i] = q["theta_total"]
-    return conc, theta, r2
+    return conc, theta, r2, np.asarray(calib.gA) * np.asarray(calib.K)
 
 
 if __name__ == "__main__":

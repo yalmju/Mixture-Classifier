@@ -1,0 +1,232 @@
+<style>
+  :root{
+    --bg:#f5f7f9; --panel:#ffffff; --ink:#1b2430; --muted:#5c6773; --border:#e4e8ee;
+    --accent:#3a4a5c; --track:#dfe4ea; --dq:#1a73e8; --tbz:#4a9e2a; --thi:#d6336c;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#13171c; --panel:#1a2027; --ink:#e8ecf1; --muted:#98a2ae; --border:#29313b;
+          --accent:#8fa6bd; --track:#2b333d;}
+  }
+  :root[data-theme="dark"]{--bg:#13171c; --panel:#1a2027; --ink:#e8ecf1; --muted:#98a2ae;
+    --border:#29313b; --accent:#8fa6bd; --track:#2b333d;}
+  :root[data-theme="light"]{--bg:#f5f7f9; --panel:#ffffff; --ink:#1b2430; --muted:#5c6773;
+    --border:#e4e8ee; --accent:#3a4a5c; --track:#dfe4ea;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-variant-numeric:tabular-nums;line-height:1.45}
+  .wrap{max-width:1080px;margin:0 auto;padding:22px 20px 40px}
+  h1{font-size:18px;font-weight:700;margin:0 0 2px;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 18px}
+  .grid{display:grid;grid-template-columns:1fr 320px;gap:22px;align-items:start}
+  @media (max-width:800px){.grid{grid-template-columns:1fr}}
+  .stage{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px;
+    display:flex;flex-direction:column;align-items:center;gap:10px}
+  canvas{width:100%;max-width:560px;height:auto;border-radius:8px;touch-action:none}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px 16px 18px;
+    display:flex;flex-direction:column;gap:16px}
+  .seg{display:flex;border:1px solid var(--border);border-radius:9px;overflow:hidden}
+  .seg button{flex:1;border:0;background:transparent;color:var(--muted);padding:9px 0;font-size:13px;
+    font-weight:600;cursor:pointer}
+  .seg button.on{background:var(--accent);color:#fff}
+  .grp{display:flex;flex-direction:column;gap:11px}
+  .lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+  .row{display:flex;align-items:center;gap:10px;font-size:13px}
+  .row label{flex:1;color:var(--ink)}
+  .row .val{color:var(--muted);width:44px;text-align:right;font-size:12px}
+  input[type=range]{-webkit-appearance:none;appearance:none;height:4px;background:var(--track);
+    border-radius:3px;flex:0 0 118px;outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+    background:var(--accent);cursor:pointer;border:2px solid var(--panel);box-shadow:0 0 0 1px var(--border)}
+  input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:var(--accent);
+    cursor:pointer;border:2px solid var(--panel)}
+  .chk{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}
+  .chk input{width:15px;height:15px;accent-color:var(--accent)}
+  .acts{display:flex;gap:8px}
+  .btn{flex:1;border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:9px;
+    padding:9px 0;font-size:13px;font-weight:600;cursor:pointer}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  pre{margin:0;background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:10px;
+    font-size:11px;color:var(--muted);white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .hint{font-size:11.5px;color:var(--muted);line-height:1.5}
+</style>
+
+<div class="wrap">
+  <h1>Ternary figure tuner — SERS composition recovery</h1>
+  <p class="sub">34 Ratio_mix mixtures · drag the sliders, the plot updates live · download the PNG or copy the settings into <code>triangle_combo.py</code>.</p>
+  <div class="grid">
+    <div class="stage">
+      <canvas id="cv" width="1120" height="1080"></canvas>
+      <div class="hint" id="legend"></div>
+    </div>
+    <div class="panel">
+      <div class="grp">
+        <span class="lbl">Method</span>
+        <div class="seg" id="method">
+          <button data-m="nnls" class="on">NNLS</button>
+          <button data-m="dl">DL (ours)</button>
+        </div>
+      </div>
+      <div class="grp">
+        <span class="lbl">Background</span>
+        <div class="row"><label>RGB opacity</label><input type="range" id="bgA" min="0" max="1" step="0.02" value="0.68"><span class="val" id="bgA_v"></span></div>
+      </div>
+      <div class="grp">
+        <span class="lbl">Points</span>
+        <div class="row"><label>size</label><input type="range" id="ptS" min="2" max="16" step="0.5" value="7"><span class="val" id="ptS_v"></span></div>
+        <div class="row"><label>opacity</label><input type="range" id="ptA" min="0.1" max="1" step="0.02" value="0.62"><span class="val" id="ptA_v"></span></div>
+      </div>
+      <div class="grp">
+        <span class="lbl">Group mean (donut)</span>
+        <div class="row"><label>size</label><input type="range" id="cS" min="0" max="34" step="1" value="19"><span class="val" id="cS_v"></span></div>
+        <div class="row"><label>ring width</label><input type="range" id="cW" min="1" max="8" step="0.5" value="3.4"><span class="val" id="cW_v"></span></div>
+      </div>
+      <div class="grp">
+        <span class="lbl">Dominant-region margin</span>
+        <div class="row"><label>width</label><input type="range" id="bW" min="0" max="10" step="0.5" value="4"><span class="val" id="bW_v"></span></div>
+        <div class="seg" id="bcol">
+          <button data-c="white" class="on">white</button>
+          <button data-c="dark">dark</button>
+        </div>
+      </div>
+      <div class="grp">
+        <span class="lbl">Overlays</span>
+        <label class="chk"><input type="checkbox" id="oArr"> drift arrows (solution → predicted)</label>
+        <label class="chk"><input type="checkbox" id="oGrid" checked> ternary gridlines</label>
+        <label class="chk"><input type="checkbox" id="oPts" checked> individual points</label>
+      </div>
+      <div class="acts">
+        <button class="btn primary" id="dl">Download PNG</button>
+        <button class="btn" id="cp">Copy settings</button>
+      </div>
+      <pre id="out"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+const DATA = {"sol": [[0.9091,0.0909,0],[0.9901,0.0099,0],[0.5,0,0.5],[0.9091,0,0.0909],[0.9901,0,0.0099],[0.75,0.25,0],[0.75,0,0.25],[0.8333,0.1667,0],[0.8333,0,0.1667],[0.4762,0.4762,0.0476],[0.3333,0.3333,0.3333],[0.4975,0.4975,0.005],[0.5,0.5,0],[0.0909,0.9091,0],[0.0099,0.9901,0],[0,0.9091,0.0909],[0,0.9901,0.0099],[0,0.5,0.5],[0.25,0.75,0],[0,0.75,0.25],[0.1667,0.8333,0],[0,0.8333,0.1667],[0.4762,0.0476,0.4762],[0.4975,0.005,0.4975],[0.0909,0,0.9091],[0.0099,0,0.9901],[0.0476,0.4762,0.4762],[0.005,0.4975,0.4975],[0,0.0909,0.9091],[0,0.0099,0.9901],[0.25,0,0.75],[0,0.25,0.75],[0.1667,0,0.8333],[0,0.1667,0.8333]],
+"nnls": [[0.1687,0.8313,0],[0.9273,0.0727,0],[0.0051,0.0043,0.9906],[0.546,0,0.454],[0.8985,0,0.1015],[0.7221,0.2604,0.0175],[0.3056,0,0.6944],[0.1352,0.8648,0],[0.0337,0,0.9663],[0.3722,0.2317,0.3961],[0.008,0.0142,0.9778],[0.5632,0.3727,0.0641],[0.5981,0.3792,0.0227],[0.0452,0.9548,0],[0.0099,0.9896,0.0005],[0.033,0.8214,0.1456],[0.0104,0.8137,0.1759],[0,0.0408,0.9592],[0.2575,0.7282,0.0142],[0.0126,0.4621,0.5253],[0.0723,0.9277,0],[0.0012,0.2619,0.7369],[0.0027,0,0.9973],[0.0016,0,0.9984],[0.0012,0,0.9988],[0.0004,0,0.9996],[0.003,0,0.997],[0,0,1],[0,0,1],[0,0,1],[0,0.0008,0.9992],[0,0.0646,0.9354],[0,0,1],[0,0,1]],
+"dl": [[0.8147,0.185,0.0004],[1,0,0],[0.2662,0.1863,0.5475],[0.8905,0.0022,0.1072],[0.9997,0,0.0003],[0.7696,0.2301,0.0004],[0.7243,0.0269,0.2488],[0.2317,0.7646,0.0038],[0.5709,0.1635,0.2656],[0.6474,0.1773,0.1753],[0.4718,0.0312,0.497],[0.5092,0.4881,0.0026],[0.3496,0.6499,0.0005],[0.0147,0.9847,0.0006],[0.0043,0.994,0.0017],[0.0095,0.9857,0.0048],[0.0039,0.8972,0.0989],[0.04,0.1931,0.767],[0.6988,0.3005,0.0007],[0.0005,0.8377,0.1618],[0.0633,0.9332,0.0035],[0.0015,0.5779,0.4206],[0.0762,0.0772,0.8466],[0.0744,0.027,0.8986],[0.0599,0.0909,0.8492],[0.1553,0.1461,0.6987],[0.42,0.0723,0.5078],[0.0746,0.048,0.8774],[0.0065,0.0039,0.9896],[0.0442,0.0235,0.9323],[0.1454,0.1958,0.6587],[0.1501,0.3645,0.4853],[0.0503,0.1097,0.84],[0.1518,0.0596,0.7885]],
+"dom": [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,2,2,1,1,2,2,2,2,2,2]};
+const GC = ["#1a73e8","#4a9e2a","#d6336c"];               // DQ, TBZ, THI
+const GN = ["DQ-dominant","TBZ-dominant","THI-dominant"];
+const CRGB = [[26,115,232],[74,158,42],[214,51,108]];      // DQ, TBZ, THI
+
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+const W=cv.width, H=cv.height, pad=118;
+const TOP=[W/2,pad], BL=[pad,H-pad], BR=[W-pad,H-pad];      // THI top, TBZ BL, DQ BR
+function toXY(c){const dq=c[0],tbz=c[1],thi=c[2];return [thi*TOP[0]+tbz*BL[0]+dq*BR[0], thi*TOP[1]+tbz*BL[1]+dq*BR[1]];}
+
+// RGB background rendered once to an offscreen canvas
+const bg=document.createElement("canvas"); bg.width=W; bg.height=H;
+(function(){
+  const bx=bg.getContext("2d"), img=bx.createImageData(W,H), d=img.data;
+  const det=(BL[1]-BR[1])*(TOP[0]-BR[0])+(BR[0]-BL[0])*(TOP[1]-BR[1]);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const a=((BL[1]-BR[1])*(x-BR[0])+(BR[0]-BL[0])*(y-BR[1]))/det;      // THI
+    const b=((BR[1]-TOP[1])*(x-BR[0])+(TOP[0]-BR[0])*(y-BR[1]))/det;    // TBZ
+    const c=1-a-b;                                                       // DQ
+    const i=(y*W+x)*4;
+    if(a<-0.001||b<-0.001||c<-0.001){d[i+3]=0;continue;}
+    d[i]  =a*CRGB[2][0]+b*CRGB[1][0]+c*CRGB[0][0];
+    d[i+1]=a*CRGB[2][1]+b*CRGB[1][1]+c*CRGB[0][1];
+    d[i+2]=a*CRGB[2][2]+b*CRGB[1][2]+c*CRGB[0][2];
+    d[i+3]=255;
+  }
+  bx.putImageData(img,0,0);
+})();
+
+const S={method:"nnls",bgA:0.68,ptS:7,ptA:0.62,cS:19,cW:3.4,bW:4,bcol:"white",arr:false,grid:true,pts:true};
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+  ctx.save(); ctx.globalAlpha=S.bgA; ctx.drawImage(bg,0,0); ctx.restore();
+  // gridlines
+  if(S.grid){ctx.strokeStyle="rgba(255,255,255,0.55)";ctx.lineWidth=1.4;
+    for(const t of [0.25,0.5,0.75]){
+      for(const [P,Q,R] of [[BR,TOP,BL],[TOP,BR,BL],[BL,BR,TOP]]){
+        ctx.beginPath();
+        ctx.moveTo(P[0]+t*(Q[0]-P[0]),P[1]+t*(Q[1]-P[1]));
+        ctx.lineTo(P[0]+t*(R[0]-P[0]),P[1]+t*(R[1]-P[1]));
+        ctx.stroke();
+      }
+    }
+  }
+  // outline
+  ctx.strokeStyle="#1c2430";ctx.lineWidth=2.4;ctx.lineJoin="round";
+  ctx.beginPath();ctx.moveTo(TOP[0],TOP[1]);ctx.lineTo(BL[0],BL[1]);ctx.lineTo(BR[0],BR[1]);ctx.closePath();ctx.stroke();
+  // dominant-region margin
+  if(S.bW>0){const ctr=[(TOP[0]+BL[0]+BR[0])/3,(TOP[1]+BL[1]+BR[1])/3];
+    const mids=[[(BL[0]+BR[0])/2,(BL[1]+BR[1])/2],[(TOP[0]+BL[0])/2,(TOP[1]+BL[1])/2],[(TOP[0]+BR[0])/2,(TOP[1]+BR[1])/2]];
+    ctx.strokeStyle=S.bcol==="white"?"rgba(255,255,255,0.92)":"rgba(28,36,48,0.6)";
+    ctx.lineWidth=S.bW*2;ctx.lineCap="round";
+    for(const m of mids){ctx.beginPath();ctx.moveTo(ctr[0],ctr[1]);ctx.lineTo(m[0],m[1]);ctx.stroke();}
+  }
+  const M=DATA[S.method];
+  // arrows
+  if(S.arr){ctx.strokeStyle="rgba(43,47,54,0.75)";ctx.fillStyle="rgba(43,47,54,0.75)";ctx.lineWidth=2;
+    for(let i=0;i<M.length;i++){const p0=toXY(DATA.sol[i]),p1=toXY(M[i]);
+      const dx=p1[0]-p0[0],dy=p1[1]-p0[1],L=Math.hypot(dx,dy);if(L<8)continue;
+      ctx.beginPath();ctx.moveTo(p0[0],p0[1]);ctx.lineTo(p1[0],p1[1]);ctx.stroke();
+      const ang=Math.atan2(dy,dx),h=13;
+      ctx.beginPath();ctx.moveTo(p1[0],p1[1]);
+      ctx.lineTo(p1[0]-h*Math.cos(ang-0.4),p1[1]-h*Math.sin(ang-0.4));
+      ctx.lineTo(p1[0]-h*Math.cos(ang+0.4),p1[1]-h*Math.sin(ang+0.4));
+      ctx.closePath();ctx.fill();
+    }
+  }
+  // points
+  if(S.pts){for(let i=0;i<M.length;i++){const p=toXY(M[i]),g=DATA.dom[i];
+    ctx.globalAlpha=S.ptA;ctx.fillStyle=GC[g];ctx.beginPath();ctx.arc(p[0],p[1],S.ptS,0,7);ctx.fill();
+    ctx.globalAlpha=1;ctx.strokeStyle="#fff";ctx.lineWidth=1.4;ctx.stroke();
+  }}
+  ctx.globalAlpha=1;
+  // group centroid donuts
+  if(S.cS>0){for(let g=0;g<3;g++){
+    let sx=0,sy=0,n=0;for(let i=0;i<M.length;i++)if(DATA.dom[i]===g){const p=toXY(M[i]);sx+=p[0];sy+=p[1];n++;}
+    if(!n)continue;const cx=sx/n,cy=sy/n;
+    ctx.fillStyle="rgba(255,255,255,0.95)";ctx.beginPath();ctx.arc(cx,cy,S.cS,0,7);ctx.fill();
+    ctx.strokeStyle=GC[g];ctx.lineWidth=S.cW*2;ctx.stroke();
+  }}
+  // corner labels
+  ctx.textAlign="center";ctx.font="700 30px ui-sans-serif,system-ui,sans-serif";
+  ctx.fillStyle=GC[2];ctx.textBaseline="bottom";ctx.fillText("THI",TOP[0],TOP[1]-14);
+  ctx.textBaseline="top";
+  ctx.fillStyle=GC[1];ctx.fillText("TBZ",BL[0],BL[1]+14);
+  ctx.fillStyle=GC[0];ctx.fillText("DQ",BR[0],BR[1]+14);
+  writeOut();
+}
+function writeOut(){
+  document.getElementById("out").textContent=
+`method       = ${S.method}
+bg alpha     = ${S.bgA}
+point size   = ${S.ptS}   opacity ${S.ptA}
+donut size   = ${S.cS}    ring ${S.cW}
+margin width = ${S.bW}    (${S.bcol})
+arrows ${S.arr}  grid ${S.grid}  points ${S.pts}`;
+  document.getElementById("legend").innerHTML=
+    GN.map((n,i)=>`<span style="color:${GC[i]};font-weight:700">●</span> ${n}`).join(" &nbsp; ")+
+    ` &nbsp; <span style="color:var(--muted)">○ group mean</span>`;
+}
+// wire controls
+function bind(id,key,fmt){const el=document.getElementById(id),v=document.getElementById(id+"_v");
+  const upd=()=>{S[key]=parseFloat(el.value);if(v)v.textContent=fmt?fmt(S[key]):S[key];render();};
+  el.addEventListener("input",upd);upd();}
+bind("bgA","bgA");bind("ptS","ptS");bind("ptA","ptA");bind("cS","cS");bind("cW","cW");bind("bW","bW");
+for(const id of ["oArr","oGrid","oPts"]){const el=document.getElementById(id);
+  el.addEventListener("change",()=>{S.arr=document.getElementById("oArr").checked;
+    S.grid=document.getElementById("oGrid").checked;S.pts=document.getElementById("oPts").checked;render();});}
+document.querySelectorAll("#method button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll("#method button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");S.method=b.dataset.m;render();}));
+document.querySelectorAll("#bcol button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll("#bcol button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");S.bcol=b.dataset.c;render();}));
+document.getElementById("dl").addEventListener("click",()=>{
+  const a=document.createElement("a");a.download=`triangle_${S.method}.png`;a.href=cv.toDataURL("image/png");a.click();});
+document.getElementById("cp").addEventListener("click",()=>{
+  navigator.clipboard&&navigator.clipboard.writeText(document.getElementById("out").textContent);
+  const b=document.getElementById("cp");b.textContent="Copied";setTimeout(()=>b.textContent="Copy settings",1200);});
+render();
+</script>

@@ -128,12 +128,33 @@ def load_spectra_csv(path):
     return np.array(axis), names, np.array(cols).T
 
 
+def _is_number(s):
+    try:
+        float(s)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def load_calibration_csv(path):
     """Return (axis, {compound: (concentrations (k,), spectra (k, n_feat))})."""
     with open(path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
     header = [h.strip() for h in rows[0]]
-    axis = np.array([float(x) for x in header[2:] if x.strip() != ""])
+    wn_cols = [x for x in header[2:] if x != ""]
+    # this loader needs the SPECTRA form (compound, concentration_M, <wavenumbers…>).
+    # A common mistake is feeding calibration_curve.csv / calibration_fit.csv, whose
+    # 3rd column is a label ('B', 'model', …) — fail with an actionable message
+    # instead of a bare float('B') ValueError.
+    if not wn_cols or not all(_is_number(x) for x in wn_cols):
+        got = header[2] if len(header) > 2 else "(none)"
+        raise ValueError(
+            f"'{os.path.basename(path)}' is not a calibration-SPECTRA CSV: its 3rd "
+            f"column header is '{got}', expected a wavenumber. Load "
+            f"'calibration_spectra.csv' (header: compound, concentration_M, <wavenumbers…>) "
+            f"or the original dilution-series folder — not calibration_curve.csv / "
+            f"calibration_fit.csv (those are report tables, not spectra).")
+    axis = np.array([float(x) for x in wn_cols])
     n = len(axis)
     acc = {}
     for r in rows[1:]:
@@ -156,3 +177,20 @@ def write_csv(path, header, rows):
         w.writerow(header)
         for r in rows:
             w.writerow(r)
+
+
+def write_readme(folder, title, sections, figures=None):
+    """Write README.md into ``folder``: a title, each section (heading → list of markdown
+    lines, in insertion order), then a Figures list of (name, description). So the exported
+    PNG/CSV — read out of context — still say WHAT they are, HOW they were made, and the
+    RESULT. ``sections`` is an ordered dict {heading: [lines]}."""
+    lines = [f"# {title}", ""]
+    for heading, body in sections.items():
+        lines.append(f"## {heading}")
+        lines += list(body)
+        lines.append("")
+    if figures:
+        lines.append("## Figures")
+        lines += [f"- {name}.png — {desc}" for name, desc in figures]
+    with open(os.path.join(folder, "README.md"), "w", encoding="utf-8") as f:
+        f.write("\n".join(lines).rstrip() + "\n")

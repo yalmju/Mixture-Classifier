@@ -76,6 +76,43 @@ def fit_isotherm(C_series, B_series):
     return gA, K
 
 
+def fit_sips(C_series, B_series, fix_K=True):
+    """Fit B(C) = gA*(K C)^m / (1 + (K C)^m) — Langmuir with a heterogeneity exponent m.
+
+    Returns (gA, K, m). m=1 is Langmuir; m<1 means a spread of binding energies, which is
+    what a hot-spot SERS substrate has.
+
+    ``fix_K=True`` (default) holds K at the Langmuir fit and frees only (gA, m). Letting
+    all three float makes the fit degenerate — DQ comes back with K=2e-8 and gA=7e8, which
+    reproduces its own curve but is meaningless next to the other compounds. That matters
+    because the COMPETITIVE denominator sums (K_i C_i)^m_i across compounds: the terms must
+    stay on one scale or whichever compound got the odd K silently drops out of the
+    competition. Fixing K isolates the heterogeneity exponent, which is the thing we
+    actually want to carry into the simulator."""
+    C = np.asarray(C_series, float); B = np.asarray(B_series, float)
+    o = np.argsort(C); C, B = C[o], B[o]
+    gA0, K0 = fit_isotherm(C, B)
+
+    def _f_fixed(c, gA, m):
+        u = np.power(np.clip(K0 * c, 0.0, None), m)
+        return gA * u / (1.0 + u)
+
+    def _f_free(c, gA, K, m):
+        u = np.power(np.clip(K * c, 0.0, None), m)
+        return gA * u / (1.0 + u)
+
+    try:
+        if fix_K:
+            popt, _ = curve_fit(_f_fixed, C, B, p0=[gA0, 1.0],
+                                bounds=([0, 0.05], [np.inf, 3.0]), maxfev=40000)
+            return float(popt[0]), float(K0), float(popt[1])
+        popt, _ = curve_fit(_f_free, C, B, p0=[gA0, K0, 1.0],
+                            bounds=([0, 0, 0.05], [np.inf, np.inf, 3.0]), maxfev=40000)
+        return float(popt[0]), float(popt[1]), float(popt[2])
+    except Exception:
+        return gA0, K0, 1.0
+
+
 @dataclass
 class Calibration:
     names: list[str]
@@ -123,13 +160,23 @@ def concentration_from_coverage(theta, K):
     return C
 
 
-def quantify(Y, P, calib: Calibration, present=None):
+def quantify(Y, P, calib: Calibration, present=None, B_predictor=None):
     """Full read-out for one mixture spectrum Y.
 
     present : optional index list of compounds detected in Y; others are
               forced to zero so absent compounds don't get phantom M.
+    B_predictor : optional callable ``Y -> B`` (n_comp,) that replaces the NNLS
+              ``fit_B`` for the single Y->B step — the drift-robust learned map
+              from ``unmix_net.ResNet1DQuantifier`` (drop-in). None keeps NNLS.
+              Everything downstream (θ → absolute M) is unchanged either way.
     Returns a dict (all arrays aligned to calib.names)."""
-    B, residual = fit_B(Y, P)
+    if B_predictor is None:
+        B, residual = fit_B(Y, P)
+    else:
+        Y = np.asarray(Y, float)
+        B = np.clip(np.asarray(B_predictor(Y), float).ravel(), 0.0, None)
+        recon = B @ np.asarray(P, float)                # residual for parity with NNLS
+        residual = float(np.linalg.norm(Y - recon) / (np.linalg.norm(Y) + 1e-12))
     if present is not None:
         mask = np.zeros(calib.n, bool); mask[list(present)] = True
         B = np.where(mask, B, 0.0)

@@ -27,7 +27,25 @@ from sers_mixture import (preprocess, SERSMixtureClassifier, AugmentConfig,
 from competitive import fit_B
 from dataset import discover_dataset, ratio_map_path, load_mixtures, is_blank
 
-PEST_DEFAULT = r"S:\Google Drive\내 드라이브\github\Pest_Discriminator"
+# One developer's Windows path used to be hardcoded here, so on macOS and Linux
+# the app always started pointed at a folder that cannot exist — an empty Samples
+# list with nothing explaining why. Resolve per machine instead, keeping that path
+# working on the Windows box where it does exist.
+_LEGACY_WIN_DEFAULT = r"S:\Google Drive\내 드라이브\github\Pest_Discriminator"
+
+
+def _default_data_dir():
+    """Folder the app opens pointed at: $UNMIXR_DATA, else the legacy Windows
+    path when it really exists, else the directory the app lives in."""
+    env = os.environ.get("UNMIXR_DATA")
+    if env and os.path.isdir(env):
+        return env
+    if os.path.isdir(_LEGACY_WIN_DEFAULT):
+        return _LEGACY_WIN_DEFAULT
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+PEST_DEFAULT = _default_data_dir()
 COMPS = ["DQ", "THI", "TBZ"]
 CLASSES4 = ["DQ", "THI", "TBZ", "BLK"]
 REF_FILES = {"DQ": "DQ_corrected.csv", "THI": "THI_corrected.csv",
