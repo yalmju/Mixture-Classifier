@@ -125,6 +125,64 @@ with open(f"{OUT}/lod_loq.csv", "w", newline="", encoding="utf-8-sig") as f:
     w.writerows(rows)
 print(f"\n  ✓ lod_loq.csv  {len(rows)}행 → {OUT}")
 
+# ------------------------------------------------------------------ 혼합 LOD
+# 단일성분 LOD 는 다른 성분이 없을 때의 값이다. 혼합물에서는 셋이 같은 표면을 나눠
+# 쓰므로 자기 농도당 신호(기울기)가 떨어지고, 맵마다 매트릭스가 달라 산포도 커진다.
+# 64조건 격자에서 **자기 농도에 대한 B 의 기울기**를 직접 재서 그 둘을 다 반영한다.
+import re, glob as _glob, hashlib
+
+LO_MAPS = {}
+_seen = set()
+for p in sorted(_glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
+    if "DQ9-sus" in p:
+        continue
+    h = hashlib.md5(open(p, "rb").read()).hexdigest()
+    if h in _seen:
+        continue
+    _seen.add(h)
+    m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
+    LO_MAPS[p] = np.array([int(m.group(i)) / 3.0 for i in (1, 2, 3)])   # 최종 µM
+
+Cm, Bm = [], []
+for p, c in LO_MAPS.items():
+    _w, cube, _m, _c = load_map(p)
+    ya = _map_spectra(cube, mask, 0)[0]
+    Cm.append(c); Bm.append(fit_B(ya, P)[0][idx])
+Cm = np.array(Cm); Bm = np.array(Bm)
+print(f"\n혼합 격자 {len(Cm)}맵 — 자기 농도 대비 B 의 기울기 (원점 통과)")
+
+mix_rows = []
+print(f"{'성분':>5} | {'혼합 기울기':>10} | {'단일 대비':>8} | {'잔차 σ':>9} | "
+      f"{'LOD(블랭크σ)':>12} | {'LOD(잔차σ)':>11}")
+print("-" * 76)
+for j, s in enumerate(SUB):
+    x, y = Cm[:, j], Bm[:, j]
+    sl = float((x @ y) / (x @ x))
+    resid = y - sl * x
+    sr = float(resid.std(ddof=1))
+    ss = ((y - y.mean()) ** 2).sum()
+    r2 = 1 - (resid ** 2).sum() / ss if ss > 0 else np.nan
+    lod_b = 3.3 * sig_map[j] / sl
+    lod_r = 3.3 * sr / sl
+    print(f"{s:>5} | {sl:10.1f} | {100*sl/slope_work[s]:7.0f}% | {sr:9.1f} | "
+          f"{lod_b:12.2f} | {lod_r:11.2f}")
+    mix_rows.append([s, f"{sl:.4g}", f"{100*sl/slope_work[s]:.1f}", f"{r2:.3f}",
+                     f"{sig_map[j]:.4g}", f"{sr:.4g}",
+                     f"{lod_b:.3f}", f"{10*sig_map[j]/sl:.3f}",
+                     f"{lod_r:.3f}", f"{10*sr/sl:.3f}", str(len(x))])
+
+with open(f"{OUT}/lod_mixture.csv", "w", newline="", encoding="utf-8-sig") as f:
+    w = csv.writer(f)
+    w.writerow(["compound", "mixture_slope_B_per_uM", "pct_of_single_compound_slope",
+                "r2_B_vs_own_conc", "sigma_blank_B", "sigma_residual_B",
+                "lod_uM_blank_sigma", "loq_uM_blank_sigma",
+                "lod_uM_residual_sigma", "loq_uM_residual_sigma", "n_maps"])
+    w.writerows(mix_rows)
+print(f"\n  ✓ lod_mixture.csv  {len(mix_rows)}행")
+print("두 가지를 낸다. **블랭크 σ** 는 감도 저하만 반영한 것이고, **잔차 σ** 는 맵마다")
+print("매트릭스가 달라 생기는 산포까지 넣은 것이라 실제 혼합물에서 검출을 제한하는 값에")
+print("가깝다. 보고할 때 어느 쪽인지 반드시 밝힐 것.")
+
 print("\n보고값은 σ=맵간 · 기울기=작업구간 조합이다 — 판독 단위(맵 하나)와 실제 쓰는")
 print("구간의 감도에 맞춘 것. 픽셀 σ 는 같은 맵 픽셀이 상관돼 있어 낙관적이고,")
 print("초기 기울기는 등온선이 휘기 전 최대 감도라 역시 낙관적이다.")
