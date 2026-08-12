@@ -74,7 +74,7 @@ def _cnn(n_feat, n_comp):
 
 
 def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
-                 n_components=8, n_trees=300, P_ref=None):
+                 n_components=8, n_trees=300, P_ref=None, rf_max_features=None):
     """Fit ``method`` on (Xtr, Ytr) and return composition predictions for Xte, rows
     summing to 1. Shared by the full-data fit and each leave-one-out fold so both use
     exactly the same estimator."""
@@ -88,9 +88,14 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
         nc = max(1, min(int(n_components), len(Xtr) - 1, Xtr.shape[1]))
         p = PLSRegression(n_components=nc).fit(Xtr, Ytr).predict(np.atleast_2d(Xte))
     elif method == "rf":
+        # max_features: sklearn's REGRESSOR default is 1.0 — every split reads all ~2000
+        # spectral channels, which is minutes per fit here. 'sqrt' is the usual forest
+        # recipe and is what the benchmark passes; None keeps the library default so an
+        # already-trained model scores the same as before.
         from sklearn.ensemble import RandomForestRegressor
-        p = RandomForestRegressor(n_estimators=int(n_trees),
-                                  random_state=int(seed)).fit(Xtr, Ytr).predict(np.atleast_2d(Xte))
+        kw = {} if rf_max_features is None else {"max_features": rf_max_features}
+        p = RandomForestRegressor(n_estimators=int(n_trees), random_state=int(seed),
+                                  **kw).fit(Xtr, Ytr).predict(np.atleast_2d(Xte))
     elif method == "cnn":
         import torch
         torch.manual_seed(int(seed)); net = _cnn(Xtr.shape[1], n_comp)
@@ -770,7 +775,7 @@ def kfold_stability(data_dir, items, method="mlp", folds=5, progress=None, seed=
 def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                   methods=("nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
                   use_pretrain=True,
-                  n_components=8, n_trees=300, px_per_map=0):
+                  n_components=8, n_trees=300, px_per_map=0, rf_max_features=None):
     """Leave-one-out comparison of the composition methods on the SAME mixtures — the
     honest counterpart to the train-set numbers. Maps are loaded once, then every method
     is refit per fold. Returns {method: {"true", "pred"}} plus "subs"."""
@@ -823,7 +828,8 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
             te = np.where(gkey == mp)[0]; tr = np.where(gkey != mp)[0]
             pred = _fit_predict(meth, X[tr], Y[tr], X[te], pre=pre, epochs=epochs,
                                 seed=seed + i, n_components=n_components,
-                                n_trees=n_trees, P_ref=P)
+                                n_trees=n_trees, P_ref=P,
+                                rf_max_features=rf_max_features)
             tv.append(Y[te[0]].tolist()); pv.append(np.asarray(pred, float).mean(0).tolist())
         out[meth] = {"true": tv, "pred": pv}
     return out

@@ -74,11 +74,11 @@ for key, n in OLD.items():
         if os.path.exists(p):
             add(p, dict(zip(SUB, map(float, key))))
 
-print(f"{len(items)}맵 · epochs={EPOCHS} · px/map={PXPM} · RF trees={TREES}", flush=True)
+print(f"{len(items)}맵 · epochs={EPOCHS} · px/map={PXPM} · RF {TREES} trees, max_features=sqrt", flush=True)
 t0 = time.time()
 res = dl_model.benchmark_loo(PURE, items, calib_path=CALIB, baseline=True, trim=None,
                              epochs=EPOCHS, seed=0, use_pretrain=True, px_per_map=PXPM,
-                             n_trees=TREES,
+                             n_trees=TREES, rf_max_features="sqrt",
                              progress=lambda s: print("   ", s, flush=True))
 subs = res["subs"]
 nb = [s for s in subs if s in SUB]
@@ -133,4 +133,4 @@ write("panel_de_predictions.csv",
       predrows)
 print(f"\n{time.time() - t0:.0f}s · → {OUT}")
 print(f"표에 적을 것: leave-one-condition-out · base 구성(blank/sips 없음, "
-      f"benchmark_loo 가 그 인자를 받지 않는다) · RF {TREES} trees.")
+      f"benchmark_loo 가 그 인자를 받지 않는다) · RF {TREES} trees, max_features=sqrt.")
