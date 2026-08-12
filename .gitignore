@@ -16,3 +16,6 @@ preview_*.png
 real_pest_*.png
 scripts/*.png
 
+# generated caches
+composition_cache.pkl
+

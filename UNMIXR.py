@@ -17,13 +17,16 @@ import os
 import sys
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QIcon, QPixmap
+from PyQt6.QtGui import QFontDatabase, QIcon, QPixmap, QColor
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QFrame,
-    QHBoxLayout, QVBoxLayout, QStackedWidget,
+    QHBoxLayout, QVBoxLayout, QStackedWidget, QColorDialog,
 )
 
-from ui_common import APP_NAME, VERSION, ICON_PATH, QSS
+from ui_common import (APP_NAME, VERSION, ICON_PATH, QSS, INK, COLOR_BUS,
+                       set_substance_colors, substance_colors, substance_color,
+                       stop_worker)
+from dataset import discover_dataset, load_colors, save_colors
 from page_samples import SamplingPage
 from page_model import ModelPage
 from page_quantify import QuantifyPage
@@ -40,7 +43,8 @@ class MainWindow(QMainWindow):
         ("Samples",   "samples", "Group your maps into substance classes (batches)"),
         ("Model",     "model", "Train a classifier on your reference maps"),
         ("Quantify",  "quant", "Ratio → concentration + adsorption competition"),
-        ("Validate",  "valid", "Known-ratio mixtures → response factors (surface vs solution)"),
+        ("Validate",  "valid", "Known-ratio mixtures → response factors + composition "
+                               "(colour blend · drift · recovery)"),
         ("Real data", "real",  "Analyze real maps: composition · mixtures · µM · calibration"),
     ]
 
@@ -74,6 +78,14 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, k=key: self.select(k))
             bl.addWidget(b); self._nav_btns[key] = b
 
+        # per-substance colour picker — one swatch per class; click to recolour
+        # every plot in the app at once (persisted to the dataset's colors.json).
+        bl.addSpacing(14)
+        self._color_bar = QHBoxLayout(); self._color_bar.setSpacing(6)
+        bl.addLayout(self._color_bar)
+        self._color_folder = None
+        self._sub_index = {}
+
         bl.addStretch(1)
         self.status = QLabel(f"{APP_NAME} v{VERSION}"); self.status.setObjectName("status")
         bl.addWidget(self.status)
@@ -102,13 +114,78 @@ class MainWindow(QMainWindow):
         page = self.pages[key]
         if folder and hasattr(page, "set_data_dir"):
             page.set_data_dir(folder)
+        if folder != self._color_folder:                  # refresh swatches on new data
+            self._color_folder = folder
+            self._refresh_colors()
         self.stack.setCurrentWidget(page)
+
+    # ---- top-bar per-substance colour picker -----------------------------
+    def _refresh_colors(self):
+        """Rebuild the swatch row from the current dataset's classes."""
+        while self._color_bar.count():
+            it = self._color_bar.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        folder = self._color_folder
+        names = []
+        if folder:
+            try:
+                names = [c for c, _ in discover_dataset(folder)]
+            except Exception:
+                names = []
+        if not names:
+            return
+        set_substance_colors(load_colors(folder))         # adopt saved choices
+        self._sub_index = {nm: i for i, nm in enumerate(names)}
+        lbl = QLabel("colours:"); lbl.setObjectName("field")
+        self._color_bar.addWidget(lbl)
+        for i, nm in enumerate(names):
+            self._color_bar.addWidget(self._color_swatch(nm, substance_color(nm, i)))
+
+    def _color_swatch(self, name, color):
+        b = QPushButton(name); b.setObjectName("ghost"); b.setFixedHeight(24)
+        b.setStyleSheet(f"QPushButton{{border:2px solid {color};border-radius:6px;"
+                        f"padding:2px 10px;color:{INK};}}")
+        b.clicked.connect(lambda _=False, nm=name: self._pick_color(nm))
+        return b
+
+    def _pick_color(self, name):
+        idx = self._sub_index.get(name, 0)
+        c = QColorDialog.getColor(QColor(substance_color(name, idx)), self,
+                                  f"Colour for {name}")
+        if not c.isValid():
+            return
+        mapping = substance_colors(); mapping[name] = c.name()
+        set_substance_colors(mapping)
+        if self._color_folder:
+            try:
+                save_colors(self._color_folder, mapping)
+            except Exception as exc:
+                print("save colors:", exc, file=sys.stderr)
+        COLOR_BUS.changed.emit()                           # recolour every page
+        self._refresh_colors()
+
+    # ---- shutdown --------------------------------------------------------
+    def closeEvent(self, event):
+        """Join every page's background job before the window goes away.
+
+        Qt aborts the process (exit code 0xC0000409 on Windows) if a QThread is
+        destroyed while still running, so closing the app mid-train must wait for
+        the worker instead of tearing it down underneath itself.
+        """
+        for page in self.pages.values():
+            stop_worker(page)
+        super().closeEvent(event)
 
 
 def main():
     app = QApplication(sys.argv)
     app.setStyleSheet(QSS)
-    app.setFont(QFont("Segoe UI", 10))
+    # the real OS UI font: Segoe UI on Windows, SF Pro on macOS, the desktop's
+    # font on Linux — hardcoding "Segoe UI" left mac/Linux on a Qt fallback
+    ui_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+    ui_font.setPointSize(10)
+    app.setFont(ui_font)
     if os.path.exists(ICON_PATH):
         app.setWindowIcon(QIcon(ICON_PATH))
     win = MainWindow()
