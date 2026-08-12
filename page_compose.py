@@ -980,6 +980,17 @@ class ComposePanel(QWidget):
             write_csv(os.path.join(d, "benchmark_predictions.csv"),
                       ["method", "mixture"] + [f"true_{s}" for s in subs]
                       + [f"pred_{s}" for s in subs], rows_out)
+            # the ROC panel was the one figure leaving without its numbers — only the
+            # pooled AUC was written, and a curve cannot be redrawn from a single scalar.
+            curve = []
+            for m, rws in bench.items():
+                fpr, tpr, _a = self._roc(rws)
+                if fpr is None:
+                    continue
+                curve += [[m, f"{a:.5f}", f"{b:.5f}"] for a, b in zip(fpr, tpr)]
+            if curve:
+                write_csv(os.path.join(d, "benchmark_roc_curves.csv"),
+                          ["method", "fpr", "tpr"], curve)
             n += _save_figs([("benchmark_error", self.c_err),
                              ("benchmark_roc", self.c_roc)], d)
         if kf:
