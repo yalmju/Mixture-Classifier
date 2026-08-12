@@ -775,7 +775,8 @@ def kfold_stability(data_dir, items, method="mlp", folds=5, progress=None, seed=
 def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                   methods=("nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
                   use_pretrain=True,
-                  n_components=8, n_trees=300, px_per_map=0, rf_max_features=None):
+                  n_components=8, n_trees=300, px_per_map=0, rf_max_features=None,
+                  cnn_epochs=None):
     """Leave-one-out comparison of the composition methods on the SAME mixtures — the
     honest counterpart to the train-set numbers. Maps are loaded once, then every method
     is refit per fold. Returns {method: {"true", "pred"}} plus "subs"."""
@@ -826,7 +827,11 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
                 progress(f"{meth.upper()} leave-one-condition-out {i + 1}/{len(uniq)}  "
                          f"[{mi + 1}/{len(methods)} methods]")
             te = np.where(gkey == mp)[0]; tr = np.where(gkey != mp)[0]
-            pred = _fit_predict(meth, X[tr], Y[tr], X[te], pre=pre, epochs=epochs,
+            # 1D-CNN 은 길이 2001 입력을 full-batch 로 도느라 fold 당 몇 분씩 걸린다.
+            # epoch 을 따로 줄일 수 있게 열어 둔다 — 기본값 None 이면 다른 방법과 같다.
+            # 줄이면 CNN 이 **덜 학습된 상태로** 채점되므로 캡션에 반드시 밝힐 것.
+            ep = int(cnn_epochs) if (meth == "cnn" and cnn_epochs) else epochs
+            pred = _fit_predict(meth, X[tr], Y[tr], X[te], pre=pre, epochs=ep,
                                 seed=seed + i, n_components=n_components,
                                 n_trees=n_trees, P_ref=P,
                                 rf_max_features=rf_max_features)

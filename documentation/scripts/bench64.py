@@ -8,7 +8,11 @@
   다만 `benchmark_loo` 는 방법 비교용이라 `include_blank` · `sim_iso` 를 받지 않는다 —
   **채택 구성이 아니라 base 구성에서의 방법 비교**다. 표에 그렇게 적을 것.
 
-  실행:  python3 -u bench64.py [epochs=120] [px_per_map=20] [n_trees=100]
+  실행:  python3 -u bench64.py [epochs=120] [px_per_map=20] [n_trees=100] [cnn_epochs=40]
+
+  ⚠ CNN 은 길이 2001 입력을 full-batch 로 돌아 fold 당 5분이었다. epoch 을 40 으로
+    줄여 감당 가능한 시간에 맞췄다. **CNN 이 덜 학습된 상태로 채점된다** — 'CNN 이
+    MLP 보다 나쁘다' 를 근거로 쓸 때 이 사실을 같이 적어야 한다.
 
   RF 가 병목이다. sklearn 의 `RandomForestRegressor` 는 회귀에서 `max_features=1.0`
   이라 분할마다 특징 2001개를 전부 본다 — 300트리면 fold 하나에 5분, 68 fold 면 6시간.
@@ -33,6 +37,7 @@ SUB = ["DQ", "TBZ", "THI"]
 EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 120
 PXPM = int(sys.argv[2]) if len(sys.argv) > 2 else 20
 TREES = int(sys.argv[3]) if len(sys.argv) > 3 else 100
+CNN_EP = int(sys.argv[4]) if len(sys.argv) > 4 else 40
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -74,11 +79,12 @@ for key, n in OLD.items():
         if os.path.exists(p):
             add(p, dict(zip(SUB, map(float, key))))
 
-print(f"{len(items)}맵 · epochs={EPOCHS} · px/map={PXPM} · RF {TREES} trees, max_features=sqrt", flush=True)
+print(f"{len(items)}맵 · epochs={EPOCHS} · px/map={PXPM} · RF {TREES} trees, max_features=sqrt · CNN {CNN_EP} epochs", flush=True)
 t0 = time.time()
 res = dl_model.benchmark_loo(PURE, items, calib_path=CALIB, baseline=True, trim=None,
                              epochs=EPOCHS, seed=0, use_pretrain=True, px_per_map=PXPM,
                              n_trees=TREES, rf_max_features="sqrt",
+                             cnn_epochs=CNN_EP,
                              progress=lambda s: print("   ", s, flush=True))
 subs = res["subs"]
 nb = [s for s in subs if s in SUB]
@@ -133,4 +139,6 @@ write("panel_de_predictions.csv",
       predrows)
 print(f"\n{time.time() - t0:.0f}s · → {OUT}")
 print(f"표에 적을 것: leave-one-condition-out · base 구성(blank/sips 없음, "
-      f"benchmark_loo 가 그 인자를 받지 않는다) · RF {TREES} trees, max_features=sqrt.")
+      f"benchmark_loo 가 그 인자를 받지 않는다) · RF {TREES} trees, max_features=sqrt · "
+      f"**CNN 은 {CNN_EP} epoch 으로 줄여 돌렸다** (다른 방법은 {EPOCHS}) — "
+      f"CNN 이 불리한 쪽으로 치우친 비교다. 캡션에 반드시 적을 것.")
