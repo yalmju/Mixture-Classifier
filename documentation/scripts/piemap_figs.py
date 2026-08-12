@@ -1,143 +1,75 @@
-"""파이 + 픽셀맵 재생성 — 2단계: 그림 (piemap_data.pkl 만 읽는다, 빠름).
+"""파이 · 격자 · 픽셀맵 그림 — `piemap_compute.py` 가 만든 캐시만 읽는다 (빠름).
 
-  fig5_pies65.png        조건별 조성 파이 65개 — map-level, leave-one-condition-out
-  fig11_pixelmap65.png   조건별 10×10 픽셀 파이맵 65개 (조건당 첫 맵)
-  pixelmaps/<맵>.png     맵 하나짜리 큰 픽셀 파이맵 80장 — 앱 Real data 탭과 같은 그림
+  그리는 코드는 전부 저장소 루트의 `grid_figs.py` 에 있고 앱(Model 탭 Export)이 같은 걸
+  쓴다. 여기는 캐시를 그 서명에 맞춰 넘기고 파일로 떨어뜨리는 껍데기다 — 그림이 앱과
+  스크립트에서 달라지는 일이 없도록.
 
-  색·형식은 labfig(= 앱 ui_common + Pure/colors.json). 배경 투명, 600 dpi.
-  실행:  python3 -u piemap_figs.py
+  나오는 것
+    fig5_pies65.png            조건별 조성 파이
+    fig12_grid_truepred.png    격자 · 위=참 / 아래=예측
+    fig9_grid_error.png        격자 오차 히트맵 (반복산포 하한 … 무정보 기준선 눈금)
+    fig11_pixelmap65.png       조건별 10×10 픽셀 조성맵
+    *.csv                      각 그림의 숫자 (Origin 에서 다시 그릴 때 쓴다)
+
+  실행:  python3 -u piemap_figs.py [캐시폴더]
 """
-import os, sys, pickle
+import os, sys, csv, pickle, json
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, REPO)
+import grid_figs as GF
+
 DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-sys.path.insert(0, f"{DB}/260808_data interpret/64conditions")
-import labfig
-labfig.setup()
-import matplotlib.pyplot as plt
-from matplotlib.patches import Wedge, Patch
-from matplotlib.collections import PatchCollection
+CACHE = sys.argv[1] if len(sys.argv) > 1 else f"{DB}/260808_data interpret/piemap_260812"
+SAVE = dict(dpi=600, transparent=True, bbox_inches="tight", pad_inches=0.01)
+FALLBACK = {"DQ": "#008cf7", "TBZ": "#95dc2a", "THI": "#f35376"}
 
-CO, SUB = labfig.CO, labfig.SUB
-INK = "#1c2430"
-BG_GREY = "#c9ced6"
+d = pickle.load(open(f"{CACHE}/piemap_data.pkl", "rb"))
+cond, maps, SUB = d["cond"], d["maps"], d["sub"]
+try:
+    CO = json.load(open(f"{DB}/Pure/colors.json"))
+except Exception:
+    CO = FALLBACK
+COLS = [CO.get(s, FALLBACK.get(s, "#888888")) for s in SUB]
 
-d = pickle.load(open(f"{HERE}/piemap_data.pkl", "rb"))
-cond, maps, keys = d["cond"], d["maps"], sorted(d["cond"])
+keys = sorted(cond)
+rows = [("/".join(str(v) for v in k) + " µM", cond[k]["true"], cond[k]["pred"]) for k in keys]
+errs = np.array([GF.comp_error(r[1], r[2]) for r in rows])
 print(f"{len(keys)}조건 · {len(maps)}맵 · 구성 {d['arm']}")
+print(f"평균 {errs.mean():.1f}%  중앙 {np.median(errs):.1f}%  "
+      f"무정보 기준선 {GF.null_error([r[1] for r in rows]):.1f}%")
 
 
-def nice(k):
-    return f"{k[0]}/{k[1]}/{k[2]}"
+def save(fig, name):
+    if fig is None:
+        print(f"  (건너뜀) {name}"); return
+    fig.savefig(f"{CACHE}/{name}.png", **SAVE)
+    print(f"  {name}.png")
 
 
-# ------------------------------------------------------------------ fig5: 조건별 파이 65개
-nc = 9
-nr = int(np.ceil(len(keys) / nc))
-fig, axes = plt.subplots(nr, nc, figsize=(1.62 * nc, 1.92 * nr))
-for ax in np.ravel(axes):
-    ax.axis("off")
-for idx, k in enumerate(keys):
-    ax = np.ravel(axes)[idx]
-    t, p = cond[k]["true"], cond[k]["pred"]
-    keep = [i for i in range(3) if p[i] >= 1.0] or [int(np.argmax(p))]
-    ax.pie([p[i] for i in keep], labels=[SUB[i] for i in keep],
-           colors=[CO[SUB[i]] for i in keep], autopct="%1.0f%%",
-           textprops={"fontsize": 6.0, "color": INK}, radius=1.0)
-    ax.set_aspect("equal")
-    ax.set_title(f"{nice(k)} μM\ntrue {'/'.join(f'{v:.0f}' for v in t)}  ·  "
-                 f"err {cond[k]['err']:.0f}%", fontsize=6.6, pad=1.5)
-errs = [cond[k]["err"] for k in keys]
-fig.suptitle(f"Predicted composition per condition — MLP (blank+sips), "
-             f"leave-one-condition-out · {len(keys)} conditions, "
-             f"mean {np.mean(errs):.1f}% · median {np.median(errs):.1f}%",
-             fontsize=11, fontweight="bold")
-fig.tight_layout(rect=[0, 0.005, 1, 0.965])
-fig.savefig(f"{HERE}/fig5_pies65.png", **labfig.SAVE)
-plt.close(fig)
-print("fig5_pies65.png")
+def table(name, header, body):
+    with open(f"{CACHE}/{name}.csv", "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f); w.writerow(header); w.writerows(body)
+    print(f"  {name}.csv ({len(body)}행)")
 
 
-# ------------------------------------------------------------------ 픽셀 파이맵 그리기
-def pixel_pies(ax, m, rad_scale=0.46, bg_size=16):
-    """앱 page_real._plot_pies 와 같은 그림: hit 픽셀은 파이, 나머지는 회색 사각."""
-    x, y = m["coords"][:, 0], m["coords"][:, 1]
-    ux = np.unique(x)
-    rad = (np.median(np.diff(ux)) * rad_scale) if len(ux) > 1 else rad_scale
-    hit = m["hit"]
-    cols = [CO.get(c, BG_GREY) for c in m["comps"]]
-    if (~hit).any():
-        ax.scatter(x[~hit], y[~hit], c=BG_GREY, marker="s", s=bg_size, edgecolors="none")
-    wedges, wcols = [], []
-    for i in np.where(hit)[0]:
-        a0 = 90.0
-        for k, frac in enumerate(m["ratio"][i]):
-            if frac <= 0.002:
-                continue
-            a1 = a0 - frac * 360.0
-            wedges.append(Wedge((x[i], y[i]), rad, a1, a0))
-            wcols.append(cols[k])
-            a0 = a1
-    if wedges:
-        ax.add_collection(PatchCollection(wedges, facecolors=wcols, edgecolors="none"))
-    ax.set_xlim(x.min() - 1, x.max() + 1)
-    ax.set_ylim(y.max() + 1, y.min() - 1)
-    ax.set_aspect("equal")
-    ax.set_xticks([]); ax.set_yticks([])
-    for sp in ax.spines.values():
-        sp.set_visible(False)
-    return cols
+save(GF.composition_pies(rows, SUB, COLS,
+                         title=f"Predicted composition per condition — "
+                               f"leave-one-condition-out · {len(keys)} conditions"),
+     "fig5_pies65")
+save(GF.grid_truepred(rows, keys, SUB, COLS), "fig12_grid_truepred")
+save(GF.grid_error(rows, keys, SUB), "fig9_grid_error")
 
+first = [(("/".join(str(v) for v in k) + " µM"),
+          maps[cond[k]["paths"][0]]["coords"], maps[cond[k]["paths"][0]]["ratio"],
+          maps[cond[k]["paths"][0]]["hit"]) for k in keys]
+save(GF.pixel_maps(first, SUB, COLS,
+                   title="Per-pixel composition map — NNLS decides hit, the model composes"),
+     "fig11_pixelmap65")
 
-# ------------------------------------------------------------------ fig11: 픽셀맵 65개
-first = {k: cond[k]["paths"][0] for k in keys}
-fig, axes = plt.subplots(nr, nc, figsize=(1.58 * nc, 1.80 * nr))
-for ax in np.ravel(axes):
-    ax.axis("off")
-for idx, k in enumerate(keys):
-    ax = np.ravel(axes)[idx]
-    ax.set_axis_on()
-    m = maps[first[k]]
-    pixel_pies(ax, m, bg_size=9)
-    ax.set_title(f"{nice(k)} μM  ·  hit {100*m['hit_frac']:.0f}%", fontsize=6.6, pad=2)
-handles = [Patch(facecolor=CO[s], label=s) for s in SUB] + \
-          [Patch(facecolor=BG_GREY, label="background")]
-fig.legend(handles=handles, loc="lower center", ncol=4, fontsize=9, frameon=False,
-           bbox_to_anchor=(0.5, 0.002))
-fig.suptitle("Per-pixel composition map (10×10) — NNLS decides hit, the model composes "
-             "· leave-one-condition-out", fontsize=11, fontweight="bold")
-fig.tight_layout(rect=[0, 0.028, 1, 0.965])
-fig.savefig(f"{HERE}/fig11_pixelmap65.png", **labfig.SAVE)
-plt.close(fig)
-print("fig11_pixelmap65.png")
-
-
-# ------------------------------------------------------------------ 맵별 개별 그림
-os.makedirs(f"{HERE}/pixelmaps", exist_ok=True)
-for p, m in sorted(maps.items()):
-    k = m["key"]
-    fig, ax = plt.subplots(figsize=(4.0, 4.2))
-    pixel_pies(ax, m)
-    mr = m["mean_ratio"] * 100
-    ax.set_title(f"DQ {k[0]} · TBZ {k[1]} · THI {k[2]} μM\n"
-                 f"true {'/'.join(f'{v:.0f}' for v in cond[k]['true'])}  ·  "
-                 f"pixel mean {'/'.join(f'{v:.0f}' for v in mr)}  ·  "
-                 f"hit {100*m['hit_frac']:.0f}%", fontsize=8.5, pad=4)
-    ax.legend(handles=handles, fontsize=8, frameon=False, loc="upper center",
-              bbox_to_anchor=(0.5, -0.01), ncol=4)
-    fig.tight_layout()
-    fig.savefig(f"{HERE}/pixelmaps/{os.path.basename(p).replace('_corrected.csv','')}"
-                f"__DQ{k[0]}-TBZ{k[1]}-THI{k[2]}.png", **labfig.SAVE)
-    plt.close(fig)
-print(f"pixelmaps/ — {len(maps)}장")
-
-# ------------------------------------------------------------------ 콘솔 요약
-print("\n조건별 (참 → 예측, 오차)")
-for k in keys:
-    c = cond[k]
-    print(f"  {nice(k):>10} μM | " + "/".join(f"{v:5.1f}" for v in c["true"]) +
-          " | " + "/".join(f"{v:5.1f}" for v in c["pred"]) + f" | {c['err']:5.1f}%")
-print(f"\n평균 {np.mean(errs):.1f}%  중앙 {np.median(errs):.1f}%")
-hf = np.array([m["hit_frac"] for m in maps.values()])
-print(f"hit 비율  중앙 {100*np.median(hf):.0f}%  범위 {100*hf.min():.0f}–{100*hf.max():.0f}%")
+table("grid_conditions", *GF.condition_table(rows, keys, SUB))
+for nm, h, b in GF.error_matrix_tables(rows, keys, SUB):
+    table(f"grid_error_matrix_{nm}", h, b)
+table("grid_pixel_maps", *GF.pixel_table(first, SUB))

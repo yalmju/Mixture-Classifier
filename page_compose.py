@@ -129,6 +129,40 @@ class TrainComposeWorker(QObject):
             self.fail.emit(traceback.format_exc())
 
 
+class PixelMapWorker(QObject):
+    """Re-unmix every scored map with the trained model so the per-pixel composition
+    maps can be tiled. Runs off the GUI thread — 65 conditions is minutes, not seconds."""
+    done = pyqtSignal(object)
+    fail = pyqtSignal(str)
+    progress = pyqtSignal(str)
+
+    def __init__(self, params):
+        super().__init__()
+        self.params = params
+
+    def run(self):
+        try:
+            from unmix import unmix_map
+            p = self.params
+            out = []
+            paths = list(dict.fromkeys(p["paths"]))       # repeats of one map draw once
+            for i, path in enumerate(paths):
+                self.progress.emit(f"per-pixel map {i + 1}/{len(paths)} — "
+                                   f"{os.path.basename(path)}")
+                try:
+                    r = unmix_map(p["data_dir"], path, method="dlpx",
+                                  baseline=p["baseline"], trim=p["trim"],
+                                  dl_model=p["model"])
+                except Exception:
+                    continue                              # one bad map must not kill the set
+                out.append((os.path.basename(path).replace("_corrected.csv", ""),
+                            np.asarray(r.coords, float), np.asarray(r.ratio_nb, float),
+                            np.asarray(r.hit, bool)))
+            self.done.emit(out)
+        except Exception:
+            self.fail.emit(traceback.format_exc())
+
+
 class ComposePanel(QWidget):
     METHODS = [("MLP", "mlp"), ("PLS", "pls"),
                ("Random Forest", "rf"), ("1D-CNN", "cnn")]
@@ -268,8 +302,17 @@ class ComposePanel(QWidget):
         self.export_b = QPushButton("Export…"); self.export_b.setObjectName("ghost")
         self.export_b.setEnabled(False); self.export_b.clicked.connect(self._export)
         self.export_b.setToolTip("write the plots (PNG), the per-mixture predictions and the "
-                                 "per-substance metrics (CSV) + a README to a folder")
-        mrow.addWidget(self.load_b); mrow.addWidget(self.export_b); mrow.addWidget(self.save_b)
+                                 "per-substance metrics (CSV) + a README to a folder. "
+                                 "Includes the whole-experiment figures: a pie per "
+                                 "condition, the design grid true vs predicted, and the "
+                                 "grid as an error heat-map.")
+        self.pix_b = QPushButton("Pixel maps…"); self.pix_b.setObjectName("ghost")
+        self.pix_b.setEnabled(False); self.pix_b.clicked.connect(self._export_pixel_maps)
+        self.pix_b.setToolTip("after an Export, re-unmix every scored map and tile the "
+                              "per-pixel composition maps into one figure. Slow — it runs "
+                              "the Real-data path once per map.")
+        mrow.addWidget(self.load_b); mrow.addWidget(self.export_b)
+        mrow.addWidget(self.pix_b); mrow.addWidget(self.save_b)
         mrow.addWidget(self.cancel_b); mrow.addWidget(self.train_b)
         root.addLayout(mrow)
         self._update_params()
@@ -772,6 +815,7 @@ class ComposePanel(QWidget):
                         ("composition_parity", self.c_parity),
                         ("composition_error", self.c_err),
                         ("composition_roc", self.c_roc)], d)
+        n += self._export_grid_figs(d, rows, subs)
         # ONE ternary only — the on-screen `composition_triangle` above. The extra
         # ternaries this used to write (vs-NNLS side-by-side, accuracy-shaded, RGB)
         # said the same thing three more times and buried the rest of the export.
@@ -808,6 +852,106 @@ class ComposePanel(QWidget):
              ("composition_roc", "detection ROC — present/absent per substance, scored by "
                                  "the predicted fraction.")])
         self.status.setText(f"exported {n} PNG + CSVs + README → {os.path.basename(d)}")
+        self.status.setStyleSheet(f"color:{MUTE};")
+
+    # ------------------------------------------------------------------ whole-experiment figures
+    def _row_context(self, subs):
+        """(concentrations, paths) aligned to ``self._rows``, or (None, None).
+
+        Held-out scoring reports one row per map and keeps the map path alongside, so
+        the concentrations come back from the Samples items by path. Without that the
+        rows are just 'mix 1..n' and there is no grid to lay out."""
+        m = self._model or {}
+        ev = m.get("test_eval") or m.get("loo_eval") or {}
+        paths = list(ev.get("paths") or [])
+        rows = getattr(self, "_rows", [])
+        if not paths or len(paths) != len(rows):
+            return None, None
+        by_path = {it[0]: it[1] for it in (self._items_cache + self._test_items)}
+        concs = []
+        for p in paths:
+            c = by_path.get(p)
+            if c is None:
+                return None, None
+            concs.append(tuple(float(c.get(s, 0.0)) for s in subs))
+        return concs, paths
+
+    def _export_grid_figs(self, d, rows, subs):
+        """Write the whole experiment at once: a pie per condition, the design grid with
+        true vs predicted bars, and the grid as an error heat-map. Returns the count."""
+        import grid_figs as GF
+        from ui_common import substance_color, EXPORT_DPI
+        cols = [substance_color(s, i) for i, s in enumerate(subs)]
+        pct = [(r[0], [100.0 * v for v in r[1]], [100.0 * v for v in r[2]]) for r in rows]
+        concs, _paths = self._row_context(subs)
+        if concs:
+            pct, concs = GF.group_by_condition(pct, concs, fmt="{} µM")
+
+        def _w(fig, name):
+            if fig is None:
+                return 0
+            fig.savefig(os.path.join(d, name + ".png"), dpi=EXPORT_DPI,
+                        transparent=True, bbox_inches="tight", pad_inches=0.01)
+            return 1
+
+        n = _w(GF.composition_pies(pct, subs, cols,
+                                   title="Predicted composition per condition — held out"),
+               "grid_pies")
+        if concs:
+            n += _w(GF.grid_truepred(pct, concs, subs, cols), "grid_true_vs_predicted")
+            n += _w(GF.grid_error(pct, concs, subs), "grid_error")
+            # the numbers, not just the picture — these get redrawn in Origin
+            from io_utils import write_csv
+            h, b = GF.condition_table(pct, concs, subs)
+            write_csv(os.path.join(d, "grid_conditions.csv"), h, b)
+            for name, mh, mb in GF.error_matrix_tables(pct, concs, subs):
+                write_csv(os.path.join(d, f"grid_error_matrix_{name}.csv"), mh, mb)
+        self._grid_ctx = (d, pct, concs, subs, cols)
+        self.pix_b.setEnabled(True)
+        return n
+
+    def _export_pixel_maps(self):
+        """Run the per-pixel composition map for every scored map and tile them.
+
+        This re-unmixes each map, so it runs in the worker rather than freezing the tab
+        while a 65-condition experiment goes through."""
+        ctx = getattr(self, "_grid_ctx", None)
+        if not ctx or self._model is None:
+            self.status.setText("export once first — the maps come from that run")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        subs = ctx[3]
+        _concs, paths = self._row_context(subs)
+        if not paths:
+            self.status.setText("no per-map paths in this run — cannot draw pixel maps")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        from dataset import load_preprocess
+        cfg = load_preprocess(self.data_dir)
+        params = dict(data_dir=self.data_dir, paths=paths, model=self._model,
+                      baseline=bool(self._model.get("baseline", cfg["baseline"])),
+                      trim=cfg["trim"])
+        self.pbar.setRange(0, 0); self.pbar.setVisible(True)
+        self.status.setText("● per-pixel maps…"); self.status.setStyleSheet(f"color:{MUTE};")
+        start_worker(self, PixelMapWorker(params), done=self._done_pixel_maps,
+                     fail=self._fail, progress=lambda s: self.status.setText("● " + s))
+
+    def _done_pixel_maps(self, entries):
+        import grid_figs as GF
+        from ui_common import EXPORT_DPI
+        self.pbar.setVisible(False)
+        d, _pct, _concs, subs, cols = self._grid_ctx
+        if not entries:
+            self.status.setText("per-pixel maps: nothing came back")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        fig = GF.pixel_maps(entries, subs, cols,
+                            title="Per-pixel composition map — NNLS decides hit, "
+                                  "the model composes")
+        fig.savefig(os.path.join(d, "grid_pixel_maps.png"), dpi=EXPORT_DPI,
+                    transparent=True, bbox_inches="tight", pad_inches=0.01)
+        from io_utils import write_csv
+        h, b = GF.pixel_table(entries, subs)
+        write_csv(os.path.join(d, "grid_pixel_maps.csv"), h, b)
+        self.status.setText(f"per-pixel maps → grid_pixel_maps.png + .csv "
+                            f"({len(entries)} maps)")
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _export_eval_only(self):
