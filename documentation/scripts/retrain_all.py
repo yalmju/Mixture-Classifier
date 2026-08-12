@@ -15,7 +15,9 @@ import dl_model
 from real_data import load_map
 
 DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-PURE, CALIB = f"{DB}/Pure", f"{DB}/Ratio/results/calibration_spectra.csv"
+PURE = f"{DB}/Pure"
+import paths
+CALIB = paths.calibration()          # 하드코딩하면 조용히 사전학습이 꺼진다
 BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
 SUB = ["DQ", "TBZ", "THI"]
 

@@ -26,6 +26,7 @@ REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/�
 DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
 sys.path.insert(0, REPO); sys.path.insert(0, HERE)
 
+import paths
 import labfig
 labfig.setup()
 import matplotlib.pyplot as plt
@@ -39,7 +40,7 @@ CO, SUB = labfig.CO, labfig.SUB
 WORK = (3.0, 24.0)                      # 혼합물 작업 구간 (µM/성분)
 
 subs, wn, mask, P, lo, hi = _refs(f"{DB}/Pure", True, None)
-ax_c, names, dils = load_calibration_csv(f"{DB}/Ratio/results/calibration_spectra.csv")
+ax_c, names, dils = load_calibration_csv(paths.calibration())
 mc = (ax_c >= lo) & (ax_c <= hi)
 
 

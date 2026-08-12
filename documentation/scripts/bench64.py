@@ -20,7 +20,9 @@ sys.path.insert(0, REPO)
 import dl_model
 
 DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-PURE, CALIB = f"{DB}/Pure", f"{DB}/Ratio/results/calibration_spectra.csv"
+PURE = f"{DB}/Pure"
+import paths
+CALIB = paths.calibration()          # 하드코딩하면 조용히 사전학습이 꺼진다
 OUT = f"{DB}/260808_data interpret/panels"
 BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
 SUB = ["DQ", "TBZ", "THI"]

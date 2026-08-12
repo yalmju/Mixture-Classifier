@@ -23,7 +23,9 @@ from unmix import unmix_map
 from real_data import load_map
 
 DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-PURE, CALIB = f"{DB}/Pure", f"{DB}/Ratio/results/calibration_spectra.csv"
+PURE = f"{DB}/Pure"
+import paths
+CALIB = paths.calibration()
 OUT = f"{DB}/260808_data interpret/piemap_260812"
 BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
 SUB = ["DQ", "TBZ", "THI"]
@@ -73,6 +75,7 @@ for key, n in OLD.items():
             _add(key, p)
 
 keys = sorted(LO)
+paths.check_pretrain(CALIB, True)
 print(f"고농도 {len(HI)}맵 · 저농도 {len(keys)}조건 {sum(len(v) for v in LO.values())}맵", flush=True)
 
 
