@@ -87,7 +87,9 @@ if need(CONC, "concentration_parity.csv", "농도 파리티 (패널 h)"):
 
     cdf = []
     for j, s in enumerate(SUB):
-        ok = design & np.isfinite(F[:, j])
+        # 파리티·CDF·요약이 모두 같은 행을 써야 한다. 예전엔 CDF 만 valid 를 안 걸러서
+        # 그림의 곡선과 옆에 적힌 "2배 이내 %" 가 서로 다른 n 에서 나왔다.
+        ok = design & np.asarray(V)[:, j] & np.isfinite(F[:, j])
         f = np.sort(F[ok, j])
         for i, v in enumerate(f):
             cdf.append([s, f"{v:.4f}", f"{100.0 * (i + 1) / len(f):.3f}"])
@@ -96,7 +98,7 @@ if need(CONC, "concentration_parity.csv", "농도 파리티 (패널 h)"):
 
     summ = []
     for j, s in enumerate(SUB):
-        ok = design & (np.asarray(z["S"])[:, j] > 0)
+        ok = design & np.asarray(V)[:, j] & np.isfinite(F[:, j])
         f = F[ok, j]
         summ.append([s, str(int(ok.sum())), f"{np.median(f):.4f}",
                      f"{100.0 * (f < 2).mean():.2f}"])
