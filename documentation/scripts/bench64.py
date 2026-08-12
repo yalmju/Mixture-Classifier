@@ -8,8 +8,12 @@
   다만 `benchmark_loo` 는 방법 비교용이라 `include_blank` · `sim_iso` 를 받지 않는다 —
   **채택 구성이 아니라 base 구성에서의 방법 비교**다. 표에 그렇게 적을 것.
 
-  실행:  python3 -u bench64.py [epochs=120] [px_per_map=20]
-         5개 방법 × 조건단위 LOO 라 오래 걸린다 (1–3시간).
+  실행:  python3 -u bench64.py [epochs=120] [px_per_map=20] [n_trees=100]
+
+  RF 가 병목이다. sklearn 의 `RandomForestRegressor` 는 회귀에서 `max_features=1.0`
+  이라 분할마다 특징 2001개를 전부 본다 — 300트리면 fold 하나에 5분, 68 fold 면 6시간.
+  트리를 100 으로 줄인다. RF 는 여기서 고전 ML 기준선일 뿐이고 성능은 100↔300 에서
+  포화한다 — 채택 방법(MLP)과의 격차 안에 묻힌다. 캡션에 트리 수를 적을 것.
 """
 import sys, os, re, glob, csv, json, hashlib, time
 import numpy as np
@@ -28,6 +32,7 @@ BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
 SUB = ["DQ", "TBZ", "THI"]
 EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 120
 PXPM = int(sys.argv[2]) if len(sys.argv) > 2 else 20
+TREES = int(sys.argv[3]) if len(sys.argv) > 3 else 100
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -69,10 +74,11 @@ for key, n in OLD.items():
         if os.path.exists(p):
             add(p, dict(zip(SUB, map(float, key))))
 
-print(f"{len(items)}맵 · epochs={EPOCHS} · px/map={PXPM}", flush=True)
+print(f"{len(items)}맵 · epochs={EPOCHS} · px/map={PXPM} · RF trees={TREES}", flush=True)
 t0 = time.time()
 res = dl_model.benchmark_loo(PURE, items, calib_path=CALIB, baseline=True, trim=None,
                              epochs=EPOCHS, seed=0, use_pretrain=True, px_per_map=PXPM,
+                             n_trees=TREES,
                              progress=lambda s: print("   ", s, flush=True))
 subs = res["subs"]
 nb = [s for s in subs if s in SUB]
@@ -126,5 +132,5 @@ write("panel_de_predictions.csv",
       ["method", "condition"] + [f"true_{s}_pct" for s in nb] + [f"pred_{s}_pct" for s in nb],
       predrows)
 print(f"\n{time.time() - t0:.0f}s · → {OUT}")
-print("표에 적을 것: leave-one-condition-out · base 구성(blank/sips 없음) — "
-      "benchmark_loo 가 그 인자를 받지 않는다.")
+print(f"표에 적을 것: leave-one-condition-out · base 구성(blank/sips 없음, "
+      f"benchmark_loo 가 그 인자를 받지 않는다) · RF {TREES} trees.")
