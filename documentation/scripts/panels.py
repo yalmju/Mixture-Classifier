@@ -103,39 +103,61 @@ def _tri(fn):
     return make
 
 
-def _conc():
-    """패널 g 는 CSV 만 읽는 별도 스크립트를 그대로 부른다 (숫자 출처를 하나로)."""
-    import subprocess
-    subprocess.run([sys.executable, "-u", f"{HERE}/fig_h_concentration.py", ORIGIN],
-                   check=True, capture_output=True)
-    src = f"{INTERP}/figh_concentration64.png"
-    return src if os.path.exists(src) else None
+def _read(name):
+    with open(os.path.join(ORIGIN, name), encoding="utf-8-sig") as f:
+        r = list(csv.reader(f))
+    return r[0], r[1:]
 
 
-PANELS = {
+def _conc_tables():
+    """패널 g 의 표. `export_origin.py` 가 낸 것을 그대로 넘긴다 — 숫자 출처는 하나."""
+    out = []
+    for tag, fn in (("parity", "concentration_parity.csv"),
+                    ("fold_cdf", "concentration_fold_cdf.csv"),
+                    ("summary", "concentration_summary.csv")):
+        if os.path.exists(os.path.join(ORIGIN, fn)):
+            out.append((tag, *_read(fn)))
+    return out
+
+
+# 삼각형만 그림으로 나간다 (Origin 으로 옮기기 어려워 그린 것을 그대로 쓴다).
+# 나머지는 표다 — Origin 이 읽을 것이므로 PNG 를 낼 이유가 없다.
+FIGURES = {
     "a": ("triangle_true_rgb", _tri(TF.rgb_triangle)),
     "b": ("triangle_accuracy", _tri(TF.accuracy_triangle)),
-    "c": ("grid_true_vs_predicted", lambda: GF.grid_truepred(rows_pct, keys, SUB, COLS)),
-    "d": ("grid_error", lambda: GF.grid_error(rows_pct, keys, SUB)),
-    "e": ("composition_pies", lambda: GF.composition_pies(rows_pct, SUB, COLS)),
-    "f": ("pixel_maps", lambda: GF.pixel_maps(first, SUB, COLS)),
-    "g": ("concentration_recovery", _conc),
+}
+TABLES = {
+    "c": ("grid_true_vs_predicted",
+          lambda: [("", *GF.condition_table(rows_pct, keys, SUB))]),
+    "d": ("grid_error",
+          lambda: [(nm, h, b) for nm, h, b in GF.error_matrix_tables(rows_pct, keys, SUB)]),
+    "e": ("composition_pies",
+          lambda: [("", *GF.condition_table(rows_pct, keys, SUB))]),
+    "f": ("pixel_maps", lambda: [("", *GF.pixel_table(first, SUB))]),
+    "g": ("concentration_recovery", _conc_tables),
 }
 
 print(f"→ {OUT}\n삼각형 크기 {TRI_SIZE[0]}×{TRI_SIZE[1]} in · 글자 배율 {FONTSCALE}\n")
-for letter, (name, make) in PANELS.items():
+
+for letter, (name, make) in FIGURES.items():
     if ONLY and letter not in ONLY:
         continue
-    got = make()
-    dst = f"{OUT}/panel_{letter}_{name}.png"
-    if isinstance(got, str):                       # 이미 파일로 나온 패널
-        import shutil
-        shutil.copyfile(got, dst)
-    elif got is None:
-        print(f"  ✗ {letter}  {name} — 자료 없음"); continue
-    else:
-        got.savefig(dst, **SAVE)
-    print(f"  ✓ panel_{letter}_{name}.png")
+    fig = make()
+    fig.savefig(f"{OUT}/panel_{letter}_{name}.png", **SAVE)
+    print(f"  ✓ panel_{letter}_{name}.png   (그림 — 그대로 사용)")
 
-print("\n조판 밖에서 붙일 때: 전부 배경 투명 · 600 dpi. 패널 문자를 바꾸려면 "
-      "panels.py 의 PANELS 키만 고치면 된다.")
+for letter, (name, make) in TABLES.items():
+    if ONLY and letter not in ONLY:
+        continue
+    tabs = make()
+    if not tabs:
+        print(f"  ✗ {letter}  {name} — 자료 없음"); continue
+    for tag, head, body in tabs:
+        fn = f"panel_{letter}_{name}" + (f"_{tag}" if tag else "") + ".csv"
+        with open(f"{OUT}/{fn}", "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f); w.writerow(head); w.writerows(body)
+        print(f"  ✓ {fn:<48} {len(body)}행 × {len(head)}열")
+
+print("\n삼각형(a·b)만 PNG — 배경 투명 · 600 dpi. 나머지는 CSV 이고 Origin 에서 그린다.")
+print("d 는 히트맵이라 블록마다 행렬 한 장씩이다 (Origin heat map 은 행렬을 받는다).")
+print("패널 문자를 바꾸려면 FIGURES / TABLES 의 키만 고치면 된다.")
