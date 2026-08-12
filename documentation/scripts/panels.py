@@ -95,10 +95,30 @@ def _strip_legend(fig):
     return fig
 
 
+BARE = "--bare" in args
+
+
+def _bare(fig):
+    """삼각형만 남긴다 — 범례·컬러바를 떼고 여백을 삼각형에 붙인다.
+
+    조판에서 범례와 컬러바는 한 번만 두면 되고, 패널마다 따라오면 삼각형이 그만큼
+    작아진다. 성분 이름은 남긴다 — 그게 없으면 삼원도가 아니라 그냥 점 뭉치다."""
+    _strip_legend(fig)
+    for ax in list(fig.axes)[1:]:          # 첫 축이 삼각형, 나머지는 컬러바
+        ax.remove()
+    ax = fig.axes[0]
+    ax.set_xlim(-0.14, 1.14)
+    ax.set_ylim(-0.20, 3 ** 0.5 / 2 + 0.13)
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+    return fig
+
+
 def _tri(fn):
     """삼각형은 자기 크기의 Figure 를 스스로 만든다 — 붙일 자리에 맞춰 우리가 준다."""
     def make():
         f = fn(rows_frac, SUB, COLS, fig=Figure(figsize=TRI_SIZE))
+        if BARE:
+            return _bare(f)
         return _strip_legend(f) if NOLEGEND else f
     return make
 
