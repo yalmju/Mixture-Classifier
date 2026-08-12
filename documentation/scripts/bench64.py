@@ -79,21 +79,39 @@ for key, n in OLD.items():
         if os.path.exists(p):
             add(p, dict(zip(SUB, map(float, key))))
 
-print(f"{len(items)}맵 · epochs={EPOCHS} · px/map={PXPM} · RF {TREES} trees, max_features=sqrt · CNN {CNN_EP} epochs", flush=True)
-t0 = time.time()
-res = dl_model.benchmark_loo(PURE, items, calib_path=CALIB, baseline=True, trim=None,
-                             epochs=EPOCHS, seed=0, use_pretrain=True, px_per_map=PXPM,
-                             n_trees=TREES, rf_max_features="sqrt",
-                             cnn_epochs=CNN_EP,
-                             progress=lambda s: print("   ", s, flush=True))
-subs = res["subs"]
-nb = [s for s in subs if s in SUB]
-idx = [subs.index(s) for s in nb]
-
 METHODS = [("nnls", "NNLS"), ("pls", "PLS"), ("rf", "Random Forest"),
            ("cnn", "1D-CNN"), ("mlp", "MLP")]
 THR = 0.05                                   # 존재 판정: 참 분율 5% 초과
 
+print(f"{len(items)}맵 · epochs={EPOCHS} · px/map={PXPM} · RF {TREES} trees, max_features=sqrt · CNN {CNN_EP} epochs", flush=True)
+t0 = time.time()
+# 방법마다 따로 돌리고 **끝나는 즉시 저장**한다. 예전에는 다섯 방법을 한 번에 돌고
+# 마지막에 CSV 를 썼는데, CNN 설정을 바꾸려고 중간에 멈추자 이미 끝난 NNLS·PLS·RF 가
+# 통째로 날아갔다. 다시 돌리면 저장된 방법은 건너뛴다.
+CKPT = f"{OUT}/.bench64_partial"
+os.makedirs(CKPT, exist_ok=True)
+res = {}
+for _meth in [m for m, _l in METHODS]:
+    _f = f"{CKPT}/{_meth}.npz"
+    if os.path.exists(_f):
+        _z = np.load(_f, allow_pickle=True)
+        res[_meth] = {"true": _z["true"], "pred": _z["pred"]}
+        res.setdefault("subs", list(_z["subs"]))
+        print(f"   [건너뜀] {_meth} — 이미 {_f} 에 있다", flush=True)
+        continue
+    _r = dl_model.benchmark_loo(PURE, items, calib_path=CALIB, baseline=True, trim=None,
+                                methods=(_meth,), epochs=EPOCHS, seed=0, use_pretrain=True,
+                                px_per_map=PXPM, n_trees=TREES, rf_max_features="sqrt",
+                                cnn_epochs=CNN_EP,
+                                progress=lambda s: print("   ", s, flush=True))
+    res[_meth] = _r[_meth]
+    res.setdefault("subs", _r["subs"])
+    np.savez(_f, true=np.asarray(_r[_meth]["true"], float),
+             pred=np.asarray(_r[_meth]["pred"], float), subs=np.array(_r["subs"], object))
+    print(f"   [저장] {_f}", flush=True)
+subs = list(res["subs"])
+nb = [s for s in subs if s in SUB]
+idx = [subs.index(s) for s in nb]
 
 def roc(T, P):
     """검출 ROC — 성분을 다 모아서(pooled) 존재/부재를 예측 분율로 점수 매긴다."""
@@ -137,6 +155,8 @@ write("panel_e_detection_roc.csv", ["method", "fpr", "tpr"], rocrows)
 write("panel_de_predictions.csv",
       ["method", "condition"] + [f"true_{s}_pct" for s in nb] + [f"pred_{s}_pct" for s in nb],
       predrows)
+import shutil
+shutil.rmtree(CKPT, ignore_errors=True)          # 다 끝났으니 부분 저장은 치운다
 print(f"\n{time.time() - t0:.0f}s · → {OUT}")
 print(f"표에 적을 것: leave-one-condition-out · base 구성(blank/sips 없음, "
       f"benchmark_loo 가 그 인자를 받지 않는다) · RF {TREES} trees, max_features=sqrt · "
