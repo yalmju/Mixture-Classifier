@@ -534,8 +534,14 @@ class ComposePanel(QWidget):
             if len(_tt):
                 _ie = (0.5 * np.abs(_tp - _tt).sum(1)).mean()
                 independent = f"; independent test (n={len(_tt)}) error {_ie:.0%}"
-        self.status.setText(f"done — {m} · {model.get('n_train', 0)} training spectra · {kind} error {errtxt}. "
-                            f"Recovery & Real-data now use this model{independent}; Save to keep it.")
+        selected = model.get("selected_epochs")
+        conc_selected = (model.get("uM") or {}).get("selected_epochs")
+        epoch_info = (f" · selected epochs: composition {selected}"
+                      + (f", concentration {conc_selected}" if conc_selected else "")
+                      if selected else "")
+        self.status.setText(f"done — {m} · {model.get('n_train', 0)} training spectra · {kind} error {errtxt}"
+                            f"{epoch_info}. Recovery & Real-data now use this model{independent}; "
+                            "Save to keep it.")
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _fail(self, tb):
