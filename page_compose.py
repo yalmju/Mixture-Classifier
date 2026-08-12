@@ -260,6 +260,28 @@ class ComposePanel(QWidget):
         self.sp_nt = QSpinBox(); self.sp_nt.setRange(20, 1000); self.sp_nt.setSingleStep(20)
         self.sp_nt.setValue(300); self.sp_nt.setPrefix("trees "); self.sp_nt.setObjectName("field")
 
+        # ---- two knobs that only matter for Benchmark, where every method is refit once
+        # per condition. Left at the library defaults a five-method run over 68 conditions
+        # takes most of a day: RandomForestRegressor reads all ~2000 spectral channels at
+        # every split, and the 1-D CNN convolves the full spectrum full-batch.
+        self.cmb_rfmf = QComboBox(); self.cmb_rfmf.setObjectName("field")
+        self.cmb_rfmf.addItem("RF features: all", None)
+        self.cmb_rfmf.addItem("RF features: sqrt", "sqrt")
+        self.cmb_rfmf.addItem("RF features: log2", "log2")
+        self.cmb_rfmf.setToolTip("how many spectral channels each forest split may consider. "
+                                 "sklearn's regressor default is ALL of them, which on ~2000 "
+                                 "channels costs minutes per fit; 'sqrt' is the usual forest "
+                                 "recipe and runs in seconds. Affects Benchmark only.")
+        self.sp_cnnep = QSpinBox(); self.sp_cnnep.setRange(0, 3000)
+        self.sp_cnnep.setSingleStep(20); self.sp_cnnep.setValue(0)
+        self.sp_cnnep.setPrefix("CNN epochs "); self.sp_cnnep.setSpecialValueText("CNN epochs: same")
+        self.sp_cnnep.setObjectName("field")
+        self.sp_cnnep.setToolTip("separate epoch budget for the 1-D CNN in Benchmark. "
+                                 "'same' gives it the epochs above, like every other method — "
+                                 "the honest comparison. Lower it only to get a run finished, "
+                                 "and say so wherever the numbers are used: the CNN is then "
+                                 "scored undertrained against the rest.")
+
         # ---- physics pre-training. These were hardcoded off (use_pretrain=False, and
         # calib_path never set), so a model trained here could not be the one the
         # 64-condition work adopted no matter what else you ticked. The knobs exist in
@@ -286,7 +308,8 @@ class ComposePanel(QWidget):
         mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
         for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px,
                   self.chk_screen, self.sp_hit, self.chk_equal_volume, self.chk_blank,
-                  self.chk_pretrain, self.cmb_iso, self.chk_nuisance):
+                  self.chk_pretrain, self.cmb_iso, self.chk_nuisance,
+                  self.cmb_rfmf, self.sp_cnnep):
             mrow.addWidget(w)
         mrow.addStretch(1)
         self.train_b = QPushButton("Train"); self.train_b.setObjectName("primary")
@@ -428,6 +451,8 @@ class ComposePanel(QWidget):
         self.sp_seed.setVisible(m in ("mlp", "cnn", "rf"))
         self.sp_nc.setVisible(m == "pls")
         self.sp_nt.setVisible(m == "rf")
+        # 벤치마크 전용 노브 — 학습(Train)에는 안 쓰이지만 항상 보여야 누를 수 있다
+        self.cmb_rfmf.setVisible(True); self.sp_cnnep.setVisible(True)
         self.sp_px.setVisible(True)          # applies to every method
         self.chk_blank.setVisible(True)
         self.chk_screen.setVisible(True)
@@ -451,6 +476,8 @@ class ComposePanel(QWidget):
                     sim_iso=self.cmb_iso.currentData(),
                     sim_nuisance=bool(self.chk_nuisance.isChecked()),
                     n_components=self.sp_nc.value(), n_trees=self.sp_nt.value(),
+                    rf_max_features=self.cmb_rfmf.currentData(),
+                    cnn_epochs=(self.sp_cnnep.value() or None),
                     px_per_map=self.sp_px.value(),
                     include_blank=self.chk_blank.isChecked(),
                     nnls_screen=self.chk_screen.isChecked(),
