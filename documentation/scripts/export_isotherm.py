@@ -142,18 +142,30 @@ for (model, rng), by_s in curve.items():
     _wide(f"panel_b_isotherm_curve_{model.lower()}_{rng}.csv",
           by_s[SUB[0]][0], [(s_, by_s[s_][1]) for s_ in SUB])
 
-# 성분마다 R² 가 가장 높은 모델 하나 — "곡선 하나만" 그릴 때 쓴다
+# 패널에 쓰는 곡선은 **세 성분 모두 Sips** 다 (= curve_sips_full.csv).
+# 성분마다 R² 최대인 모델을 따로 고르면 (DQ Freundlich · TBZ Sips · THI Langmuir)
+# 세 곡선의 함수형이 달라져 파라미터를 나란히 비교할 수 없다. Sips 하나로 묶으면
+# 셋 다 R² 0.92–0.99 로 충분히 맞고, **차이가 지수 m 하나에 들어간다** —
+# DQ 0.66 · TBZ 0.72 · THI 0.97. m=1 이 이상적 Langmuir 이므로 THI 만 균일한
+# 흡착자리를 갖고 DQ 는 결합에너지가 가장 넓게 퍼져 있다는 게 한 숫자로 읽힌다.
+_bx = curve[("Sips", "full")][SUB[0]][0]
+write("panel_b_isotherm_curve_main.csv",
+      ["concentration_uM"] + [f"{s_}_Sips" for s_ in SUB],
+      [[f"{_bx[i]:.6g}"] + [f"{curve[('Sips', 'full')][s_][1][i]:.6g}" for s_ in SUB]
+       for i in range(len(_bx))])
+
+# 참고용 — 성분마다 R² 최대인 모델. 패널에는 쓰지 않는다.
 best = {}
 for p in params:
     s_ = p[0]
     r2 = {"Langmuir": float(p[8]), "Sips": float(p[9]), "Freundlich": float(p[10])}
     best[s_] = max(r2, key=r2.get)
-_bx = curve[(best[SUB[0]], "full")][SUB[0]][0]
-write("panel_b_isotherm_curve_best.csv",
-      ["concentration_uM"] + [f"{s_}_{best[s_]}" for s_ in SUB],
-      [[f"{_bx[i]:.6g}"] + [f"{curve[(best[s_], 'full')][s_][1][i]:.6g}" for s_ in SUB]
-       for i in range(len(_bx))])
-print("\n성분별 최적 모델(R² 최대): " + " · ".join(f"{k} {v}" for k, v in best.items()))
+print("\n패널 곡선: 세 성분 모두 Sips  ·  R² " +
+      " · ".join(f"{p[0]} {float(p[9]):.3f}" for p in params))
+print("           지수 m  " + " · ".join(f"{p[0]} {float(p[5]):.3f}" for p in params)
+      + "   (m=1 이 이상적 Langmuir)")
+print("[참고] R² 최대 모델: " + " · ".join(f"{k} {v}" for k, v in best.items())
+      + " — 함수형이 갈려 파라미터 비교가 안 되므로 패널에는 쓰지 않는다")
 
 print(f"\n작업구간 음영: {WORK[0]}–{WORK[1]} µM (points 의 in_working_range 로도 표시)")
 print("Sips 는 K 를 Langmuir 값에 고정하고 m 만 적합했다 — 캡션에 적을 것.")
