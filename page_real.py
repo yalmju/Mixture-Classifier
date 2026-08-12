@@ -59,6 +59,7 @@ class RealDataPage(QWidget):
         self._thread = None
         self._res = None
         self.dl_model = None
+        self._bl_override = None    # set when the model's baseline flag overrides the folder's
         self._sel = None
         self._click_axes = []       # axes that accept a pixel click
         self._colors = {}           # per-substance colour override {name: '#hex'}
@@ -638,8 +639,22 @@ class RealDataPage(QWidget):
             params = dict(model_path=path, test_path=self.test, min_conf=0.0)
         else:
             cfg = load_preprocess(self.data_dir)
+            # When the composition model drives, IT decides the preprocessing: the pixel
+            # spectra it reads must be prepared the way its training spectra were. The tab
+            # used to pass the data-dir setting regardless, so a model trained on already
+            # corrected references (baseline=False) got ALS applied a second time here and
+            # nobody was told. The same flag also builds the NNLS templates, which is the
+            # point — training used _refs(data_dir, model['baseline'], …).
+            self._bl_override = None
+            bl = bool(cfg["baseline"])
+            if self._method() == "dlpx" and isinstance(self.dl_model, dict) \
+                    and "baseline" in self.dl_model:
+                mbl = bool(self.dl_model["baseline"])
+                if mbl != bl:
+                    self._bl_override = mbl
+                bl = mbl
             params = dict(data_dir=self.data_dir, test_path=self.test,
-                          method=self._method(), baseline=cfg["baseline"],
+                          method=self._method(), baseline=bl,
                           trim=cfg["trim"], min_frac=self.thr_value(),
                           hit_mode="auto" if self.chk_auto.isChecked() else "threshold",
                           calib_path=self.calib_path, dl_model=self.dl_model,
@@ -671,7 +686,10 @@ class RealDataPage(QWidget):
     def _apply(self, r):
         self._res = r; self._sel = None
         self.btn.setEnabled(True); self.btn.setText("Unmix")
-        self.status.setText(f"done — {r.method.upper()}")
+        ov = getattr(self, "_bl_override", None)
+        self.status.setText(f"done — {r.method.upper()}" + ("" if ov is None else
+                            f" · baseline removal {'on' if ov else 'off'} — followed the "
+                            f"model's own setting, not this folder's"))
         self.status.setStyleSheet(f"color:{MUTE};")
         nb = [r.comps[i] for i in r.nonbg]
         mr = self._mean_ratio(r)                          # corrected when toggle on

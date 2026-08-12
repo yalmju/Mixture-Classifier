@@ -687,7 +687,12 @@ def apply_model(model, wn, cube):
                 "uM": None}
     lo, hi = model["lo"], model["hi"]
     mask = (np.asarray(wn) >= lo) & (np.asarray(wn) <= hi)
-    ya = _mean_spectrum(cube, mask)
+    # Follow the model's OWN preprocessing. This used to force ALS unconditionally, so a
+    # model trained with baseline=False (references already corrected upstream) had the
+    # baseline removed a second time here — the test map went through a preprocessing the
+    # training spectra never saw. Measured cost on the 260806 model: composition error
+    # 41.1% double-corrected against 25.5% honouring the flag.
+    ya = _mean_spectrum(cube, mask, baseline_correct=bool(model.get("baseline", True)))
     subs = model["subs"]
     xfeat = _composition_features(ya, model.get("feature_mode", "legacy_l2")).astype(np.float32)
     method = model.get("method", "mlp")
