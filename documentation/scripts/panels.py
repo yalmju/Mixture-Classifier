@@ -140,21 +140,38 @@ def _conc_tables():
     return out
 
 
-# 삼각형만 그림으로 나간다 (Origin 으로 옮기기 어려워 그린 것을 그대로 쓴다).
-# 나머지는 표다 — Origin 이 읽을 것이므로 PNG 를 낼 이유가 없다.
+# 첨부 도판의 문자 체계를 따른다. a·g 만 그림이고(Origin 으로 옮기기 어렵다)
+# 나머지는 표다. b·c·d·e·f·h 는 각자 전용 스크립트가 내므로 여기서는 부르기만 한다 —
+# 계산이 두 군데 있으면 반드시 갈라진다.
+#
+#   a  삼각형 — 참 조성 RGB          여기서 그림
+#   b  단일성분 등온선                export_isotherm.py
+#   c  등몰 삼원 농도 시리즈          export_tert.py
+#   d  방법 비교 (NNLS/PLS/RF/CNN/MLP) bench64.py   (오래 걸림, 따로 실행)
+#   e  검출 ROC                       bench64.py   (d 와 같이 나온다)
+#   f  상대 드리프트                   export_drift.py
+#   g  삼각형 — 정확도 + 드리프트      여기서 그림
+#   h  농도 회수                       export_origin.py → fig_h_concentration.py
+#
+# 64조건 격자를 보여주는 판(격자 true/pred · 오차 · 파이 · 픽셀맵)은 첨부 도판에 없던
+# 새 패널이라 i 부터 붙인다. 기존 문자를 밀면 이미 조판한 것이 어긋난다.
 FIGURES = {
     "a": ("triangle_true_rgb", _tri(TF.rgb_triangle)),
-    "b": ("triangle_accuracy", _tri(TF.accuracy_triangle)),
+    "g": ("triangle_accuracy", _tri(TF.accuracy_triangle)),
+}
+DELEGATED = {
+    "b": ("isotherm", "export_isotherm.py"),
+    "c": ("tert_series", "export_tert.py"),
+    "f": ("drift", "export_drift.py"),
 }
 TABLES = {
-    "c": ("grid_true_vs_predicted",
+    "i": ("grid_true_vs_predicted",
           lambda: [("", *GF.condition_table(rows_pct, keys, SUB))]),
-    "d": ("grid_error",
+    "j": ("grid_error",
           lambda: [(nm, h, b) for nm, h, b in GF.error_matrix_tables(rows_pct, keys, SUB)]),
-    "e": ("composition_pies",
+    "k": ("composition_pies",
           lambda: [("", *GF.condition_table(rows_pct, keys, SUB))]),
-    "f": ("pixel_maps", lambda: [("", *GF.pixel_table(first, SUB))]),
-    "g": ("concentration_recovery", _conc_tables),
+    "l": ("pixel_maps", lambda: [("", *GF.pixel_table(first, SUB))]),
 }
 
 print(f"→ {OUT}\n삼각형 크기 {TRI_SIZE[0]}×{TRI_SIZE[1]} in · 글자 배율 {FONTSCALE}\n")
@@ -165,6 +182,18 @@ for letter, (name, make) in FIGURES.items():
     fig = make()
     fig.savefig(f"{OUT}/panel_{letter}_{name}.png", **SAVE)
     print(f"  ✓ panel_{letter}_{name}.png   (그림 — 그대로 사용)")
+
+import subprocess
+for letter, (name, script) in DELEGATED.items():
+    if ONLY and letter not in ONLY:
+        continue
+    r = subprocess.run([sys.executable, "-u", f"{HERE}/{script}"], capture_output=True, text=True)
+    if r.returncode:
+        print(f"  ✗ {letter}  {name} — {script} 실패:\n{r.stderr.strip()[-400:]}")
+    else:
+        for ln in r.stdout.splitlines():
+            if ln.strip().startswith("✓"):
+                print("  " + ln.strip())
 
 for letter, (name, make) in TABLES.items():
     if ONLY and letter not in ONLY:
@@ -178,6 +207,7 @@ for letter, (name, make) in TABLES.items():
             w = csv.writer(f); w.writerow(head); w.writerows(body)
         print(f"  ✓ {fn:<48} {len(body)}행 × {len(head)}열")
 
-print("\n삼각형(a·b)만 PNG — 배경 투명 · 600 dpi. 나머지는 CSV 이고 Origin 에서 그린다.")
-print("d 는 히트맵이라 블록마다 행렬 한 장씩이다 (Origin heat map 은 행렬을 받는다).")
+print("\n삼각형(a·g)만 PNG — 배경 투명 · 600 dpi. 나머지는 CSV 이고 Origin 에서 그린다.")
+print("j 는 히트맵이라 블록마다 행렬 한 장씩이다 (Origin heat map 은 행렬을 받는다).")
+print("d·e (방법 비교 · ROC) 는 bench64.py 를 따로 돌려야 한다 — 1–3시간.")
 print("패널 문자를 바꾸려면 FIGURES / TABLES 의 키만 고치면 된다.")

@@ -116,6 +116,45 @@ write("panel_b_isotherm_params.csv",
       ["compound", "K_per_M", "inv_K_uM", "gA_langmuir", "gA_sips", "m_sips",
        "a_freundlich", "inv_n_freundlich", "r2_langmuir", "r2_sips", "r2_freundlich",
        "n_points"], params)
+
+
+# ------------------------------------------------------------- Origin 이 바로 먹는 넓은 표
+# 긴 형식(7200행)은 필터를 걸어야 그릴 수 있다. 희석계열이 세 성분 모두 같은 9점이라
+# 성분을 열로 눕히면 Origin 에서 x 한 번, y 세 번으로 끝난다.
+def _wide(name, xs, cols, xlabel="concentration_uM"):
+    body = [[f"{xs[i]:.6g}"] + [f"{c[1][i]:.6g}" for c in cols] for i in range(len(xs))]
+    write(name, [xlabel] + [c[0] for c in cols], body)
+
+
+pts = {}
+for s_, c_, b_, _w in points:
+    pts.setdefault(s_, ([], []))
+    pts[s_][0].append(float(c_)); pts[s_][1].append(float(b_))
+_wide("panel_b_isotherm_points_wide.csv",
+      pts[SUB[0]][0], [(s_, pts[s_][1]) for s_ in SUB])
+
+curve = {}
+for s_, model, rng, c_, b_ in curves:
+    curve.setdefault((model, rng), {}).setdefault(s_, ([], []))
+    curve[(model, rng)][s_][0].append(float(c_))
+    curve[(model, rng)][s_][1].append(float(b_))
+for (model, rng), by_s in curve.items():
+    _wide(f"panel_b_isotherm_curve_{model.lower()}_{rng}.csv",
+          by_s[SUB[0]][0], [(s_, by_s[s_][1]) for s_ in SUB])
+
+# 성분마다 R² 가 가장 높은 모델 하나 — "곡선 하나만" 그릴 때 쓴다
+best = {}
+for p in params:
+    s_ = p[0]
+    r2 = {"Langmuir": float(p[8]), "Sips": float(p[9]), "Freundlich": float(p[10])}
+    best[s_] = max(r2, key=r2.get)
+_bx = curve[(best[SUB[0]], "full")][SUB[0]][0]
+write("panel_b_isotherm_curve_best.csv",
+      ["concentration_uM"] + [f"{s_}_{best[s_]}" for s_ in SUB],
+      [[f"{_bx[i]:.6g}"] + [f"{curve[(best[s_], 'full')][s_][1][i]:.6g}" for s_ in SUB]
+       for i in range(len(_bx))])
+print("\n성분별 최적 모델(R² 최대): " + " · ".join(f"{k} {v}" for k, v in best.items()))
+
 print(f"\n작업구간 음영: {WORK[0]}–{WORK[1]} µM (points 의 in_working_range 로도 표시)")
 print("Sips 는 K 를 Langmuir 값에 고정하고 m 만 적합했다 — 캡션에 적을 것.")
 print("K 순서로 '흡착이 가장 좋다'고 쓰지 말 것: TBZ·THI 신뢰구간이 겹친다.")
