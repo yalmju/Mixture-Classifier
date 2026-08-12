@@ -28,6 +28,23 @@ FAINT = "#c7ccd2"
 EMAX = 0.6                                    # composition error mapped to "fully wrong"
 
 
+# Text size multiplier. These figures are also pulled out as standalone panels and
+# dropped into a layout at a fraction of their natural size, where point-sized text
+# comes out oversized. The app never sets this, so its figures are unchanged.
+SCALE = 1.0
+
+
+def _fs(pt):
+    """Point-sized text/lines."""
+    return pt * SCALE
+
+
+def _ms(area):
+    """Scatter areas are points SQUARED, so they take the square of the scale — using
+    the linear factor left the markers swamping a shrunken triangle."""
+    return area * SCALE * SCALE
+
+
 def cns(ax):
     """The app's cnsplots form (same as ui_common.Canvas.style, without the Qt import):
     despine + thin 0.5pt black spines + tight black ticks. Kept here so exported figures
@@ -37,7 +54,7 @@ def cns(ax):
             s.set_visible(False)
         else:
             s.set_color("black"); s.set_linewidth(0.5)
-    ax.tick_params(colors="black", labelsize=9, length=2, width=0.6, pad=1)
+    ax.tick_params(colors="black", labelsize=_fs(9), length=2, width=0.6, pad=1)
     ax.xaxis.label.set_color("black"); ax.yaxis.label.set_color("black")
     ax.title.set_color("black")
     return ax
@@ -69,7 +86,7 @@ def _frame(ax, BR, BL, TOP, subs, colors, corner_labels=None):
              (TOP, "center", "bottom", 0.0, 0.05)]
     for i, (p, ha, va, dx, dy) in enumerate(spots[:len(subs)]):
         txt = subs[i] if not corner_labels else f"{subs[i]}\n{corner_labels[i]}"
-        ax.text(p[0] + dx, p[1] + dy, txt, ha=ha, va=va, fontsize=15, fontweight="bold",
+        ax.text(p[0] + dx, p[1] + dy, txt, ha=ha, va=va, fontsize=_fs(15), fontweight="bold",
                 color=colors[i], linespacing=1.3)
     ax.set_aspect("equal"); ax.axis("off")
     ax.set_xlim(-0.20, 1.20); ax.set_ylim(-0.26, 3 ** 0.5 / 2 + 0.18)
@@ -127,24 +144,24 @@ def accuracy_triangle(rows, subs, colors, fig=None):
         p0 = _bary(r[1], BR, BL, TOP); p1 = _bary(r[2], BR, BL, TOP)
         e = 0.5 * np.abs(np.asarray(r[2]) - np.asarray(r[1])).sum()
         if np.hypot(*(p1 - p0)) > 4e-3:                 # skip only true zero-length
-            ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=16,
+            ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=_fs(16),
                                          color="#3f4650", lw=1.8, alpha=0.9, zorder=3,
                                          shrinkA=3, shrinkB=6))
-        ax.scatter(*p0, s=44, facecolors="white", edgecolors=MUTE, linewidths=1.2, zorder=4)
-        ax.scatter(*p1, s=76, color=cmap(1 - min(e / EMAX, 1.0)), edgecolors="white",
-                   linewidths=0.7, zorder=5)
+        ax.scatter(*p0, s=_ms(44), facecolors="white", edgecolors=MUTE, linewidths=_fs(1.2), zorder=4)
+        ax.scatter(*p1, s=_ms(76), color=cmap(1 - min(e / EMAX, 1.0)), edgecolors="white",
+                   linewidths=_fs(0.7), zorder=5)
 
     cb = fig.colorbar(ScalarMappable(norm=Normalize(0, 1), cmap=cmap), ax=ax,
                       fraction=0.03, pad=0.02, shrink=0.5, aspect=22)
-    cb.set_label("accuracy (green = exact, red = poor)", fontsize=10)
-    cb.set_ticks([0, 0.5, 1.0]); cb.ax.tick_params(labelsize=9, colors="black",
+    cb.set_label("accuracy (green = exact, red = poor)", fontsize=_fs(10))
+    cb.set_ticks([0, 0.5, 1.0]); cb.ax.tick_params(labelsize=_fs(9), colors="black",
                                                    length=2, width=0.6)
     cb.outline.set_linewidth(0.5); cb.outline.set_edgecolor("black")
     fig.legend(handles=[Line2D([], [], marker="o", mfc="white", mec=MUTE, mew=1.2, ls="",
                                ms=9, label="true composition"),
                         Line2D([], [], marker="o", mfc="#4a9e2a", mec="white", ls="",
                                ms=10, label="predicted (colour = accuracy)")],
-               loc="lower center", ncol=2, fontsize=11, framealpha=0,
+               loc="lower center", ncol=2, fontsize=_fs(11), framealpha=0,
                bbox_to_anchor=(0.5, -0.06))
     return fig
 
@@ -178,16 +195,16 @@ def rgb_triangle(rows, subs, colors, fig=None):
     for r in rows:
         p0 = _bary(r[1], BR, BL, TOP); p1 = _bary(r[2], BR, BL, TOP)
         if np.hypot(*(p1 - p0)) > 4e-3:
-            ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=16,
+            ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=_fs(16),
                                          color="#1c2430", lw=1.7, alpha=0.9, zorder=3,
                                          shrinkA=3, shrinkB=6))
-        ax.scatter(*p0, s=48, facecolors="white", edgecolors=INK, linewidths=1.3, zorder=4)
-        ax.scatter(*p1, s=72, facecolors=INK, edgecolors="white", linewidths=0.9, zorder=5)
+        ax.scatter(*p0, s=_ms(48), facecolors="white", edgecolors=INK, linewidths=_fs(1.3), zorder=4)
+        ax.scatter(*p1, s=_ms(72), facecolors=INK, edgecolors="white", linewidths=_fs(0.9), zorder=5)
     fig.legend(handles=[Line2D([], [], marker="o", mfc="white", mec=INK, mew=1.3, ls="",
                                ms=9, label="true (solution) composition"),
                         Line2D([], [], marker="o", mfc=INK, mec="white", ls="", ms=9,
                                label="predicted (measured) composition")],
-               loc="lower center", ncol=2, fontsize=11, framealpha=0,
+               loc="lower center", ncol=2, fontsize=_fs(11), framealpha=0,
                bbox_to_anchor=(0.5, -0.06))
     return fig
 
@@ -233,27 +250,27 @@ def compare_triangles(rows_a, rows_b, subs, colors, labels=("NNLS", "model"), fi
             p0 = _bary(r[1], BR, BL, TOP); p1 = _bary(r[2], BR, BL, TOP)
             e = 0.5 * np.abs(np.asarray(r[2]) - np.asarray(r[1])).sum()
             if np.hypot(*(p1 - p0)) > 4e-3:
-                ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=15,
+                ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=_fs(15),
                                              color="#3f4650", lw=1.6, alpha=0.9, zorder=3,
                                              shrinkA=3, shrinkB=6))
-            ax.scatter(*p0, s=40, facecolors="white", edgecolors=MUTE, linewidths=1.1, zorder=4)
-            ax.scatter(*p1, s=70, color=cmap(1 - min(e / EMAX, 1.0)), edgecolors="white",
-                       linewidths=0.7, zorder=5)
+            ax.scatter(*p0, s=_ms(40), facecolors="white", edgecolors=MUTE, linewidths=_fs(1.1), zorder=4)
+            ax.scatter(*p1, s=_ms(70), color=cmap(1 - min(e / EMAX, 1.0)), edgecolors="white",
+                       linewidths=_fs(0.7), zorder=5)
         err = float(np.mean([0.5 * np.abs(np.asarray(r[2]) - np.asarray(r[1])).sum()
                              for r in rows])) if rows else float("nan")
         ax.text(0.5, -0.20, f"{lab}   —   mean composition error {err:.0%}",
-                transform=ax.transAxes, ha="center", va="top", fontsize=13,
+                transform=ax.transAxes, ha="center", va="top", fontsize=_fs(13),
                 fontweight="bold", color=INK)
     cb = fig.colorbar(ScalarMappable(norm=Normalize(0, 1), cmap=cmap), ax=axes,
                       fraction=0.016, pad=0.02, shrink=0.5, aspect=22)
-    cb.set_label("accuracy (green = exact, red = poor)", fontsize=10)
-    cb.set_ticks([0, 0.5, 1.0]); cb.ax.tick_params(labelsize=9, colors="black",
+    cb.set_label("accuracy (green = exact, red = poor)", fontsize=_fs(10))
+    cb.set_ticks([0, 0.5, 1.0]); cb.ax.tick_params(labelsize=_fs(9), colors="black",
                                                    length=2, width=0.6)
     cb.outline.set_linewidth(0.5); cb.outline.set_edgecolor("black")
     fig.legend(handles=[Line2D([], [], marker="o", mfc="white", mec=MUTE, mew=1.2, ls="",
                                ms=9, label="true composition"),
                         Line2D([], [], marker="o", mfc="#4a9e2a", mec="white", ls="",
                                ms=10, label="predicted (colour = accuracy)")],
-               loc="lower center", ncol=2, fontsize=11, framealpha=0,
+               loc="lower center", ncol=2, fontsize=_fs(11), framealpha=0,
                bbox_to_anchor=(0.5, -0.06))
     return fig
