@@ -157,7 +157,13 @@ class ComposePanel(QWidget):
         reload_b = QPushButton("Reload"); reload_b.setObjectName("ghost")
         reload_b.setToolTip("re-read the known-ratio mixtures prepared in the Samples tab")
         reload_b.clicked.connect(self._load_from_samples)
+        calib_b = QPushButton("Calibration…"); calib_b.setObjectName("ghost")
+        calib_b.setToolTip("dilution-series CSV. Without one the physics pre-training cannot "
+                           "run — train_model needs it to build the simulated mixtures.")
+        calib_b.clicked.connect(self._browse_calib)
+        self.calib_lbl = QLabel("no calibration"); self.calib_lbl.setObjectName("field")
         frow.addWidget(pure_b); frow.addWidget(self.ref_lbl, 1)
+        frow.addWidget(calib_b); frow.addWidget(self.calib_lbl)
         frow.addWidget(self.mix_lbl); frow.addWidget(reload_b)
         root.addLayout(frow)
 
@@ -219,9 +225,34 @@ class ComposePanel(QWidget):
         self.chk_equal_volume.setToolTip("Use when Samples concentrations are source solutions mixed at equal volumes; disable when they already are final concentrations.")
         self.sp_nt = QSpinBox(); self.sp_nt.setRange(20, 1000); self.sp_nt.setSingleStep(20)
         self.sp_nt.setValue(300); self.sp_nt.setPrefix("trees "); self.sp_nt.setObjectName("field")
+
+        # ---- physics pre-training. These were hardcoded off (use_pretrain=False, and
+        # calib_path never set), so a model trained here could not be the one the
+        # 64-condition work adopted no matter what else you ticked. The knobs exist in
+        # dl_model.train_model; they just had no way in.
+        self.chk_pretrain = QCheckBox("physics pre-training")
+        self.chk_pretrain.setObjectName("field")
+        self.chk_pretrain.setToolTip("warm the composition head up on mixtures simulated from "
+                                     "the calibration's response coefficients before fitting the "
+                                     "real maps. Needs a calibration CSV — without one it is "
+                                     "silently skipped inside train_model.")
+        self.chk_pretrain.toggled.connect(self._update_params)
+        self.cmb_iso = QComboBox(); self.cmb_iso.setObjectName("field")
+        self.cmb_iso.addItem("isotherm: Langmuir", None)
+        self.cmb_iso.addItem("isotherm: Sips (DQ)", "sips_dq")
+        self.cmb_iso.setToolTip("how the simulated mixtures respond to concentration. "
+                                "'Sips (DQ)' gives DQ its measured exponent (m 0.66) instead of "
+                                "an ideal Langmuir; TBZ and THI are left at m≈1 either way.")
+        self.chk_nuisance = QCheckBox("simulate ink + substrate")
+        self.chk_nuisance.setObjectName("field")
+        self.chk_nuisance.setToolTip("inject the ink and blank references into the simulated "
+                                     "spectra. Tried on the 64-condition grid and it pushed TBZ "
+                                     "and THI the wrong way — off is the adopted setting.")
+
         mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
         for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px,
-                  self.chk_screen, self.sp_hit, self.chk_equal_volume, self.chk_blank):
+                  self.chk_screen, self.sp_hit, self.chk_equal_volume, self.chk_blank,
+                  self.chk_pretrain, self.cmb_iso, self.chk_nuisance):
             mrow.addWidget(w)
         mrow.addStretch(1)
         self.train_b = QPushButton("Train"); self.train_b.setObjectName("primary")
@@ -311,6 +342,15 @@ class ComposePanel(QWidget):
         if d:
             self.set_data_dir(d)
 
+    def _browse_calib(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Calibration (dilution series) CSV",
+                                           self.data_dir, "CSV (*.csv);;all files (*)")
+        if not p:
+            return
+        self.calib_path = p
+        self.calib_lbl.setText("calib: " + os.path.basename(p))
+        self._update_params()
+
     def _load_from_samples(self):
         """Pull the known-ratio mixtures prepared in Samples (Step 1)."""
         roles = load_mixture_roles(self.data_dir)
@@ -349,6 +389,13 @@ class ComposePanel(QWidget):
         self.chk_blank.setVisible(True)
         self.chk_screen.setVisible(True)
         self.sp_hit.setVisible(self.chk_screen.isChecked())
+        # pre-training only feeds the torch heads, and only means anything with a calibration
+        self.chk_pretrain.setVisible(m in ("mlp", "cnn"))
+        self.chk_pretrain.setEnabled(self.calib_path is not None)
+        if self.calib_path is None:
+            self.chk_pretrain.setChecked(False)
+        on = self.chk_pretrain.isVisible() and self.chk_pretrain.isChecked()
+        self.cmb_iso.setVisible(on); self.chk_nuisance.setVisible(on)
 
     def _opts(self):
         from dataset import load_preprocess
@@ -356,7 +403,10 @@ class ComposePanel(QWidget):
         return dict(data_dir=self.data_dir, calib_path=self.calib_path,
                     baseline=cfg["baseline"], trim=cfg["trim"],
                     method=self.cmb.currentData(), epochs=self.sp_ep.value(),
-                    seed=self.sp_seed.value(), use_pretrain=False,
+                    seed=self.sp_seed.value(),
+                    use_pretrain=bool(self.chk_pretrain.isChecked() and self.calib_path),
+                    sim_iso=self.cmb_iso.currentData(),
+                    sim_nuisance=bool(self.chk_nuisance.isChecked()),
                     n_components=self.sp_nc.value(), n_trees=self.sp_nt.value(),
                     px_per_map=self.sp_px.value(),
                     include_blank=self.chk_blank.isChecked(),
