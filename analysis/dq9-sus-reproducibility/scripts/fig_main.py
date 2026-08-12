@@ -90,16 +90,17 @@ ax.legend(loc="lower left",bbox_to_anchor=(0,1.015),ncol=3,fontsize=7.6,
 # ---------- c ----------
 ax=fig.add_subplot(gs[1,0]); clean(ax); PANELS.append((ax,"c"))
 w=.25; x=np.arange(3)
-sets=[("Pixel SEM",sd_pix/10,RAMP[0]),("Pixel SD",sd_pix,RAMP[1]),
-      ("Preparation SD",sd_prep,RAMP[2])]
+sets=[("Within-prep. SEM",sd_pix/10,RAMP[0]),("Within-prep. SD",sd_pix,RAMP[1]),
+      ("Between-prep. SD",sd_prep,RAMP[2])]
 for i,(nm,v,c) in enumerate(sets):
     ax.bar(x+(i-1)*w,v,width=w-.03,color=c,linewidth=0)
 ax.set_xticks(x); ax.set_xticklabels(list(SER),fontsize=8.5)
 ax.set_ylabel("Error-bar magnitude\n(mass-fraction units)",fontsize=8.5)
-ax.set_ylim(0,.112); ax.set_yticks([0,.04,.08])
+ax.set_ylim(0,.125); ax.set_yticks([0,.04,.08,.12])
 ax.legend([Line2D([0],[0],color=c,lw=5) for _,_,c in sets],[s[0] for s in sets],
-          loc="lower left",bbox_to_anchor=(0,1.015),ncol=3,fontsize=7.6,
-          handlelength=.9,handletextpad=.35,columnspacing=1.0,borderpad=0,borderaxespad=0)
+          loc="lower left",bbox_to_anchor=(0,1.005),ncol=2,fontsize=7.3,
+          handlelength=.9,handletextpad=.35,columnspacing=.9,labelspacing=.25,
+          borderpad=0,borderaxespad=0)
 
 # ---------- d ----------
 ax=fig.add_subplot(gs[1,1]); clean(ax); PANELS.append((ax,"d"))

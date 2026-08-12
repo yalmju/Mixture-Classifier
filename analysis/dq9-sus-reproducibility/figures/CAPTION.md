@@ -8,11 +8,12 @@ line), analyte recovery 24.5 %, composition 25.0 % (DQ), 21.9 % (TBZ), 20.0 % (T
 The ink reporter is a controlled variable — identical stock and volume in every
 preparation.
 (**b**) Mass fractions from two independent preparations; dashed line, 1:1. Error bars
-are the within-map pixel SD (*n* = 100 pixels). *r* = 0.78, RMSE = 0.127. Their
-magnitude does not account for the scatter about the 1:1 line.
-(**c**) Pixel SEM (SD/√100) 0.005–0.008, pixel SD 0.048–0.083, preparation SD
-0.083–0.100. The pixel SEM understates the true error 15-fold, because the 100 pixels
-of a map are subsamples of a single preparation rather than independent replicates.
+are the SD across the 100 spectra acquired within one preparation. *r* = 0.78,
+RMSE = 0.127. Their magnitude does not account for the scatter about the 1:1 line.
+(**c**) Within-preparation SEM (SD/√100) 0.005–0.008, within-preparation SD
+0.048–0.083, between-preparation SD 0.083–0.100. The within-preparation SEM understates
+the true error 15-fold: the 100 spectra come from a single preparation and are
+subsamples of it, not independent replicates.
 (**d**) Discriminability *d′* for a two-fold concentration step versus the number of
 preparations averaged; circled point, single preparation (*d′* = 1.13); shaded region,
 *d′* < 2.
