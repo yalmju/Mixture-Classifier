@@ -18,7 +18,7 @@ sys.path.insert(0, REPO)
 import grid_figs as GF
 
 DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-INTERP = f"{DB}/260808_data interpret"
+INTERP = os.environ.get("INTERP_DIR") or f"{DB}/260808_data interpret"   # 테스트용 우회
 OUT = sys.argv[1] if len(sys.argv) > 1 else f"{INTERP}/origin_data"
 SUB = ["DQ", "TBZ", "THI"]
 os.makedirs(OUT, exist_ok=True)
@@ -163,6 +163,63 @@ for tag, fn in (("clip-only", "conc38_signals_cliponly.json"),
                 body.append([nm, SUB[j] if j < len(SUB) else str(j), f"{float(v2):.6g}"])
     write(f"signals_{tag.replace('-', '_')}.csv", ["map", "channel", "signal"], body,
           f"{tag} 전처리의 성분별 신호")
+
+# ------------------------------------------------------------------ 방법 비교 · 검출 ROC
+#   bench64.py 가 `panels/` 에 이미 tidy 로 써 둔다. 여기서는 Origin 폴더 한 곳에 모이도록
+#   같은 이름 규약으로 옮겨 담기만 한다 — 숫자는 손대지 않는다.
+#   위의 `nnls_baseline.csv` 와 겹쳐 쓰지 말 것: 그쪽은 맵평균 특징의 옛 기준선이고,
+#   표 1 의 NNLS 막대는 여기 `method_comparison.csv`(같은 픽셀·같은 fold) 가 정본이다.
+import csv as _csv
+for _src, _dst, _note in (
+        ("panel_d_method_comparison.csv", "method_comparison.csv",
+         "다섯 방법 조성오차·검출 AUC (표 1 · 패널 d)"),
+        ("panel_e_detection_roc.csv", "detection_roc.csv",
+         "검출 ROC — method 열로 그룹, fpr/tpr (패널 e)"),
+        ("panel_de_predictions.csv", "method_predictions.csv",
+         "방법별 조건 단위 참값 vs 예측 (파리티·잔차용)"),
+        ("learning_curve64.csv", "learning_curve64.csv",
+         "64조건판 학습곡선 — 위 learning_curve.csv(35조건판)와 **겹쳐 그리지 말 것**, "
+         "데이터 규약이 다르다")):
+    _p = f"{INTERP}/panels/{_src}"
+    if not need(_p, _dst, f"{_note} — bench64.py 가 끝나야 생긴다"):
+        continue
+    with open(_p, newline="", encoding="utf-8-sig") as _fh:
+        _rows = list(_csv.reader(_fh))
+    write(_dst, _rows[0], _rows[1:], _note)
+
+#   방법별로 따로도 낸다 — 다섯을 한 장에 겹쳐 그리는 것 말고 하나씩 보고 싶을 때.
+#   ROC 는 방법마다 점 개수가 달라 긴 형식 한 장으로는 Origin 에서 나누기 번거롭다.
+def _split_by_method(src, stem, head_note, keep=None):
+    p = f"{INTERP}/panels/{src}"
+    if not os.path.exists(p):
+        return {}
+    with open(p, newline="", encoding="utf-8-sig") as fh:
+        rows = list(_csv.reader(fh))
+    head, body = rows[0], rows[1:]
+    by = {}
+    for r in body:
+        by.setdefault(r[0], []).append(r[1:])
+    for meth, rs in by.items():
+        write(f"{stem}_{meth.replace(' ', '_')}.csv", head[1:], rs, f"{meth} — {head_note}")
+    return {"head": head, "by": by} if keep else {}
+
+
+_split_by_method("panel_e_detection_roc.csv", "detection_roc", "검출 ROC (fpr, tpr)")
+_pred = _split_by_method("panel_de_predictions.csv", "method_predictions",
+                         "조건 단위 참값 vs 예측", keep=True)
+if _pred:
+    #   조건 단위 조성 오차 = 0.5·Σ|예측−참| — bench64 가 표 1 평균을 낼 때 쓰는 그 정의다.
+    #   평균 하나가 아니라 조건별 값이 있어야 상자그림·짝지은 비교를 다시 그릴 수 있다.
+    _h = _pred["head"]
+    _ti = [i - 1 for i, h in enumerate(_h) if h.startswith("true_")]
+    _pi = [i - 1 for i, h in enumerate(_h) if h.startswith("pred_")]
+    _err = []
+    for _meth, _rs in _pred["by"].items():
+        for _r in _rs:
+            _e = 0.5 * sum(abs(float(_r[b]) - float(_r[a])) for a, b in zip(_ti, _pi))
+            _err.append([_meth, _r[0], f"{_e:.3f}"])
+    write("method_error_by_condition.csv", ["method", "condition", "composition_error_pct"],
+          _err, "표 1 평균의 원자료 — 상자그림·방법 간 짝지은 비교")
 
 # ------------------------------------------------------------------ 정리
 print(f"\n출력 → {OUT}\n")

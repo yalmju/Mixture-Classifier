@@ -10,9 +10,12 @@
 
   실행:  python3 -u bench64.py [epochs=120] [px_per_map=20] [n_trees=100] [cnn_epochs=40]
 
-  ⚠ CNN 은 길이 2001 입력을 full-batch 로 돌아 fold 당 5분이었다. epoch 을 40 으로
-    줄여 감당 가능한 시간에 맞췄다. **CNN 이 덜 학습된 상태로 채점된다** — 'CNN 이
-    MLP 보다 나쁘다' 를 근거로 쓸 때 이 사실을 같이 적어야 한다.
+  ⚠ CNN 은 길이 2001 입력을 full-batch 로 돌아 40 epoch 에 fold 당 5분, 120 epoch 이면
+    16분이다(68 fold ≈ 19시간). 기본값 40 으로 돌리면 **CNN 이 덜 학습된 상태로 채점**되므로
+    'CNN 이 MLP 보다 나쁘다' 를 근거로 쓸 때 반드시 같이 적어야 한다. 2026-08-12 밤 실행은
+    네 번째 인자를 120 으로 줘서 **다른 방법과 같은 epoch** 으로 돌렸다 — 그 실행의 표에는
+    이 단서를 붙이지 말 것. 대신 남는 비대칭은 **MLP 만 물리 사전학습을 받는다**는 것이다
+    (`benchmark_loo` 가 `pre` 를 mlp 갈래에만 넘긴다). 그쪽을 캡션에 적는다.
 
   RF 가 병목이다. sklearn 의 `RandomForestRegressor` 는 회귀에서 `max_features=1.0`
   이라 분할마다 특징 2001개를 전부 본다 — 300트리면 fold 하나에 5분, 68 fold 면 6시간.
@@ -158,7 +161,11 @@ write("panel_de_predictions.csv",
 import shutil
 shutil.rmtree(CKPT, ignore_errors=True)          # 다 끝났으니 부분 저장은 치운다
 print(f"\n{time.time() - t0:.0f}s · → {OUT}")
+_cnn_note = (f"**CNN 은 {CNN_EP} epoch 으로 줄여 돌렸다** (다른 방법은 {EPOCHS}) — "
+             f"CNN 이 불리한 쪽으로 치우친 비교다."
+             if CNN_EP < EPOCHS else
+             f"CNN 도 다른 방법과 같은 {EPOCHS} epoch 으로 돌렸다 — epoch 수로는 공평하다. "
+             f"다만 **물리 사전학습은 MLP 만 받는다**(benchmark_loo 가 pre 를 mlp 에만 넘긴다).")
 print(f"표에 적을 것: leave-one-condition-out · base 구성(blank/sips 없음, "
       f"benchmark_loo 가 그 인자를 받지 않는다) · RF {TREES} trees, max_features=sqrt · "
-      f"**CNN 은 {CNN_EP} epoch 으로 줄여 돌렸다** (다른 방법은 {EPOCHS}) — "
-      f"CNN 이 불리한 쪽으로 치우친 비교다. 캡션에 반드시 적을 것.")
+      f"{_cnn_note} 캡션에 반드시 적을 것.")
