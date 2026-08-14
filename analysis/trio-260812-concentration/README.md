@@ -1,5 +1,12 @@
 # Trio 260812 — absolute concentration from the "SERS" lettering map
 
+> **Bottom line (2026-08-14).** Composition is now recoverable essentially in
+> full — the suppression is reproducible, so the mixture-trained model learns
+> it. Absolute concentration is not: what actually lands on the surface rides
+> the physics (deposition mode, substrate batch, surface competition), so
+> absolute claims live with the droplet campaign, and written-map values are
+> reported as SERS-effective surface loading.
+
 **Map**: `ACF_PEST_DB/Pest/260812_12 trio_THI_TBZ_DQ.csv` — "SERS" written with
 2 µL of ink containing **12 µM EACH of DQ / TBZ / THI** (ground truth 12:12:12).
 **Calibration**: `ACF_PEST_DB/Pest/Standard/260729/calibration_spectra.csv` —
