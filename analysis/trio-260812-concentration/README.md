@@ -79,6 +79,30 @@ ordering, not a one-off artefact. (Absolute recoveries in this grid are
 compressed by isotherm saturation at 150–500 µM nominal; the partner
 COMPARISON at matched dose is the valid readout.)
 
+## Reconciliation with the 64-condition droplet campaign (260814)
+
+The 64-condition droplet grid (3–24 µM, `Ratio/260814_mixture_final`,
+run log `260814_final_rerun/_runlog/conc38.txt`) quantifies TBZ WELL
+(median 1.44-fold, 79% within 2-fold; its own 12/12/12 condition reads
+8.7 / 12.7 / 13.8 for DQ/TBZ/THI) — apparently contradicting the ×4.5 TBZ
+deficit here. It does not contradict it. Running THIS analysis's pipeline
+(same single-compound 260729 standards, same trim) directly on the droplet
+maps also shows NO TBZ collapse (DQ12-TB12-TH12 → TBZ 17.9 µM;
+DQ24-TB24-TH24 → 22.4 µM), so the pipeline is not the difference —
+**the deposition mode is**:
+
+- **droplet-dispensed mixtures** (same protocol as the standards): TBZ lands
+  fine; the grid campaign's problem substance is DQ (median 1.92-fold there,
+  and this pipeline over-reads DQ on several droplet maps too).
+- **pen-written lettering** (this trio map): thin, fast-drying film — the
+  deposition where TBZ, the weakest competitor in the Ratio_mix hierarchy
+  (THI > DQ > TBZ, script 06), actually loses ×4.5.
+
+So "TBZ quantifies at 95% within 2-fold" (droplets) and "TBZ shows a ×4.5
+surface deficit" (written letters) are both true, about different deposition
+physics. Any claim about the trio lettering map must not be quoted against
+droplet-campaign numbers without stating the deposition mode.
+
 ## Caveats
 
 - The ×4.5 TBZ factor is characterised at ONE composition (1:1:1, 12 µM).
