@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui_common import *
-from unmix import unmix_map
+from unmix import unmix_map, vip_bands
 from classify import classify_map
 from real_data import PEST_DEFAULT
 from dataset import load_preprocess, load_colors, save_colors
@@ -63,6 +63,8 @@ class RealDataPage(QWidget):
         self._sel = None
         self._click_axes = []       # axes that accept a pixel click
         self._colors = {}           # per-substance colour override {name: '#hex'}
+        self._bands = {}            # per-substance mapped wavenumber {name: cm⁻¹}
+        self._band_spins = {}
         COLOR_BUS.changed.connect(self._on_colors_changed)   # top-bar picker sync
         self.data_dir = PEST_DEFAULT
         self.test = None
@@ -130,7 +132,8 @@ class RealDataPage(QWidget):
         hitcol.addWidget(_hl); hitcol.addWidget(self.chk_auto)
         self.thr = self._spin_col("min substance fraction", QDoubleSpinBox())
         sp = self.thr.itemAt(1).widget()
-        sp.setDecimals(2); sp.setSingleStep(0.05); sp.setRange(0.01, 0.9); sp.setValue(0.15)
+        # 0.20 settled on the 260812 trio map: 100% of the lettering, 5% stray hits
+        sp.setDecimals(2); sp.setSingleStep(0.05); sp.setRange(0.01, 0.9); sp.setValue(0.20)
         sp.setToolTip("a pixel counts as a substance (not background) when the "
                       "substances make up at least this fraction of it — lower to "
                       "catch weaker signal")
@@ -229,12 +232,16 @@ class RealDataPage(QWidget):
         # ---------- stacked result sections (scrollable) ----------
         body = QVBoxLayout(); body.setSpacing(12)
 
-        # 1) intensity maps: merged composite + each component (background included)
+        # 1) band maps: raw intensity at one marker band per substance + their RGB merge
         self.c_maps = Canvas()
         card_maps, lay_maps = _card(
-            "Intensity maps — merged composite + each component in its colour "
-            "(background included; click a pixel)")
-        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(260)
+            "Band maps — raw intensity at one band per substance, and the three "
+            "read as R/G/B (click a pixel)")
+        self.bandrow = QHBoxLayout(); self.bandrow.setSpacing(6)
+        self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
+        self.bandrow.addStretch(1)
+        lay_maps.addLayout(self.bandrow)
+        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(300)
         body.addWidget(card_maps)
 
         # 2) per-pixel composition pie | selected-pixel spectrum, side by side — right
@@ -303,13 +310,17 @@ class RealDataPage(QWidget):
         self._colors = load_colors(path)                  # remembered colour choices
         set_substance_colors(self._colors)                # seed the shared colour state
         if self._res is not None:
-            self._rebuild_swatches(self._res); self._redraw()
+            self._rebuild_swatches(self._res)
+            self._rebuild_bandrow(self._res)   # the spin borders carry the colours too
+            self._redraw()
 
     def _on_colors_changed(self):
         """Shared colours changed (e.g. from the top-bar picker) — resync + redraw."""
         self._colors = substance_colors()
         if self._res is not None:
-            self._rebuild_swatches(self._res); self._redraw()
+            self._rebuild_swatches(self._res)
+            self._rebuild_bandrow(self._res)   # the spin borders carry the colours too
+            self._redraw()
 
     def _mk_lbl(self, text):
         lb = QLabel(text); lb.setObjectName("field"); return lb
@@ -324,21 +335,81 @@ class RealDataPage(QWidget):
             out.append(self._colors.get(r.comps[j], self._default_color(i)))
         return out
 
-    def _all_colors(self, r):
-        """Colour per component (index in r.comps): its hue if a substance, else the
-        chosen background colour (saved override or grey) — so the background
-        component gets its own recolourable panel too."""
-        nb = self._nb_colors(r)
-        nbmap = {j: nb[i] for i, j in enumerate(r.nonbg)}
-        return [nbmap.get(k, self._colors.get(r.comps[k], BG_GREY))
-                for k in range(len(r.comps))]
-
     def _bg_color(self, r):
         """Chosen background colour (first background component's override, or grey)."""
         for k in range(len(r.comps)):
             if r.bg_mask[k]:
                 return self._colors.get(r.comps[k], BG_GREY)
         return BG_GREY
+
+    # ---- marker bands driving the band maps ----
+    BAND_HALF_WIDTH = 8.0                  # cm⁻¹ averaged either side of the band
+
+    def _default_bands(self, r):
+        """One marker band per non-background substance: its VIP band — the peak
+        where its L2-normalised reference shape most exceeds every other reference,
+        i.e. the least cross-talking band it has. Falls back to the plain argmax of
+        the template when the references give no usable peak."""
+        nb_names = [r.comps[j] for j in r.nonbg]
+        if r.templates is None or r.wn is None:
+            return {nm: float(np.median(r.wn)) for nm in nb_names}
+        try:
+            picks = vip_bands(r.wn, r.templates[r.nonbg], nb_names, k=1)
+        except Exception:
+            picks = {}
+        out = {}
+        for i, nm in enumerate(nb_names):
+            wl = picks.get(nm) or []
+            out[nm] = float(wl[0]) if wl else float(
+                r.wn[int(np.argmax(r.templates[r.nonbg][i]))])
+        return out
+
+    def _band_of(self, r, name):
+        """Chosen band for a substance, defaulting to its VIP band on first sight."""
+        if name not in self._bands:
+            self._bands.update({k: v for k, v in self._default_bands(r).items()
+                                if k not in self._bands})
+        return self._bands.get(name, float(np.median(r.wn)))
+
+    def _band_image(self, r, wl):
+        """Per-pixel intensity at ``wl`` — mean over the ±BAND_HALF_WIDTH window, so
+        one noisy channel does not decide the pixel. Uses the measured (baseline-
+        removed) spectra, NOT the unmixed abundances: this map is the raw evidence."""
+        wn = np.asarray(r.wn, float)
+        m = np.abs(wn - float(wl)) <= self.BAND_HALF_WIDTH
+        if not m.any():                                   # window fell between channels
+            m = np.zeros(len(wn), bool); m[int(np.argmin(np.abs(wn - float(wl))))] = True
+        return np.asarray(r.spectra, float)[:, m].mean(axis=1)
+
+    def _rebuild_bandrow(self, r):
+        """A wavenumber spin box per substance, coloured like its panel."""
+        while self.bandrow.count():
+            it = self.bandrow.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
+        cols = self._nb_colors(r)
+        lo, hi = float(np.min(r.wn)), float(np.max(r.wn))
+        self._band_spins = {}
+        for i, j in enumerate(r.nonbg):
+            nm = r.comps[j]
+            self.bandrow.addWidget(self._mk_lbl(nm))
+            sp = QDoubleSpinBox(); sp.setDecimals(1); sp.setSingleStep(5.0)
+            sp.setRange(lo, hi); sp.setValue(self._band_of(r, nm))
+            sp.setFixedWidth(96)
+            sp.setStyleSheet(f"QDoubleSpinBox{{border:2px solid {cols[i]};"
+                             f"border-radius:6px;padding:1px 4px;}}")
+            sp.setToolTip(f"wavenumber mapped for {nm} — intensity is averaged over "
+                          f"±{self.BAND_HALF_WIDTH:.0f} cm⁻¹ around it")
+            sp.valueChanged.connect(lambda v, name=nm: self._on_band(name, v))
+            self.bandrow.addWidget(sp)
+            self._band_spins[nm] = sp
+        self.bandrow.addStretch(1)
+
+    def _on_band(self, name, value):
+        self._bands[name] = float(value)
+        if self._res is not None:
+            self._plot_maps(self._res)     # only the band card depends on the choice
 
     def _rebuild_swatches(self, r):
         while self.swatches.count():
@@ -615,8 +686,19 @@ class RealDataPage(QWidget):
         return r.hit & self._reliable(r)
 
     def _mean_ratio(self, r):
+        """SIGNAL-WEIGHTED mean composition over the hit pixels: each pixel's ratio
+        weighted by its total baseline-removed intensity. A plain average lets the
+        dim fringe pixels — where the marker evidence fades first — dilute the
+        strong-ink composition (on the 260812 trio map it pulled THI 40%→32%);
+        weighting by signal keeps the well-measured pixels in charge while every
+        hit pixel still shows on the map."""
         rn = self._ratio_nb(r); hit = self._hit(r)
-        return rn[hit].mean(axis=0) if hit.any() else rn.mean(axis=0)
+        if not hit.any():
+            return rn.mean(axis=0)
+        w = np.clip(np.asarray(r.spectra, float), 0.0, None).sum(axis=1)[hit]
+        if w.sum() <= 0:
+            return rn[hit].mean(axis=0)
+        return (rn[hit] * w[:, None]).sum(axis=0) / w.sum()
 
     # ---- run ----
     def _run(self):
@@ -696,6 +778,7 @@ class RealDataPage(QWidget):
         self.k_hit.set(f"{eff_hit.mean():.0%}", BLUE)
         self.k_px.set(f"{r.n_pixels:,}", PURPLE)
         self._rebuild_swatches(r)
+        self._rebuild_bandrow(r)     # seeds each substance's VIP band on a fresh run
         self._plot_maps(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
 
@@ -719,43 +802,69 @@ class RealDataPage(QWidget):
                          uy.min() - .5, uy.max() + .5]
 
     def _plot_maps(self, r):
-        """Merged false-colour composite PLUS one panel per component (background
-        included), all in a SINGLE row. The merge sums every substance's abundance
-        painted in its colour; each single-component panel is that component's
-        abundance on a black→colour scale with its own intensity colour-bar."""
+        """One RAW band-intensity map per substance, at the wavenumber picked for it,
+        plus the same three channels read as R/G/B in one merged panel.
+
+        These panels deliberately show NO unmixing: each is just the measured
+        intensity in a ±window around one band. That is what a band-ratio / RGB
+        readout of this map actually sees, so when the merged panel comes out one
+        colour everywhere, it is showing that picking bands is not enough to tell
+        these substances apart here — the unmixed pies below are the comparison.
+
+        Every channel is stretched between its OWN P1 and P99, so a strong emitter
+        cannot simply wash the merge out and the residual background floor (these
+        spectra are baseline-removed, not background-free) does not grey everything
+        out; what remains is genuine band overlap. The single-substance panels use
+        the SAME stretch as the merge — their colour-bars carry the real intensity
+        values, so nothing about the contrast is hidden."""
         from matplotlib.colors import LinearSegmentedColormap
         self.c_maps.fig.clear(); self._click_axes = []
         nbcols = self._nb_colors(r)
-        allcols = self._all_colors(r)
-        Anb = r.A[:, r.nonbg]
-        mscale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
-        # shared intensity axis across the substance panels (BLK keeps its own)
-        sub_vmax = float(np.quantile(Anb, 0.99)) if Anb.size else 1.0
-        sub_vmax = sub_vmax or 1.0
+        nb = [r.comps[j] for j in r.nonbg]
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
 
-        panels = [("merged", None)] + [(r.comps[k], k) for k in range(len(r.comps))]
-        n = len(panels)                                    # all panels on one row
-        for idx, (title, k) in enumerate(panels):
-            ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, n, idx + 1))
-            if k is None:                                  # merged composite (RGB)
-                cols = np.array([to_rgb(c) for c in nbcols])
-                img = np.zeros((ny, nx, 3))
-                img[rows, cc] = np.clip((Anb / mscale) @ cols, 0.0, 1.0)
-                ax.imshow(img, extent=extent, origin=origin, aspect="equal",
-                          interpolation="nearest")
-            else:                                          # single component + colour-bar
-                sc = (sub_vmax if not r.bg_mask[k]         # substances share one axis
-                      else float(np.quantile(r.A[:, k], 0.99)) or 1.0)
-                grid = np.zeros((ny, nx)); grid[rows, cc] = r.A[:, k]
-                cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", allcols[k]])
-                im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                               interpolation="nearest", cmap=cmap, vmin=0.0, vmax=sc)
-                cb = self.c_maps.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
-                cb.ax.tick_params(labelsize=7, colors="black")
-                bg = " (bkg)" if r.bg_mask[k] else ""
-            # no selection ring on the intensity maps — it clutters them; the pie map
+        bands = [self._band_of(r, nm) for nm in nb]
+        chans = [self._band_image(r, wl) for wl in bands]
+        lims = [(float(np.quantile(v, 0.01)), float(np.quantile(v, 0.99)))
+                for v in chans]
+        lims = [(a, b if b > a else a + 1.0) for a, b in lims]   # never a zero span
+
+        n = len(nb) + 1                                   # merge + one per substance
+        # ---- merged R/G/B: each channel stretched over its own P1..P99 ----
+        ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, n, 1))
+        cols = np.array([to_rgb(c) for c in nbcols])
+        norm = np.stack([np.clip((v - a) / (b - a), 0.0, 1.0)
+                         for v, (a, b) in zip(chans, lims)], 1)
+        img = np.zeros((ny, nx, 3))
+        img[rows, cc] = np.clip(norm @ cols, 0.0, 1.0)
+        ax.imshow(img, extent=extent, origin=origin, aspect="equal",
+                  interpolation="nearest")
+        ax.set_title("merged (R/G/B)", fontsize=9)
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.legend(handles=[Patch(facecolor=nbcols[i], label=f"{nm} {bands[i]:.0f}")
+                           for i, nm in enumerate(nb)],
+                  fontsize=8, framealpha=0.0, labelcolor="black",
+                  loc="upper center", bbox_to_anchor=(0.5, -0.02),
+                  ncol=1, frameon=False)
+        self._click_axes.append(ax)
+
+        # ---- one panel per substance, its own band ----
+        # No colour-bars. `aspect="equal"` shrinks the image inside its axes, but a
+        # colorbar sizes itself off the FULL axes box, so the bar always came out
+        # taller than the map beside it. These panels are a picture of where a band
+        # is strong; the numbers behind them are in the CSV export.
+        for i, nm in enumerate(nb):
+            ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, n, i + 2))
+            grid = np.zeros((ny, nx)); grid[rows, cc] = chans[i]
+            cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", nbcols[i]])
+            ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                      interpolation="nearest", cmap=cmap,
+                      vmin=lims[i][0], vmax=lims[i][1])
+            # mathtext, not "cm⁻¹" — Arial has no superscript-minus glyph, so the
+            # literal character renders as a box in the exported PNG
+            ax.set_title(f"{nm} @ {bands[i]:.0f} cm$^{{-1}}$", fontsize=9)
+            # no selection ring on the band maps — it clutters them; the pie map
             # (beside the spectrum) carries the highlight instead
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
@@ -797,20 +906,34 @@ class RealDataPage(QWidget):
             ax.set_xticks([]); ax.set_yticks([])
         self.c_conc.fig.tight_layout(); self.c_conc.draw_idle()
 
+    # Final pie-map style (settled with the 260812 trio map): pure black ground,
+    # the full measurement grid in white so the map reads as MAP DATA, cell-filling
+    # pies, and a heavier white outline tracing the hit region. Low-R² ✕ marks are
+    # gone for good — on a badly-fit map they covered every pixel and said nothing;
+    # the R² still reaches the user via the pixel click-out and the CSV export.
+    PIE_BG = "#000000"
+    PIE_GRID = "#ffffff"
+
     def _plot_pies(self, r):
+        from matplotlib.collections import LineCollection
         ax = self.c_pie.new_ax(); self._click_axes.append(ax)
-        cols = self._nb_colors(r); bg_col = self._bg_color(r)
+        cols = self._nb_colors(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
-        ux = np.unique(x); rad = (np.median(np.diff(ux)) * 0.46) if len(ux) > 1 else 0.46
+        ux, uy = np.unique(x), np.unique(y)
+        sx = float(np.median(np.diff(ux))) if len(ux) > 1 else 1.0
+        sy = float(np.median(np.diff(uy))) if len(uy) > 1 else 1.0
+        rad = sx * 0.5                                    # pies fill their cell
         hit = self._hit(r)                                # substance pixels kept
-        excl = r.hit & self._flagged(r)                   # low-R² — marked either way
-        # background / non-hit pixels: one fast scatter (not one patch each)
-        if (~hit & ~excl).any():
-            m = ~hit & ~excl
-            ax.scatter(x[m], y[m], c=bg_col, marker="s", s=16, edgecolors="none")
-        if excl.any():             # flagged pixels marked ON TOP of their pie (zorder),
-            ax.scatter(x[excl], y[excl], c=CORAL, marker="x", s=22,     # never silent
-                       linewidths=0.9, zorder=5)   # 'x' has no face: colour it directly
+        ax.set_facecolor(self.PIE_BG)
+        # every cell boundary — the empty cells are measured background, not canvas
+        gsegs = [[(ux[0] - sx / 2 + j * sx, uy[0] - sy / 2),
+                  (ux[0] - sx / 2 + j * sx, uy[-1] + sy / 2)]
+                 for j in range(len(ux) + 1)]
+        gsegs += [[(ux[0] - sx / 2, uy[0] - sy / 2 + i * sy),
+                   (ux[-1] + sx / 2, uy[0] - sy / 2 + i * sy)]
+                  for i in range(len(uy) + 1)]
+        ax.add_collection(LineCollection(gsegs, colors=self.PIE_GRID,
+                                         linewidths=0.5, zorder=1))
         if r.method == "model":                           # classifier → one class/pixel
             dom = r.ratio_nb.argmax(axis=1)
             if hit.any():
@@ -830,15 +953,37 @@ class RealDataPage(QWidget):
             if wedges:
                 ax.add_collection(PatchCollection(wedges, facecolors=wcols,
                                                   edgecolors="none"))
+        # hit-region outline: cell-edge segments, twice the grid weight
+        xi = {v: j for j, v in enumerate(ux)}; yi = {v: i for i, v in enumerate(uy)}
+        H = np.zeros((len(uy), len(ux)), bool)
+        H[[yi[v] for v in y[hit]], [xi[v] for v in x[hit]]] = True
+        segs = []
+        for i in range(len(uy)):
+            for j in range(len(ux)):
+                if not H[i, j]:
+                    continue
+                x0, y0 = ux[j] - sx / 2, uy[i] - sy / 2
+                x1, y1 = ux[j] + sx / 2, uy[i] + sy / 2
+                if i == 0 or not H[i - 1, j]:
+                    segs.append([(x0, y0), (x1, y0)])
+                if i == len(uy) - 1 or not H[i + 1, j]:
+                    segs.append([(x0, y1), (x1, y1)])
+                if j == 0 or not H[i, j - 1]:
+                    segs.append([(x0, y0), (x0, y1)])
+                if j == len(ux) - 1 or not H[i, j + 1]:
+                    segs.append([(x1, y0), (x1, y1)])
+        if segs:
+            ax.add_collection(LineCollection(segs, colors=self.PIE_GRID,
+                                             linewidths=1.6, zorder=6))
         self._mark_sel(ax, r)
-        ax.set_xlim(x.min() - 1, x.max() + 1)
-        ax.set_ylim(*((y.max() + 1, y.min() - 1) if self._flip()
-                      else (y.min() - 1, y.max() + 1)))
+        ax.set_xlim(x.min() - sx, x.max() + sx)
+        ax.set_ylim(*((y.max() + sy, y.min() - sy) if self._flip()
+                      else (y.min() - sy, y.max() + sy)))
         ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
         # legend OUTSIDE the map (below), so it never covers the pixels
         handles = [Patch(facecolor=cols[i], label=r.comps[j])
                    for i, j in enumerate(r.nonbg)] + \
-                  [Patch(facecolor=bg_col, label="background")]
+                  [Patch(facecolor=self.PIE_BG, label="background")]
         ax.legend(handles=handles, fontsize=9, framealpha=0.0, labelcolor="black",
                   loc="upper center", bbox_to_anchor=(0.5, -0.02),
                   ncol=len(handles), frameon=False)
@@ -922,9 +1067,15 @@ class RealDataPage(QWidget):
         if not d:
             return
         r = self._res; nb = [r.comps[i] for i in r.nonbg]
+        # both aggregates, so the pie can be redrawn either way: the plain average
+        # and the signal-weighted one the app now displays (see _mean_ratio)
+        mr_un = (r.ratio_nb[self._hit(r)].mean(axis=0) if self._hit(r).any()
+                 else r.ratio_nb.mean(axis=0))
+        mr_w = self._mean_ratio(r)
         write_csv(os.path.join(d, "composition.csv"),
-                  ["substance", "mean_ratio"],
-                  [[nm, f"{r.mean_ratio[i]:.4f}"] for i, nm in enumerate(nb)])
+                  ["substance", "mean_ratio_unweighted", "mean_ratio_signal_weighted"],
+                  [[nm, f"{mr_un[i]:.4f}", f"{mr_w[i]:.4f}"]
+                   for i, nm in enumerate(nb)])
         inten = r.spectra.sum(axis=1)                      # total baseline-removed signal
         cal = getattr(r, "conc", None) is not None
         has_bg = getattr(r, "bg_score", None) is not None
@@ -942,7 +1093,7 @@ class RealDataPage(QWidget):
                 + ([f"{r.bg_score[i]:.4f}"] if has_bg else [])
                 for i in range(r.n_pixels)]
         write_csv(os.path.join(d, "per_pixel.csv"), head, rows)
-        figs = [("real_intensity_maps", self.c_maps),
+        figs = [("real_band_maps", self.c_maps),
                 ("real_composition_pies", self.c_pie),
                 ("real_composition", self.c_comp),
                 ("real_pixel_spectrum", self.c_spec)]
@@ -959,7 +1110,9 @@ class RealDataPage(QWidget):
         cfg = load_preprocess(self.data_dir)
         trim = cfg.get("trim")
         window = f"{trim[0]:.0f}–{trim[1]:.0f} cm⁻¹" if trim else "full range"
-        ratio_str = " · ".join(f"{nm} {r.mean_ratio[i]:.0%}" for i, nm in enumerate(nb))
+        mrw = self._mean_ratio(r)                          # signal-weighted, as displayed
+        ratio_str = " · ".join(f"{nm} {mrw[i]:.0%}" for i, nm in enumerate(nb)) \
+                    + " (signal-weighted over hit pixels)"
         cal = getattr(r, "calibrated", False) and getattr(r, "conc_median", None) is not None
         se_arr = (r.conc_se if getattr(r, "conc_se", None) is not None
                   else np.zeros_like(r.conc_median)) if cal else None
@@ -970,7 +1123,10 @@ class RealDataPage(QWidget):
             f"95% CI {r.conc_ci_low[i] * 1e6:.3g}–{r.conc_ci_high[i] * 1e6:.3g})"
             for i, nm in enumerate(nb)) if cal else "not computed (no calibration loaded)")
         fig_docs = {
-            "real_intensity_maps": "per-pixel total baseline-removed band intensity.",
+            "real_band_maps": ("raw baseline-removed intensity at one marker band per "
+                               "substance, and those channels read as R/G/B — no "
+                               "unmixing, so it shows what a band/RGB readout alone can "
+                               "separate."),
             "real_composition_pies": "mean composition (pie) over the hit pixels.",
             "real_composition": "per-pixel dominant-substance / composition map.",
             "real_pixel_spectrum": "measured spectrum of the selected pixel.",
