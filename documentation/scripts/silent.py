@@ -3,18 +3,21 @@
 분석물(DQ·TBZ·THI)은 삼중결합이 없어 1800-2800에 밴드가 없다 -> 교차간섭 원리적으로 0.
 지금까지의 NNLS는 300-1800만 써서 이 밴드를 통째로 버렸다.
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, math, os
 import numpy as np
 from scipy.optimize import nnls
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
+REPO = paths.REPO
 sys.path.insert(0, REPO)
 import unmix
 from real_data import load_map
 from sers_mixture import als_baseline
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB/Pure"
-D = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB/tert-new-baseline"
+DB = paths.PURE
+D = f"{paths.DB}/tert-new-baseline"
 COMP = {1: (6, 6, 24), 2: (12, 12, 12), 3: (24, 6, 6),
         4: (6, 6, 6), 5: (24, 24, 24), 6: (12, 12, 48)}
 SUB = ["DQ", "TBZ", "THI"]

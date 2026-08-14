@@ -1,4 +1,7 @@
 """K, LOD, and the concentration verdict from everything measured so far."""
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, math
 import numpy as np
 from scipy.optimize import nnls, least_squares
@@ -12,7 +15,7 @@ names, wn_t, P = ink6.templates()
 SUB = ["DQ", "TBZ", "THI"]
 SI = [names.index(s) for s in SUB]
 IK = names.index("INK")
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB/Pure"
+DB = paths.PURE
 COMP = {1: (6, 6, 24), 2: (12, 12, 12), 3: (24, 6, 6),
         4: (6, 6, 6), 5: (24, 24, 24), 6: (12, 12, 48)}
 maps = sorted(COMP)

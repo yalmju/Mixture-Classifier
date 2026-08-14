@@ -1,9 +1,12 @@
 """1:1:1 계열로 농도별 보정곡선을 만들고, 편중 조성에 적용해 검증."""
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, math, os
 import numpy as np
 from scipy.optimize import nnls
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
+REPO = paths.REPO
 sys.path.insert(0, REPO)
 sys.path.insert(0, "/private/tmp/claude-501/-Users-seungki2-Documents-GitHub-Mixture-Classifier--claude-worktrees-ink-check-6maps-run-ad8cec/61a536fa-e12d-4dee-8d68-95377dbe80ce/scratchpad")
 import ink6
@@ -12,7 +15,7 @@ from real_data import load_map
 names, wn_t, P = ink6.templates()
 SUB = ["DQ", "TBZ", "THI"]
 SI = [names.index(s) for s in SUB]
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+DB = paths.DB
 NEW = f"{DB}/tert-new-baseline"
 OLD = f"{DB}/Ratio/260805"
 COMP = {1: (6, 6, 24), 2: (12, 12, 12), 3: (24, 6, 6),

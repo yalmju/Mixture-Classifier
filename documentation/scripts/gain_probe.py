@@ -40,7 +40,7 @@ from dl_model import _refs, _map_spectra
 from real_data import load_map
 
 DB = paths.DB
-OUT = f"{DB}/260808_data interpret/panels"
+OUT = f"{paths.INTERP}/panels"
 PURE = f"{DB}/Pure"
 SUB = ["DQ", "TBZ", "THI"]
 INK_BAND = (2100.0, 2175.0)      # 잉크 2137 cm⁻¹ — 분석물 밴드가 없는 침묵 구간
@@ -56,21 +56,17 @@ band = (wn_m >= INK_BAND[0]) & (wn_m <= INK_BAND[1])
 print(f"템플릿 {names} · 잉크 밴드 {INK_BAND[0]:.0f}–{INK_BAND[1]:.0f} cm⁻¹ "
       f"({int(band.sum())} 채널)")
 
-seen, C, B, feat = set(), [], [], []
-for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-    if "DQ9-sus" in p:
-        continue
-    h = hashlib.md5(open(p, "rb").read()).hexdigest()
-    if h in seen:
-        continue
-    seen.add(h)
-    m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
+# 라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`).
+import mixtures as MX
+C, B, feat = [], [], []
+for _m in MX.catalogue(("grid",), replicates=("baseline",)):   # 격자 폴더만 — 65맵
+    p = _m.path
     _w, cube, _mm, _c = load_map(p)
     ya = _map_spectra(cube, mask, 0)[0]
     px = np.array(_map_spectra(cube, mask, 100))       # 맵의 픽셀 전부
     b = fit_B(ya, P)[0]
     pxb = px[:, band].sum(1)
-    C.append([int(m.group(i)) / 3.0 for i in (1, 2, 3)])
+    C.append([float(v) for v in _m.conc])
     B.append(b[idx])
     feat.append({"ink2137": float(ya[band].sum()),
                  "ink_px_mean": float(pxb.mean()),

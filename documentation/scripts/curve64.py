@@ -12,11 +12,14 @@
 
   실행:  python3 -u curve64.py [epochs=120] [seeds=2]
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os, re, glob, time
 import numpy as np
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+REPO = paths.REPO
+DB = paths.DB
 sys.path.insert(0, REPO)
 
 import dl_model
@@ -27,9 +30,9 @@ from dl_quantify import _ratio, simulate_mixtures
 PURE = f"{DB}/Pure"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import paths
+import mixtures as MX
 CALIB = paths.calibration()
-BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
-SUB = ["DQ", "TBZ", "THI"]
+SUB = MX.SUB
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "curve64_feats.npz")
 EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 120
 SEEDS = int(sys.argv[2]) if len(sys.argv) > 2 else 2
@@ -38,46 +41,14 @@ subs, wn, mask, P, lo, hi = _refs(PURE, baseline=True, trim=None)
 
 
 def _hi_items():
-    out = []
-    for p in sorted(glob.glob(f"{DB}/Ratio/Ratio_mix/*orrected.csv")):
-        nm = os.path.basename(p).split("_corrected")[0].split("-corrected")[0]
-        if nm in BAD:
-            continue
-        c = {"DQ": 0.0, "TBZ": 0.0, "THI": 0.0}
-        for k, v in re.findall(r"(DQ|TBZ|TH[I1])(\d+)", nm):
-            c["THI" if k.startswith("TH") else k] += float(v)
-        if sum(c.values()):
-            out.append((p, c))
-    return out
+    """고농도 34조건. 라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`)."""
+    return [(p, c) for p, c, _cm in MX.items(("high",))]
 
 
 def _lo_groups():
-    """retrain64 와 같은 규약 — DQ9-sus 는 두 축 라벨이 뒤바뀐 배치라 빼고, 같은 내용의
-    파일이 두 폴더에 있으면 한 장으로 센다."""
-    import hashlib
-    g, seen = {}, set()
-
-    def add(key, p):
-        h = hashlib.md5(open(p, "rb").read()).hexdigest()
-        if h in seen:
-            return
-        seen.add(h)
-        g.setdefault(key, []).append(p)
-
-    for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-        if "DQ9-sus" in p:
-            continue
-        m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-        if m:
-            add(tuple(int(m.group(i)) // 3 for i in (1, 2, 3)), p)
-    OLD = {(6, 6, 24): 1, (12, 12, 12): 2, (24, 6, 6): 3,
-           (6, 6, 6): 4, (24, 24, 24): 5, (12, 12, 48): 6}
-    for key, n in OLD.items():
-        for r in (1, 2, 3):
-            p = f"{DB}/tert-new-baseline/{n}-{r}_corrected.csv"
-            if os.path.exists(p):
-                add(key, p)
-    return g
+    """저농도 65조건. DQ9-sus 는 두 축 라벨이 뒤바뀐 배치라 최종 폴더에 없고, 같은
+    내용의 파일이 두 폴더에 있으면 한 장으로 센다."""
+    return MX.groups(("grid",), replicates=True)
 
 
 # ------------------------------------------------------------------ 특징 캐시
@@ -185,7 +156,7 @@ print("\n저장: curve64_result.npz")
 print("  [비교] 65조건 채택구성 12.7% · 반복산포 하한 9.6%")
 
 import csv as _csv
-_out = f"{DB}/260808_data interpret/panels"
+_out = f"{paths.INTERP}/panels"
 os.makedirs(_out, exist_ok=True)
 with open(f"{_out}/learning_curve64.csv", "w", newline="", encoding="utf-8-sig") as _f:
     _w = _csv.writer(_f)

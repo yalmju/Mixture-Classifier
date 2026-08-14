@@ -13,12 +13,15 @@
 
   실행:  python3 -u conc38.py
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os, re, glob, json, hashlib
 import numpy as np
 from scipy.optimize import nnls
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+REPO = paths.REPO
+DB = paths.DB
 sys.path.insert(0, REPO)
 
 from dl_model import _refs
@@ -58,31 +61,9 @@ def map_signal(path):
 
 
 # --------------------------------------------------------- 저농도 맵 수집 (조성별)
-LO, _seen = {}, set()
-
-
-def _add(key, p):
-    """같은 내용(md5)의 파일이 두 폴더에 있으면 한 장으로만 센다."""
-    h = hashlib.md5(open(p, "rb").read()).hexdigest()
-    if h in _seen:
-        return
-    _seen.add(h)
-    LO.setdefault(key, []).append(p)
-
-
-for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-    if "DQ9-sus" in p:                      # 혼합 의심 배치 — 제외
-        continue
-    mm = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-    if mm:
-        _add(tuple(int(mm.group(i)) // 3 for i in (1, 2, 3)), p)
-OLD = {(6, 6, 24): 1, (12, 12, 12): 2, (24, 6, 6): 3,
-       (6, 6, 6): 4, (24, 24, 24): 5, (12, 12, 48): 6}
-for key, n in OLD.items():
-    for r in (1, 2, 3):
-        p = f"{DB}/tert-new-baseline/{n}-{r}_corrected.csv"
-        if os.path.exists(p):
-            _add(key, p)
+# 라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`).
+import mixtures as MX
+LO = MX.groups(("grid",), replicates=True)
 
 keys = sorted(LO)
 print(f"조건 {len(keys)} · 맵 {sum(len(v) for v in LO.values())}")
@@ -90,7 +71,7 @@ print(f"조건 {len(keys)} · 맵 {sum(len(v) for v in LO.values())}")
 # --------------------------------------------------------- 신호 측정 (캐시)
 cache = {}
 if os.path.exists(OUT):
-    cache = {k: np.array(v) for k, v in json.load(open(OUT)).items()}
+    cache = {k: np.array(v) for k, v in json.load(open(OUT, encoding="utf-8")).items()}
 rows = []                                   # (조건키, 경로, 신호(3,), 참농도(3,))
 todo = [(k, p) for k in keys for p in LO[k] if p not in cache]
 for i, (k, p) in enumerate(todo, 1):

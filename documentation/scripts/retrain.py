@@ -1,37 +1,26 @@
 """프로젝트 자체 train_model로 저농도를 포함해 재학습. TBZ 오탐이 사라지나."""
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os, re, glob
 import numpy as np
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
+REPO = paths.REPO
 sys.path.insert(0, REPO)
 import dl_model
 from real_data import load_map
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-PURE = f"{DB}/Pure"
-BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
-CALIB = f"{DB}/Ratio/results/calibration_spectra.csv"
-SUB = ["DQ", "TBZ", "THI"]
+import mixtures as MX
+
+DB = paths.DB
+PURE = paths.PURE
+CALIB = paths.calibration()
+SUB = MX.SUB
 COMP = {1: (6, 6, 24), 2: (12, 12, 12), 3: (24, 6, 6),
         4: (6, 6, 6), 5: (24, 24, 24), 6: (12, 12, 48)}
 
-
-def parse(nm):
-    c = {"DQ": 0.0, "TBZ": 0.0, "THI": 0.0}
-    for k, v in re.findall(r"(DQ|TBZ|TH[I1])(\d+)", nm):
-        c["THI" if k.startswith("TH") else k] += float(v)
-    return c
-
-
-HI = []
-for p in sorted(glob.glob(f"{DB}/Ratio/Ratio_mix/*orrected.csv")):
-    nm = os.path.basename(p).split("_corrected")[0].split("-corrected")[0]
-    if nm in BAD:
-        continue
-    c = parse(nm)
-    if sum(c.values()) == 0:
-        continue
-    HI.append((p, c, {k: v * 1e-6 for k, v in c.items()}))
+# 라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`).
+HI = MX.items(("high",))
 
 LO = {}
 for n, C in COMP.items():

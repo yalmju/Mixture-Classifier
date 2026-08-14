@@ -40,7 +40,7 @@ from dl_model import _refs, _map_spectra
 from real_data import load_map
 
 DB = paths.DB
-OUT = f"{DB}/260808_data interpret/panels"
+OUT = f"{paths.INTERP}/panels"
 PURE = f"{DB}/Pure"
 SUB = ["DQ", "TBZ", "THI"]
 WORK = (3.0, 24.0)
@@ -129,19 +129,12 @@ print(f"\n  ✓ lod_loq.csv  {len(rows)}행 → {OUT}")
 # 단일성분 LOD 는 다른 성분이 없을 때의 값이다. 혼합물에서는 셋이 같은 표면을 나눠
 # 쓰므로 자기 농도당 신호(기울기)가 떨어지고, 맵마다 매트릭스가 달라 산포도 커진다.
 # 64조건 격자에서 **자기 농도에 대한 B 의 기울기**를 직접 재서 그 둘을 다 반영한다.
-import re, glob as _glob, hashlib
+import mixtures as MX
 
-LO_MAPS = {}
-_seen = set()
-for p in sorted(_glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-    if "DQ9-sus" in p:
-        continue
-    h = hashlib.md5(open(p, "rb").read()).hexdigest()
-    if h in _seen:
-        continue
-    _seen.add(h)
-    m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-    LO_MAPS[p] = np.array([int(m.group(i)) / 3.0 for i in (1, 2, 3)])   # 최종 µM
+# 라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`).
+# 격자 폴더만 쓴다 (65맵) — tert-new 18맵까지 넣으면 80맵이 되고 LOD 가 움직인다.
+LO_MAPS = {m.path: np.array(m.conc, float)
+           for m in MX.catalogue(("grid",), replicates=("baseline",))}
 
 Cm, Bm = [], []
 for p, c in LO_MAPS.items():

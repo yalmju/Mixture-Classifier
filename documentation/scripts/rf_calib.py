@@ -15,11 +15,14 @@
 
   실행:  python3 -u rf_calib.py [anchor=TBZ]
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os
 import numpy as np
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+REPO = paths.REPO
+DB = paths.DB
 sys.path.insert(0, REPO)
 
 from io_utils import load_calibration_csv
@@ -27,7 +30,7 @@ from calibration import calibrate, fit_isotherm
 from dl_model import _refs
 
 PURE = f"{DB}/Pure"
-CALIB = f"{DB}/Ratio/results/calibration_spectra.csv"
+CALIB = paths.calibration()
 ANCHOR = sys.argv[1] if len(sys.argv) > 1 else None
 MIX_LO, MIX_HI = 3e-6, 24e-6          # 혼합물 최종 농도 구간 (µM 격자)
 

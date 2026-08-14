@@ -25,6 +25,7 @@ labfig.setup()
 import matplotlib
 from matplotlib.figure import Figure
 import paths
+import mixtures as MX
 import grid_figs as GF
 import triangle_figs as TF
 from dl_model import _refs, _map_spectra, _composition_features
@@ -32,7 +33,7 @@ from dl_quantify import surface_composition
 from real_data import load_map
 
 DB = paths.DB
-OUT = f"{DB}/260808_data interpret/panels"
+OUT = f"{paths.INTERP}/panels"
 SUB = ["DQ", "TBZ", "THI"]
 CO = labfig.CO
 COLS = [CO[s] for s in SUB]
@@ -58,50 +59,13 @@ if FS != 1.0:
 
 # ------------------------------------------------------------------ 데이터
 # 저농도 격자에서 NNLS 는 초록이다 — 회수율 109/120/112%, 조성오차 15.1%.
-# THI 를 크게 과대평가하는 노란 삼각형은 **고농도 Ratio_mix** 세트다. 거기서는
-# THI 가 표면을 독점해 회수율이 DQ 57 / TBZ 53 / THI 394% 로 벌어진다.
-BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
-
-
-def parse_hi(nm):
-    c = {"DQ": 0.0, "TBZ": 0.0, "THI": 0.0}
-    for k, v in re.findall(r"(DQ|TBZ|TH[I1])(\d+)", nm):
-        c["THI" if k.startswith("TH") else k] += float(v)
-    return c
-
-
-LO, seen = {}, set()
-
-
-def add(key, p):
-    h = hashlib.md5(open(p, "rb").read()).hexdigest()
-    if h in seen:
-        return
-    seen.add(h)
-    LO.setdefault(key, []).append(p)
-
-
-if SET in ("high", "all"):
-    for p in sorted(glob.glob(f"{DB}/Ratio/Ratio_mix/*orrected.csv")):
-        nm = os.path.basename(p).split("_corrected")[0].split("-corrected")[0]
-        if nm in BAD:
-            continue
-        c = parse_hi(nm)
-        if sum(c.values()):
-            add(tuple(c[s] for s in SUB), p)
-if SET in ("low", "all"):
-    for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-        if "DQ9-sus" in p:
-            continue
-        m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-        add(tuple(int(m.group(i)) // 3 for i in (1, 2, 3)), p)
-OLD = {(6, 6, 24): 1, (12, 12, 12): 2, (24, 6, 6): 3, (6, 6, 6): 4, (24, 24, 24): 5,
-       (12, 12, 48): 6}
-for key, n in (OLD.items() if SET in ("low", "all") else ()):
-    for r in (1, 2, 3):
-        p = f"{DB}/tert-new-baseline/{n}-{r}_corrected.csv"
-        if os.path.exists(p):
-            add(key, p)
+# THI 를 크게 과대평가하는 노란 삼각형은 **고농도** 세트다. 거기서는 THI 가 표면을
+# 독점해 회수율이 크게 벌어진다.
+#   high = 예전 Ratio_mix 34조건 (최종 3–500 µM)   low = 64조건 격자
+# 등몰 계열은 여기 안 들어간다 — 예전과 같은 구성이다 (그 세트는 export_tert.py).
+_SETS = {"high": ("high",), "low": ("grid",),
+         "all": ("high", "grid", "equimolar")}[SET]
+LO = MX.groups(_SETS, replicates=True)
 
 keys = sorted(LO)
 subs, wn, mask, P, lo, hi = _refs(f"{DB}/Pure", True, None)

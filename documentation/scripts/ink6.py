@@ -3,12 +3,15 @@
 Templates: all classes incl. INK, 300-1800 cm-1, ALS, L2.
 Map: mean spectrum -> ALS -> clip -> NNLS on the templates -> take the INK coefficient.
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, math, csv
 import numpy as np
 from scipy.optimize import nnls
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB/Pure"
+REPO = paths.REPO
+DB = paths.PURE
 sys.path.insert(0, REPO)
 
 import unmix

@@ -6,6 +6,9 @@
 
   실행:  python3 -u tri38.py
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import os, sys, re, ast
 import numpy as np
 
@@ -21,7 +24,7 @@ from matplotlib.figure import Figure
 from dl_model import _refs, _fit_predict
 import triangle_figs as TF
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+DB = paths.DB
 DESK = "/Users/seungki2/Desktop"
 SUB = labfig.SUB
 COLS = [labfig.CO[s] for s in SUB]

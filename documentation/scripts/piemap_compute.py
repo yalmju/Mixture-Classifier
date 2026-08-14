@@ -13,66 +13,37 @@
 
   실행:  python3 -u piemap_compute.py [epochs=120] [folds=4]
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os, re, glob, hashlib, pickle, time
 import numpy as np
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
+REPO = paths.REPO
 sys.path.insert(0, REPO)
 import dl_model
 from unmix import unmix_map
 from real_data import load_map
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-PURE = f"{DB}/Pure"
-import paths
+import mixtures as MX
+
+DB = paths.DB
+PURE = paths.PURE
 CALIB = paths.calibration()
-OUT = f"{DB}/260808_data interpret/piemap_260812"
-BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
-SUB = ["DQ", "TBZ", "THI"]
+OUT = f"{paths.INTERP}/piemap_260812"
+# 폴더를 **여기서** 만든다. 예전에는 마지막 pickle.dump 에서야 경로가 쓰여서, 폴더가
+# 없으면 4-fold 학습 80분을 다 돌고 나서 FileNotFoundError 로 결과를 통째로 잃었다.
+os.makedirs(OUT, exist_ok=True)
+SUB = MX.SUB
 
 EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 120
 FOLDS = int(sys.argv[2]) if len(sys.argv) > 2 else 4
 
 
 # ------------------------------------------------------------------ 데이터 수집
-def parse_hi(nm):
-    c = {"DQ": 0.0, "TBZ": 0.0, "THI": 0.0}
-    for k, v in re.findall(r"(DQ|TBZ|TH[I1])(\d+)", nm):
-        c["THI" if k.startswith("TH") else k] += float(v)
-    return c
-
-
-HI = []
-for p in sorted(glob.glob(f"{DB}/Ratio/Ratio_mix/*orrected.csv")):
-    nm = os.path.basename(p).split("_corrected")[0].split("-corrected")[0]
-    if nm in BAD:
-        continue
-    c = parse_hi(nm)
-    if sum(c.values()):
-        HI.append((p, c, {k: v * 1e-6 for k, v in c.items()}))
-
-LO, _seen = {}, set()
-
-
-def _add(key, p):
-    h = hashlib.md5(open(p, "rb").read()).hexdigest()
-    if h in _seen:
-        return
-    _seen.add(h)
-    LO.setdefault(key, []).append(p)
-
-
-for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-    if "DQ9-sus" in p:
-        continue
-    m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-    _add(tuple(int(m.group(i)) // 3 for i in (1, 2, 3)), p)
-OLD = {(6, 6, 24): 1, (12, 12, 12): 2, (24, 6, 6): 3, (6, 6, 6): 4, (24, 24, 24): 5, (12, 12, 48): 6}
-for key, n in OLD.items():
-    for r in (1, 2, 3):
-        p = f"{DB}/tert-new-baseline/{n}-{r}_corrected.csv"
-        if os.path.exists(p):
-            _add(key, p)
+# 라벨은 `260814_mixture_final` 파일명이 최종 µM 이다 (`mixtures.py`).
+HI = MX.items(("high",))
+LO = MX.groups(("grid",), replicates=True)
 
 keys = sorted(LO)
 paths.check_pretrain(CALIB, True)

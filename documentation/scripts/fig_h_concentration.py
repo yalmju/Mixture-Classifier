@@ -11,6 +11,9 @@
 
   실행:  python3 -u fig_h_concentration.py [origin_data 폴더]
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import os, sys, csv, json
 import numpy as np
 
@@ -20,8 +23,8 @@ import labfig
 labfig.setup()
 import matplotlib.pyplot as plt
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-SRC = sys.argv[1] if len(sys.argv) > 1 else f"{DB}/260808_data interpret/origin_data"
+DB = paths.DB
+SRC = sys.argv[1] if len(sys.argv) > 1 else f"{paths.INTERP}/origin_data"
 OUT = os.path.dirname(SRC)
 CO, SUB = labfig.CO, labfig.SUB
 BAND = "#dfe4ea"

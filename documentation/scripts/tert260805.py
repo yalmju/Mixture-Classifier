@@ -13,57 +13,39 @@
 
   실행:  python3 -u tert260805.py [epochs=120]
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os, re, glob, pickle
 import numpy as np
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+REPO = paths.REPO
+DB = paths.DB
 sys.path.insert(0, REPO)
 
 import dl_model
 from real_data import load_map
 
-PURE = f"{DB}/Pure"
-CALIB = f"{DB}/Ratio/results/calibration_spectra.csv"
-BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
-SUB = ["DQ", "TBZ", "THI"]
-SERIES = f"{DB}/Ratio/260805"
+import mixtures as MX
+
+PURE = paths.PURE
+CALIB = paths.calibration()
+SUB = MX.SUB
 MODEL = f"{REPO}/documentation/scripts/model_full35.pkl"
 EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 120
 
+# 원액(등량 3성분 혼합 전) → 성분당 최종 µM. 폴더가 `Ratio/260805` 에서
+# `Ratio/mis/tert-{1,2}` 로 옮겨졌다 — 예전 SERIES 경로는 0맵을 조용히 돌려줬다.
 STOCK_UM = {"003mM": 30.0, "01mM": 100.0, "03mM": 300.0, "1mM": 1000.0}
 
 
-# ---------------------------------------------------------------- 학습셋 (retrain38과 동일)
+# ---------------------------------------------------------------- 학습셋
+# 라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`). 등몰 계열 8맵은
+# 여기 안 들어간다 — 적용 대상이다.
 def build_items():
-    HI = []
-    for p in sorted(glob.glob(f"{DB}/Ratio/Ratio_mix/*orrected.csv")):
-        nm = os.path.basename(p).split("_corrected")[0].split("-corrected")[0]
-        if nm in BAD:
-            continue
-        c = {"DQ": 0.0, "TBZ": 0.0, "THI": 0.0}
-        for k, v in re.findall(r"(DQ|TBZ|TH[I1])(\d+)", nm):
-            c["THI" if k.startswith("TH") else k] += float(v)
-        if sum(c.values()):
-            HI.append((p, c, {k: v * 1e-6 for k, v in c.items()}))
-    LO = {}
-    for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-        m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-        if m:
-            LO.setdefault(tuple(int(m.group(i)) // 3 for i in (1, 2, 3)), []).append(p)
-    OLD = {(6, 6, 24): 1, (12, 12, 12): 2, (24, 6, 6): 3,
-           (6, 6, 6): 4, (24, 24, 24): 5, (12, 12, 48): 6}
-    for key, n in OLD.items():
-        for r in (1, 2, 3):
-            p = f"{DB}/tert-new-baseline/{n}-{r}_corrected.csv"
-            if os.path.exists(p):
-                LO.setdefault(key, []).append(p)
-    out = list(HI)
-    for k in sorted(LO):
-        d = dict(zip(SUB, map(float, k)))
-        for p in LO[k]:
-            out.append((p, d, {s: v * 1e-6 for s, v in d.items()}))
-    return out, len(HI), len(LO)
+    HI = MX.items(("high",))
+    LO = MX.groups(("grid",), replicates=True)
+    return HI + MX.items_for(LO, sorted(LO)), len(HI), len(LO)
 
 
 if os.path.exists(MODEL):
@@ -80,7 +62,9 @@ else:
     print("모델 저장:", os.path.basename(MODEL))
 
 # ---------------------------------------------------------------- 적용
-maps = sorted(glob.glob(f"{SERIES}/tert-*/tert_*_corrected.csv"))
+maps = sorted(glob.glob(f"{DB}/Ratio/mis/tert-*/tert_*_corrected.csv"))
+if not maps:
+    raise FileNotFoundError(f"등몰 계열을 못 찾았다: {DB}/Ratio/mis/tert-*/")
 print(f"\n적용 대상 {len(maps)}맵 — 참 조성은 모두 33.3/33.3/33.3\n")
 print(f"{'맵':>22} | {'원액':>7} | {'성분당 µM':>9} | {'예측 DQ/TBZ/THI %':>22} | {'오차':>6} | 우세")
 print("-" * 92)

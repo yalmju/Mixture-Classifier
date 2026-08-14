@@ -27,6 +27,9 @@
       python3 -u panels.py --size 3.4,3.3 --fontscale 0.55     삼각형만 작게
       python3 -u panels.py --only a,g       삼각형만
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import os, sys, csv, json, pickle
 import numpy as np
 
@@ -41,8 +44,8 @@ from matplotlib.figure import Figure
 import grid_figs as GF
 import triangle_figs as TF
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-INTERP = f"{DB}/260808_data interpret"
+DB = paths.DB
+INTERP = f"{paths.INTERP}"
 CACHE = f"{INTERP}/piemap_260812"
 ORIGIN = f"{INTERP}/origin_data"
 OUT = f"{INTERP}/panels"
@@ -186,12 +189,17 @@ import subprocess
 for letter, (name, script, extra) in DELEGATED.items():
     if ONLY and letter not in ONLY:
         continue
+    # `text=True` 만 주면 자식 출력을 **로케일 인코딩**으로 푼다 — 윈도우에서는 cp949 라
+    # 한글 로그에서 UnicodeDecodeError 가 나고, 그 예외가 reader 스레드에서 터지는 바람에
+    # `r.stdout` 이 None 이 되어 여기서 AttributeError 로 이어졌다. 인코딩을 못 박는다.
     r = subprocess.run([sys.executable, "-u", f"{HERE}/{script}"] + extra,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace",
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     if r.returncode:
-        print(f"  ✗ {letter}  {name} — {script} 실패:\n{r.stderr.strip()[-400:]}")
+        print(f"  ✗ {letter}  {name} — {script} 실패:\n{(r.stderr or '').strip()[-400:]}")
     else:
-        for ln in r.stdout.splitlines():
+        for ln in (r.stdout or "").splitlines():
             if ln.strip().startswith("✓"):
                 print("  " + ln.strip())
 

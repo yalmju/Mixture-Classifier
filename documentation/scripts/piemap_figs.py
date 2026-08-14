@@ -13,6 +13,9 @@
 
   실행:  python3 -u piemap_figs.py [캐시폴더]
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import os, sys, csv, pickle, json
 import numpy as np
 
@@ -21,15 +24,15 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, REPO)
 import grid_figs as GF
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-CACHE = sys.argv[1] if len(sys.argv) > 1 else f"{DB}/260808_data interpret/piemap_260812"
+DB = paths.DB
+CACHE = sys.argv[1] if len(sys.argv) > 1 else f"{paths.INTERP}/piemap_260812"
 SAVE = dict(dpi=600, transparent=True, bbox_inches="tight", pad_inches=0.01)
 FALLBACK = {"DQ": "#008cf7", "TBZ": "#95dc2a", "THI": "#f35376"}
 
 d = pickle.load(open(f"{CACHE}/piemap_data.pkl", "rb"))
 cond, maps, SUB = d["cond"], d["maps"], d["sub"]
 try:
-    CO = json.load(open(f"{DB}/Pure/colors.json"))
+    CO = json.load(open(f"{DB}/Pure/colors.json", encoding="utf-8"))
 except Exception:
     CO = FALLBACK
 COLS = [CO.get(s, FALLBACK.get(s, "#888888")) for s in SUB]

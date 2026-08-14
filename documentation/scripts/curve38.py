@@ -9,11 +9,14 @@
 
   실행:  python3 -u curve38.py [epochs=120] [seeds=2]
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os, re, glob, time
 import numpy as np
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+REPO = paths.REPO
+DB = paths.DB
 sys.path.insert(0, REPO)
 
 import dl_model
@@ -22,9 +25,9 @@ from dl_model import (_refs, _map_spectra, _composition_features, _fit_predict,
 from dl_quantify import _ratio, simulate_mixtures
 
 PURE = f"{DB}/Pure"
-CALIB = f"{DB}/Ratio/results/calibration_spectra.csv"
-BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
-SUB = ["DQ", "TBZ", "THI"]
+import mixtures as MX
+CALIB = paths.calibration()
+SUB = MX.SUB
 CACHE = f"{REPO}/documentation/scripts/curve38_feats.npz"
 EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 120
 SEEDS = int(sys.argv[2]) if len(sys.argv) > 2 else 2
@@ -33,33 +36,12 @@ subs, wn, mask, P, lo, hi = _refs(PURE, baseline=True, trim=None)
 
 
 def _hi_items():
-    out = []
-    for p in sorted(glob.glob(f"{DB}/Ratio/Ratio_mix/*orrected.csv")):
-        nm = os.path.basename(p).split("_corrected")[0].split("-corrected")[0]
-        if nm in BAD:
-            continue
-        c = {"DQ": 0.0, "TBZ": 0.0, "THI": 0.0}
-        for k, v in re.findall(r"(DQ|TBZ|TH[I1])(\d+)", nm):
-            c["THI" if k.startswith("TH") else k] += float(v)
-        if sum(c.values()):
-            out.append((p, c))
-    return out
+    """라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`)."""
+    return [(p, c) for p, c, _cm in MX.items(("high",))]
 
 
 def _lo_groups():
-    g = {}
-    for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-        m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-        if m:
-            g.setdefault(tuple(int(m.group(i)) // 3 for i in (1, 2, 3)), []).append(p)
-    OLD = {(6, 6, 24): 1, (12, 12, 12): 2, (24, 6, 6): 3,
-           (6, 6, 6): 4, (24, 24, 24): 5, (12, 12, 48): 6}
-    for key, n in OLD.items():
-        for r in (1, 2, 3):
-            p = f"{DB}/tert-new-baseline/{n}-{r}_corrected.csv"
-            if os.path.exists(p):
-                g.setdefault(key, []).append(p)
-    return g
+    return MX.groups(("grid",), replicates=True)
 
 
 # ------------------------------------------------------------------ 특징 캐시

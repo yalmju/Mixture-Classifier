@@ -22,7 +22,7 @@ sys.path.insert(0, HERE)
 import paths
 
 DB = paths.DB
-OUT = f"{DB}/260808_data interpret/panels"
+OUT = f"{paths.INTERP}/panels"
 SUB = ["DQ", "TBZ", "THI"]
 SRC = f"{OUT}/panel_f_drift.csv"
 os.makedirs(OUT, exist_ok=True)

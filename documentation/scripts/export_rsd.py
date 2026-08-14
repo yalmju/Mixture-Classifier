@@ -26,7 +26,7 @@ sys.path.insert(0, REPO); sys.path.insert(0, HERE)
 import paths
 
 DB = paths.DB
-OUT = f"{DB}/260808_data interpret/panels"
+OUT = f"{paths.INTERP}/panels"
 SUB = ["DQ", "TBZ", "THI"]
 SRC = f"{HERE}/conc38_result_cliponly.npz"
 RELABEL = f"{DB}/Ratio/mis/DQ9-sus-relabeled"
@@ -57,15 +57,16 @@ if rel_files:
     idx = [tnames.index(s) for s in SUB]
 
     # 격자 맵에서 (B → 추정 µM) 변환을 재적합한다. 원점을 지나는 성분별 기울기 하나.
+    # 라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`).
+    import mixtures as MX
     gridB, gridC = [], []
     seen = set()
-    for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-        m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-        k = tuple(int(m.group(i)) / 3.0 for i in (1, 2, 3))
+    for _m in MX.catalogue(("grid",), replicates=("baseline",)):   # 격자 폴더만 — 65맵
+        k = tuple(float(v) for v in _m.conc)
         if k in seen:
             continue
         seen.add(k)
-        _w, cube, _mm, _c = load_map(p)
+        _w, cube, _mm, _c = load_map(_m.path)
         gridB.append(fit_B(_map_spectra(cube, mask, 0)[0], P)[0][idx]); gridC.append(k)
     gridB = np.array(gridB); gridC = np.array(gridC)
     slope = np.array([(gridC[:, j] @ gridB[:, j]) / (gridC[:, j] @ gridC[:, j])
@@ -73,6 +74,8 @@ if rel_files:
 
     add_C, add_E = [], []
     for p in rel_files:
+        # 이 폴더만은 아직 **원액 기준 파일명**(3배)이다 — 최종 폴더에 없는 두 번째 조제라
+        # 이름을 못 물려받았다. 여기서만 ÷3 한다.
         m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
         c = np.array([int(m.group(i)) / 3.0 for i in (1, 2, 3)])
         _w, cube, _mm, _cc = load_map(p)
@@ -87,13 +90,12 @@ if rel_files:
 
     # 격자 쪽 추정도 같은 함수로 다시 만들어야 두 집단이 비교 가능하다. 그렇지 않으면
     # conc38 추정(격자)과 B/기울기 추정(재라벨)이 섞여 산포가 방법 차이로 오염된다.
+    # npz 가 들고 있는 경로를 그대로 쓴다. 예전에는 이름으로 Baseline260808 을 다시
+    # 뒤졌는데, 이름 규약이 바뀌면 조용히 0건이 되고 이 재계산이 통째로 건너뛰어진다.
     for i, nm in enumerate(names):
-        if src_tag[i] != "grid":
+        if src_tag[i] != "grid" or not os.path.exists(str(z["paths"][i])):
             continue
-        hit = [p for p in glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/{nm}_corrected.csv")]
-        if not hit:
-            continue
-        _w, cube, _mm, _c = load_map(hit[0])
+        _w, cube, _mm, _c = load_map(str(z["paths"][i]))
         EST[i] = fit_B(_map_spectra(cube, mask, 0)[0], P)[0][idx] / slope
     print("격자 쪽 추정도 같은 B/기울기 경로로 다시 계산했다 (두 집단 비교 가능하게)")
 else:
