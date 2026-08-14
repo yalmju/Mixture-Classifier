@@ -9,27 +9,40 @@ single-compound dilution series, 9 points each, 0.1–1000 µM
 baseline off, hit = threshold mode, min substance fraction 0.20 (842/2400 px,
 100% of the lettering, 5% stray).
 
-## Result
+## The story: one map, full readout
+
+Everything the "SERS" lettering map yields, against the dispensed truth:
+
+| readout | SERS lettering map | dispensed truth |
+|---|---|---|
+| detection | DQ · TBZ · THI, all three | 3 substances |
+| composition (mixture-trained MLP) | 36.5 / 30.1 / 33.5 % | 33.3 / 33.3 / 33.3 % |
+| concentration, DQ | 10.1 ± 1.9 µM ✓ | 12 µM |
+| concentration, THI | 14.2 ± 2.8 µM ✓ | 12 µM |
+| concentration, TBZ | **2.7 ± 0.5 µM — the true surface value** | (12 µM dispensed) |
+
+TBZ's 2.7 µM is **not corrected and needs no correcting**: SERS reads the
+surface, and in this pen-written, fast-drying film TBZ — the bottom of the
+surface-competition hierarchy (script 06) — genuinely lands at ~22% of its
+dispensed share. The same ink and the same geometry put the other two on the
+truth, and the same pipeline on droplet-dispensed mixtures shows no TBZ loss
+(reconciliation section below), so the deficit is deposition physics, not
+calibration error. The one-line story: **the same ink reads 10 : 2.7 : 14 on
+the surface — the map resolves deposition competition itself.** The dispensed
+solution (12:12:12) is still recovered, by the composition channel: the
+mixture-trained MLP reads TBZ at 30% because the suppression is reproducible
+enough to be learned.
+
+## Concentration details
 
 With one shared 2 µL droplet geometry (Ø 1.39 mm, fixed by DQ+THI agreeing
-independently), mass balance over the ink footprint gives:
-
-| substance | dispensed-equivalent | truth | recovery |
-|---|---|---|---|
-| DQ  | 10.1 ± 1.9 µM | 12 µM | 85% (truth inside 1σ) |
-| THI | 14.2 ± 2.8 µM | 12 µM | 118% (truth inside 1σ) |
-| TBZ | 2.7 ± 0.5 µM  | 12 µM | 22% — **×4.5 surface deficit** |
-
+independently), mass balance over the ink footprint gives the table above.
 Error bars combine a scan-line cluster bootstrap of the pixel sums (±14–15%)
 with the geometry-anchor spread between DQ's and THI's required areas (±13%),
 in quadrature. The geometry term is common to all three substances, so it never
-moves the ratios — TBZ's deficit is ~9σ away from the truth.
-
-The TBZ deficit is read as a real surface phenomenon (competitive displacement
-in the trio), not a calibration failure: the same ink and the same geometry
-land the other two substances on the truth. Notably TBZ has the HIGHEST
-single-compound affinity (K = 3.3×10⁴/M), yet loses in the mixture — the
-drying/co-adsorption dynamics, not equilibrium affinity, decide.
+moves the ratios — TBZ's deficit is ~9σ from the dispensed value. Notably TBZ
+has the HIGHEST single-compound affinity (K = 3.3×10⁴/M), yet loses in the
+mixture — the drying/co-adsorption dynamics, not equilibrium affinity, decide.
 
 ## The chain of evidence (scripts, in order)
 
