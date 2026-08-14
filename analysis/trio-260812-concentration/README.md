@@ -62,6 +62,23 @@ trained on 35 real mixture maps labelled in solution basis
 suppression is absorbed into its weights — which is WHY it recovers the
 solution ratio that linear unmixing cannot.
 
+## Anchor-competition test (`06_anchor_competition.py`)
+
+The `Ratio/Ratio_mix` grid (34 maps, nominal µM in the filename) directly tests
+whether TBZ's deficit depends on WHO the partner is. TBZ recovery
+(apparent/nominal, median): partner DQ 0.16, partner THI 0.04, both 0.00.
+Dose series at TBZ 500 µM: partner 5 → 50 → 500 µM collapses recovery
+0.52 → 0.10 → 0.01 (THI) and 0.61 → 0.16 → 0.005 (DQ) — dose-dependent
+displacement by both partners, THI consistently the stronger suppressor.
+
+The full hierarchy is THI > DQ > TBZ (THI recovers up to 0.89 beside DQ; DQ
+0.21–0.37; TBZ always last) — the SAME ordering the trio map produced
+(118% / 85% / 22%), measured on an independent campaign. TBZ sits at the
+bottom of the surface-competition pecking order; its trio deficit is that
+ordering, not a one-off artefact. (Absolute recoveries in this grid are
+compressed by isotherm saturation at 150–500 µM nominal; the partner
+COMPARISON at matched dose is the valid readout.)
+
 ## Caveats
 
 - The ×4.5 TBZ factor is characterised at ONE composition (1:1:1, 12 µM).
