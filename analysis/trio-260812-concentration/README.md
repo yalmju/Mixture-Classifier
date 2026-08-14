@@ -19,19 +19,22 @@ Everything the "SERS" lettering map yields, against the dispensed truth:
 | composition (mixture-trained MLP) | 36.5 / 30.1 / 33.5 % | 33.3 / 33.3 / 33.3 % |
 | concentration, DQ | 10.1 ± 1.9 µM ✓ | 12 µM |
 | concentration, THI | 14.2 ± 2.8 µM ✓ | 12 µM |
-| concentration, TBZ | **2.7 ± 0.5 µM — the true surface value** | (12 µM dispensed) |
+| concentration, TBZ | **2.7 ± 0.5 µM — SERS-effective surface loading** | (12 µM dispensed) |
 
-TBZ's 2.7 µM is **not corrected and needs no correcting**: SERS reads the
-surface, and in this pen-written, fast-drying film TBZ — the bottom of the
-surface-competition hierarchy (script 06) — genuinely lands at ~22% of its
-dispensed share. The same ink and the same geometry put the other two on the
-truth, and the same pipeline on droplet-dispensed mixtures shows no TBZ loss
-(reconciliation section below), so the deficit is deposition physics, not
-calibration error. The one-line story: **the same ink reads 10 : 2.7 : 14 on
-the surface — the map resolves deposition competition itself.** The dispensed
-solution (12:12:12) is still recovered, by the composition channel: the
-mixture-trained MLP reads TBZ at 30% because the suppression is reproducible
-enough to be learned.
+TBZ's 2.7 µM is reported uncorrected, as the **SERS-effective surface
+loading**. The deficit is a reproducible, deposition-dependent response
+suppression: the same ink and the same geometry put the other two substances
+on the truth, and the same pipeline on droplet-dispensed mixtures shows no
+TBZ loss (reconciliation below). Whether the molecules are absent from the
+surface (competitive displacement — consistent with TBZ sitting at the bottom
+of the script-06 hierarchy) or present but SERS-silent (enhancement loss,
+e.g. precipitation or orientation in the fast-drying film) is
+**indistinguishable from this data**; an orthogonal assay (wash-off LC-MS of
+the lettering) would separate the two. The one-line story: **the same ink
+reads 10 : 2.7 : 14 at the surface — the map resolves deposition effects the
+solution never shows.** The dispensed solution (12:12:12) is still recovered,
+by the composition channel: the mixture-trained MLP reads TBZ at 30% because
+the suppression is reproducible enough to be learned.
 
 ## Concentration details
 
