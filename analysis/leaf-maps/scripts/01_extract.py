@@ -1,7 +1,8 @@
-"""잎 시료 4맵 — 전처리 + 픽셀별 판독값 추출 (그림 없음, 숫자만).
+"""잎 시료 맵 시리즈 — 전처리 + 픽셀별 판독값 추출 (그림 없음, 숫자만).
 
-  입력: `*_corrected.csv` 10x10 맵 (앱이 쓰는 형식 — 1행 `X num`, 2행 `Y num`,
+  입력: `*_corrected.csv` 맵 (앱이 쓰는 형식 — 1행 `X num`, 2행 `Y num`,
         3행 헤더 `X,Y,<파장수...>`, 이후 한 줄 = 한 픽셀).
+        격자 크기는 맵마다 달라도 된다 (10x10/50 µm 와 20x20/100 µm 가 섞여 있다).
   전처리: ALS 베이스라인 제거 (lam=1e5, p=0.01, 10회) — `analysis/dq9-sus-
         reproducibility/scripts/01_load_preprocess.py` 와 같은 설정.
   판독값:
@@ -9,8 +10,11 @@
         <성분>_<밴드>  마커밴드 +-10 cm-1 적분
         <성분>    그 성분 마커밴드 3개의 평균
         <성분>_over_ink   마커/잉크 — 기판 gain 이 상쇄되는 판독값
+  대조군: `cov3` (잎에 잉크만) 를 blank 로 삼아 검출 대비를 낸다.
+        contrast = 중앙값 - blank 중앙값,  SNR = contrast / blank SD,
+        검출픽셀 = blank 평균 + 3 SD 를 넘는 픽셀 비율.
 
-  출력: `data/pixels.npz` (다음 스크립트용) + `data/*.csv` (Origin 용).
+  출력: `data/pixels.npz` · `representative.npz` (다음 스크립트용) + `data/*.csv` (Origin 용).
 
   실행:  python3 -u 01_extract.py [데이터폴더]
 """
@@ -23,8 +27,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(os.path.dirname(HERE), "data")
 DATA = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(HERE), "raw")
 
-# 파일명(접두 해시는 무시) -> 시료 이름.  순서가 그림의 열 순서다.
-SAMPLES = ["leaf_dq", "leaf_tb1", "leaf_thi2", "cov3"]
+# 시료 순서 = 그림의 열 순서.  (이름, 그룹) — 그룹은 그림 상단 묶음 라벨에 쓴다.
+SAMPLES = ["leaf_dq", "leaf_tb1", "leaf_thi2", "cov3",
+           "leavesmix", "leavesmix2peel", "leavesmix2peel2"]
+GROUPS = [("single analyte", ["leaf_dq", "leaf_tb1", "leaf_thi2"]),
+          ("control", ["cov3"]),
+          ("mixture", ["leavesmix", "leavesmix2peel", "leavesmix2peel2"])]
+CONTROL = "cov3"                     # 잎에 잉크만 올린 대조군 (사용자 확인 2026-08-15)
 
 INK_BAND = (2100.0, 2180.0)          # 잉크 2137 cm-1 — 분석물 밴드가 없는 침묵 구간
 HALF = 10.0                          # 마커밴드 적분 반폭 (cm-1)
@@ -99,10 +108,11 @@ def main():
         assert np.allclose(wn, wn0), f"{s}: 파장축이 다르다"
         B = np.array([y - als(y) for y in A])            # 베이스라인 제거
         rows, cols, ux, uy = grid_index(XY)
-        store[s] = dict(B=B, XY=XY, rows=rows, cols=cols, ux=ux, uy=uy,
-                        src=os.path.basename(p))
-        print(f"loaded {s:>10}  {A.shape}  {len(ux)}x{len(uy)} grid  "
-              f"step {np.median(np.diff(ux)):.0f} um", flush=True)
+        step = float(np.median(np.diff(ux))) if len(ux) > 1 else 0.0
+        store[s] = dict(B=B, XY=XY, rows=rows, cols=cols, ux=ux, uy=uy, step=step,
+                        span=float(ux.max() - ux.min()), src=os.path.basename(p))
+        print(f"loaded {s:>16}  {A.shape}  {len(ux)}x{len(uy)} grid  step {step:.0f} um  "
+              f"span {store[s]['span']:.0f} um", flush=True)
 
     # ---- 픽셀별 판독값 ----
     feat = {}
@@ -125,6 +135,8 @@ def main():
         **{f"{s}__XY": store[s]["XY"] for s in SAMPLES},
         **{f"{s}__rows": store[s]["rows"] for s in SAMPLES},
         **{f"{s}__cols": store[s]["cols"] for s in SAMPLES},
+        **{f"{s}__step": np.array(store[s]["step"]) for s in SAMPLES},
+        **{f"{s}__span": np.array(store[s]["span"]) for s in SAMPLES},
         **{f"{s}__{k}": v for s in SAMPLES for k, v in feat[s].items()})
 
     # ---- Origin: 픽셀 long form ----
@@ -155,30 +167,34 @@ def main():
                 for r in range(ny - 1, -1, -1):          # 위쪽 행 = 큰 Y
                     w.writerow([f"{v:.6g}" for v in M[r]])
 
-    # ---- 대표 스펙트럼 (맵 100픽셀의 중앙값 + 사분위) ----
+    # ---- 대표 스펙트럼 (맵 픽셀의 중앙값 + 사분위) ----
     rep = {}
     for s in SAMPLES:
         B = store[s]["B"]
-        ink = np.median(feat[s]["ink2137"])
         rep[s] = dict(med=np.median(B, axis=0),
                       q25=np.percentile(B, 25, axis=0),
                       q75=np.percentile(B, 75, axis=0),
-                      ink=ink)
+                      ink=np.median(feat[s]["ink2137"]))
+    blank_spec = rep[CONTROL]["med"] / rep[CONTROL]["ink"]
+    for s in SAMPLES:                                    # 대조군을 뺀 차이 스펙트럼
+        rep[s]["diff"] = rep[s]["med"] / rep[s]["ink"] - blank_spec
     np.savez_compressed(os.path.join(OUT, "representative.npz"), wn=wn0,
                         **{f"{s}__{k}": v for s in SAMPLES for k, v in rep[s].items()})
+
     with open(os.path.join(OUT, "spectra_representative.csv"), "w", newline="",
               encoding="utf-8-sig") as f:
         w = csv.writer(f)
         head = ["wavenumber_cm-1"]
         for s in SAMPLES:
-            head += [f"{s}_median", f"{s}_q25", f"{s}_q75", f"{s}_median_over_ink"]
+            head += [f"{s}_median", f"{s}_q25", f"{s}_q75", f"{s}_median_over_ink",
+                     f"{s}_minus_control"]
         w.writerow(head)
         for i, v in enumerate(wn0):
             row = [f"{v:.2f}"]
             for s in SAMPLES:
                 r = rep[s]
                 row += [f"{r['med'][i]:.6g}", f"{r['q25'][i]:.6g}", f"{r['q75'][i]:.6g}",
-                        f"{r['med'][i]/r['ink']:.6g}"]
+                        f"{r['med'][i]/r['ink']:.6g}", f"{r['diff'][i]:.6g}"]
             w.writerow(row)
 
     # ---- 요약: 맵 대표값과 조제 내 산포 ----
@@ -188,38 +204,66 @@ def main():
         w.writerow(["sample", "readout", "median", "within_prep_SD", "within_prep_CV_pct",
                     "p10", "p90", "n_pixels"])
         for s in SAMPLES:
-            for k in ["ink2137"] + [nm for nm in SUB] + [f"{nm}_over_ink" for nm in SUB]:
+            for k in ["ink2137"] + SUB + [f"{nm}_over_ink" for nm in SUB]:
                 v = feat[s][k]
                 w.writerow([s, k, f"{np.median(v):.6g}", f"{v.std(ddof=1):.6g}",
                             f"{v.std(ddof=1)/v.mean()*100:.1f}", f"{np.percentile(v,10):.6g}",
                             f"{np.percentile(v,90):.6g}", len(v)])
-    # ---- 밴드별 선택성 (마커밴드 하나하나가 시료를 가르는가) ----
+
+    # ---- 대조군 대비 검출 ----
+    det = {}
+    with open(os.path.join(OUT, "detection_vs_control.csv"), "w", newline="",
+              encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["sample", "substance", "median_over_ink", "control_median",
+                    "contrast", "fold_over_control", "control_SD", "SNR_contrast_over_SD",
+                    "threshold_3SD", "pct_pixels_above_3SD", "n_pixels"])
+        for nm in SUB:
+            b = feat[CONTROL][f"{nm}_over_ink"]
+            bmed, bmean, bsd = np.median(b), b.mean(), b.std(ddof=1)
+            thr = bmean + 3 * bsd
+            for s in SAMPLES:
+                v = feat[s][f"{nm}_over_ink"]
+                pct = float((v > thr).mean() * 100)
+                det[(s, nm)] = dict(med=float(np.median(v)), contrast=float(np.median(v) - bmed),
+                                    snr=float((np.median(v) - bmed) / bsd), pct=pct,
+                                    fold=float(np.median(v) / bmed), thr=float(thr))
+                w.writerow([s, nm, f"{np.median(v):.4f}", f"{bmed:.4f}",
+                            f"{np.median(v)-bmed:.4f}", f"{np.median(v)/bmed:.2f}",
+                            f"{bsd:.4f}", f"{(np.median(v)-bmed)/bsd:.2f}",
+                            f"{thr:.4f}", f"{pct:.0f}", len(v)])
+
+    # ---- 밴드별 선택성 ----
     with open(os.path.join(OUT, "band_selectivity.csv"), "w", newline="",
               encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["substance", "band_cm-1"] + [f"{s}_over_ink" for s in SAMPLES]
-                   + ["max_over_min", "argmax_sample"])
+                   + ["fold_over_control_max", "argmax_sample"])
         for nm, bands in MARKERS.items():
             for b in bands:
-                v = [float(np.median(feat[s][f"{nm}_{int(b)}"] / feat[s]["ink2137"]))
-                     for s in SAMPLES]
-                w.writerow([nm, int(b)] + [f"{x:.4f}" for x in v]
-                           + [f"{max(v)/min(v):.2f}", SAMPLES[int(np.argmax(v))]])
+                v = {s: float(np.median(feat[s][f"{nm}_{int(b)}"] / feat[s]["ink2137"]))
+                     for s in SAMPLES}
+                others = [s for s in SAMPLES if s != CONTROL]
+                w.writerow([nm, int(b)] + [f"{v[s]:.4f}" for s in SAMPLES]
+                           + [f"{max(v[s] for s in others)/v[CONTROL]:.2f}",
+                              max(others, key=lambda s: v[s])])
 
     with open(os.path.join(OUT, "SOURCES.txt"), "w") as f:
         for s in SAMPLES:
-            f.write(f"{s}\t{store[s]['src']}\n")
+            st = store[s]
+            f.write(f"{s}\t{st['src']}\t{len(st['ux'])}x{len(st['uy'])}\t"
+                    f"step {st['step']:.0f} um\n")
 
-    print("\n판독값 (맵 중앙값, 조제 내 CV%)")
-    print(f"{'sample':>10} {'ink2137':>12} " + " ".join(f"{nm+'/ink':>14}" for nm in SUB))
+    print(f"\n대조군 = {CONTROL}.  마커/잉크 중앙값, 괄호는 대조군 대비 배수")
+    print(f"{'sample':>16} {'ink2137':>14} " + " ".join(f"{nm:>16}" for nm in SUB))
     for s in SAMPLES:
-        cells = []
-        for nm in SUB:
-            v = feat[s][f"{nm}_over_ink"]
-            cells.append(f"{np.median(v):7.4f} ({v.std(ddof=1)/v.mean()*100:3.0f}%)")
         ik = feat[s]["ink2137"]
-        print(f"{s:>10} {np.median(ik):8.0f} ({ik.std(ddof=1)/ik.mean()*100:3.0f}%) "
-              + " ".join(f"{c:>14}" for c in cells))
+        cells = [f"{det[(s,nm)]['med']:6.3f} ({det[(s,nm)]['fold']:4.1f}x)" for nm in SUB]
+        print(f"{s:>16} {np.median(ik):8.0f} ({ik.std(ddof=1)/ik.mean()*100:3.0f}%) "
+              + " ".join(f"{c:>16}" for c in cells))
+    print(f"\n{'sample':>16} " + " ".join(f"{nm+' %px>3SD':>16}" for nm in SUB))
+    for s in SAMPLES:
+        print(f"{s:>16} " + " ".join(f"{det[(s,nm)]['pct']:14.0f}%" for nm in SUB))
     print("\nwrote ->", OUT)
 
 

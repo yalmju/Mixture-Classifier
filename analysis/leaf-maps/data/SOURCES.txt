@@ -1,4 +1,7 @@
-leaf_dq	leaf_dq_corrected.csv
-leaf_tb1	leaf_tb1_corrected.csv
-leaf_thi2	leaf_thi2_corrected.csv
-cov3	cov3_corrected.csv
+leaf_dq	leaf_dq_corrected.csv	10x10	step 50 um
+leaf_tb1	leaf_tb1_corrected.csv	10x10	step 50 um
+leaf_thi2	leaf_thi2_corrected.csv	10x10	step 50 um
+cov3	cov3_corrected.csv	10x10	step 50 um
+leavesmix	leavesmix_corrected.csv	20x20	step 100 um
+leavesmix2peel	leavesmix2peel_corrected.csv	20x20	step 100 um
+leavesmix2peel2	leavesmix2peel2_corrected.csv	10x10	step 50 um
