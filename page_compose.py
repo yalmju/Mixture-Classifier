@@ -236,9 +236,15 @@ class ComposePanel(QWidget):
         self.sp_nc = QSpinBox(); self.sp_nc.setRange(1, 20); self.sp_nc.setValue(8)
         self.sp_nc.setPrefix("components "); self.sp_nc.setObjectName("field")
         self.chk_blank = QCheckBox("learn background (BLK)"); self.chk_blank.setObjectName("field")
+        # ON by default (2026-08-15): the blank references are already sitting in
+        # Samples, and a model shipped without the class reads ink/paper as its
+        # most-similar analyte — the lettering film put 63% into DQ that way.
+        # Untick only to reproduce an old no-blank run.
+        self.chk_blank.setChecked(True)
         self.chk_blank.setToolTip("add pixels from the blank reference map as a 4th class, so "
                                   "the model can answer 'nothing here' instead of spreading "
-                                  "every spectrum across the substances")
+                                  "every spectrum across the substances — OFF reproduces "
+                                  "old no-blank runs only")
         self.sp_px = QSpinBox(); self.sp_px.setRange(0, 400); self.sp_px.setSingleStep(20)
         self.sp_px.setValue(400); self.sp_px.setPrefix("pixels/map "); self.sp_px.setObjectName("field")
         self.sp_px.setToolTip("individual hit-pixel training rows per map: 0 = one mean spectrum per map "
