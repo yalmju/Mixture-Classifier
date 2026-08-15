@@ -66,6 +66,7 @@ class RealDataPage(QWidget):
         self._bands = {}            # per-substance mapped wavenumber {name: cm⁻¹}
         self._band_spins = {}
         self._extra_bands = []      # user-added band panels (cm⁻¹); + adds, − removes
+        self._scale_txt = {"maps": "", "abund": ""}   # manual display scale, '' = auto
         COLOR_BUS.changed.connect(self._on_colors_changed)   # top-bar picker sync
         self.data_dir = PEST_DEFAULT
         self.test = None
@@ -284,6 +285,23 @@ class RealDataPage(QWidget):
             "NNLS/MCR runs show abundances; a composition model shows its per-pixel "
             "probabilities. ALL panels share ONE scale (0–1 for probabilities, "
             "0–P99 for abundances) so brightness compares across components")
+        _abrow = QHBoxLayout(); _abrow.setSpacing(6)
+        _abl = QLabel("scale"); _abl.setObjectName("field")
+        self.abund_scale_edit = QLineEdit(); self.abund_scale_edit.setFixedWidth(84)
+        self.abund_scale_edit.setPlaceholderText("auto | 0-1")
+        self.abund_scale_edit.setToolTip("display range for every abundance panel - "
+                                         "type lo-hi, blank = auto (0-1 for "
+                                         "probabilities, 0-P99 for abundances)")
+
+        def _absc():
+            self._scale_txt["abund"] = self.abund_scale_edit.text()
+            if self._res is not None:
+                self._plot_abund(self._res)
+
+        self.abund_scale_edit.editingFinished.connect(_absc)
+        _abrow.addWidget(_abl); _abrow.addWidget(self.abund_scale_edit)
+        _abrow.addStretch(1)
+        lay_ab.addLayout(_abrow)
         lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(460)
         self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=False, key="abund")
         body.addWidget(card_ab)
@@ -440,6 +458,23 @@ class RealDataPage(QWidget):
                 r.wn[int(np.argmax(r.templates[r.nonbg][i]))])
         return out
 
+    def _parse_scale(self, key):
+        """'0-1' / '0,1500' typed by the user -> (lo, hi); blank or nonsense = None."""
+        t = (self._scale_txt.get(key) or "").strip().replace(" ", "")
+        if not t:
+            return None
+        for sep in ("-", ","):
+            if sep in t[1:]:
+                head, tail = t[:1], t[1:]
+                pa, pb = tail.split(sep, 1)
+                try:
+                    lo, hi = float(head + pa), float(pb)
+                    if hi > lo:
+                        return (lo, hi)
+                except ValueError:
+                    pass
+        return None
+
     def _add_fold(self, lay, canvas, name, opened, key):
         """Fold a heavy card: the button sits under the title, the canvas hides, and
         while hidden the card is NOT rendered at all — scrolling gets shorter and a
@@ -549,6 +584,20 @@ class RealDataPage(QWidget):
         plus.clicked.connect(lambda _=False: _plus())
         minus.clicked.connect(lambda _=False: _minus())
         self.bandrow.addWidget(plus); self.bandrow.addWidget(minus)
+        self.bandrow.addWidget(self._mk_lbl("scale"))
+        se = QLineEdit(); se.setFixedWidth(84)
+        se.setPlaceholderText("auto | 0-1500")
+        se.setText(self._scale_txt.get("maps", ""))
+        se.setToolTip("display range for EVERY band panel (merge included) - "
+                      "type lo-hi, blank = auto (each channel's P1-P99)")
+
+        def _sc():
+            self._scale_txt["maps"] = se.text()
+            if self._res is not None:
+                self._plot_maps(self._res)
+
+        se.editingFinished.connect(_sc)
+        self.bandrow.addWidget(se)
         self.bandrow.addStretch(1)
 
     def _on_band(self, name, value):
@@ -988,6 +1037,9 @@ class RealDataPage(QWidget):
         lims = [(float(np.quantile(v, 0.01)), float(np.quantile(v, 0.99)))
                 for v in chans]
         lims = [(a, b if b > a else a + 1.0) for a, b in lims]   # never a zero span
+        _man = self._parse_scale("maps")
+        if _man is not None:
+            lims = [_man] * len(lims)
 
         extras = list(self._extra_bands)                  # user-added bands
         n = len(nb) + 1 + len(extras)                     # merge + substances + extras
@@ -997,13 +1049,20 @@ class RealDataPage(QWidget):
         ex_lims = [(float(np.quantile(v, 0.01)), float(np.quantile(v, 0.99)))
                    for v in ex_chans]
         ex_lims = [(va, vb if vb > va else va + 1.0) for va, vb in ex_lims]
+        if _man is not None:
+            ex_lims = [_man] * len(ex_lims)
         # ---- merged R/G/B: each channel stretched over its own P1..P99 ----
         ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, n, 1))
         cols = np.array([to_rgb(c) for c in (nbcols + ex_cols)])
         norm = np.stack([np.clip((v - va) / (vb - va), 0.0, 1.0)
                          for v, (va, vb) in zip(chans + ex_chans, lims + ex_lims)], 1)
+        # additive merge blows out to white wherever several channels are strong
+        # ("rgb merge 너무 밝다") - keep the hue, normalise the brightness:
+        # where the channel sum exceeds 1, divide by it instead of clipping.
+        wsum = np.maximum(norm.sum(axis=1, keepdims=True), 1.0)
         img = np.zeros((ny, nx, 3))
-        img[rows, cc] = np.clip(norm @ cols, 0.0, 1.0)
+        img[rows, cc] = np.clip((norm / wsum) @ cols * np.minimum(
+            norm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
         ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                   interpolation="nearest")
         ax.set_title("merged (R/G/B)", fontsize=9)
@@ -1068,6 +1127,10 @@ class RealDataPage(QWidget):
         Aall = np.asarray(r.A, float)
         amax = float(np.nanmax(Aall)) if Aall.size else 1.0
         vshared = 1.0 if amax <= 1.05 else (float(np.quantile(Aall, 0.99)) or 1.0)
+        _man = self._parse_scale("abund")
+        vlo = _man[0] if _man is not None else 0.0
+        if _man is not None:
+            vshared = _man[1]
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
         panels = [("merged", None)] + [(r.comps[k], k) for k in range(len(r.comps))]
@@ -1076,11 +1139,14 @@ class RealDataPage(QWidget):
             ax = self.c_abund.style(self.c_abund.fig.add_subplot(1, n, idx + 1))
             if k is None:
                 cols = np.array([to_rgb(c) for c in nbcols])
+                _nrm = np.clip(Anb / mscale, 0.0, 1.0)
+                _ws = np.maximum(_nrm.sum(axis=1, keepdims=True), 1.0)
                 img = np.zeros((ny, nx, 3))
-                img[rows, cc] = np.clip((Anb / mscale) @ cols, 0.0, 1.0)
+                img[rows, cc] = np.clip((_nrm / _ws) @ cols * np.minimum(
+                    _nrm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
                 ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest")
-                title = f"merged · panel scale 0–{vshared:g}"
+                title = f"merged · panel scale {vlo:g}–{vshared:g}"
             else:
                 sc = vshared
                 grid = np.zeros((ny, nx)); grid[rows, cc] = r.A[:, k]
@@ -1089,7 +1155,7 @@ class RealDataPage(QWidget):
                 # map beside the merge (same reason the band card dropped them);
                 # the numbers live in per_pixel.csv (A_ columns)
                 ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                          interpolation="nearest", cmap=cmap, vmin=0.0, vmax=sc)
+                          interpolation="nearest", cmap=cmap, vmin=vlo, vmax=sc)
                 title = title + (" (bkg)" if r.bg_mask[k] else "")
             ax.set_title(title, fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
