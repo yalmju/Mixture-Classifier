@@ -78,10 +78,11 @@ class RealDataPage(QWidget):
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Real-data analysis — unmix a test map"); h1.setObjectName("h1")
-        sub = QLabel("Unmix one test map against your references (background "
-                     "included) by NNLS or MCR-ALS. A band-intensity image, a "
-                     "per-pixel composition pie map, and the overall composition — "
-                     "click any pixel to see its spectrum. References + preprocessing "
+        sub = QLabel("Read one measured map: raw band maps, stage-1 unmixed "
+                     "abundance maps (NNLS/MCR — or per-pixel probabilities under a "
+                     "composition model), the per-pixel composition pie map, apparent "
+                     "µM maps, and the overall composition as bars with a µM line. "
+                     "Click any pixel for its spectrum. References + preprocessing "
                      "come from Samples.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
@@ -195,6 +196,12 @@ class RealDataPage(QWidget):
 
         self.optbox = QWidget(); obl = QVBoxLayout(self.optbox)
         obl.setContentsMargins(0, 0, 0, 0); obl.setSpacing(8)
+        def _group(title):
+            lbl = QLabel(title); lbl.setObjectName("field")
+            lbl.setStyleSheet("font-weight:600; margin-top:2px;")
+            return lbl
+
+        obl.addWidget(_group("sources — set once, they stay loaded"))
         srow = QHBoxLayout(); srow.setSpacing(8)
         srow.addWidget(model_b); srow.addWidget(self.model_lbl)
         srow.addWidget(dlm_b)
@@ -203,9 +210,10 @@ class RealDataPage(QWidget):
         srow.addWidget(corr_b); srow.addLayout(corrcol)
         srow.addStretch(1)
         obl.addLayout(srow)
+        obl.addWidget(_group("pixel gate & view — what counts as a hit, how it is drawn"))
         trow = QHBoxLayout(); trow.setSpacing(10)
-        trow.addLayout(hitcol); trow.addLayout(self.thr); trow.addLayout(flipcol)
-        trow.addLayout(relcol)
+        trow.addLayout(hitcol); trow.addLayout(self.thr); trow.addLayout(relcol)
+        trow.addLayout(flipcol)
         trow.addStretch(1)
         obl.addLayout(trow)
         root.addWidget(self.optbox)
@@ -245,13 +253,23 @@ class RealDataPage(QWidget):
         lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(460)
         body.addWidget(card_maps)
 
+        # 1b) unmixed abundance maps — NNLS runs FIRST in every path (the gate), so
+        #     its per-substance abundances belong beside the raw band maps: bands =
+        #     what the camera saw, abundances = what stage-1 unmixing made of it.
+        self.c_abund = Canvas()
+        card_ab, lay_ab = _card(
+            "Unmixed maps — per-substance abundance from stage-1 unmixing "
+            "(NNLS/MCR; model runs show its per-pixel probabilities)")
+        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(460)
+        body.addWidget(card_ab)
+
         # 2) per-pixel composition pie | selected-pixel spectrum, side by side — right
         #    under the maps so a clicked pixel's spectrum shows without scrolling down
         self.c_pie = Canvas(); self.c_spec = Canvas()
         pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
-        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(520)
+        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(460)
         scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
-        slay.addWidget(self.c_spec); self.c_spec.setMinimumHeight(520)
+        slay.addWidget(self.c_spec); self.c_spec.setMinimumHeight(460)
         srow = QHBoxLayout(); srow.setSpacing(12)
         srow.addWidget(pcard, 1); srow.addWidget(scard, 1)
         srow_w = QWidget(); srow_w.setLayout(srow); body.addWidget(srow_w)
@@ -261,7 +279,7 @@ class RealDataPage(QWidget):
         self.card_conc, lay_conc = _card(
             "Apparent SERS-equivalent concentration (µM) — from the composition model, "
             "or from a loaded calibration when one is given")
-        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(440)
+        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(460)
         ccard, clay = _card("Composition (overall)")
         clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(300)
         crow = QHBoxLayout(); crow.setSpacing(12)
@@ -481,7 +499,7 @@ class RealDataPage(QWidget):
         r = self._res
         if r is None:
             return
-        self._plot_maps(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
+        self._plot_maps(r); self._plot_abund(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
         if self._sel is not None:
             self._plot_spec(r, self._sel)
 
@@ -810,7 +828,7 @@ class RealDataPage(QWidget):
         self.k_px.set(f"{r.n_pixels:,}", PURPLE)
         self._rebuild_swatches(r)
         self._rebuild_bandrow(r)     # seeds each substance's VIP band on a fresh run
-        self._plot_maps(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
+        self._plot_maps(r); self._plot_abund(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
 
     # ---- plots ----
@@ -913,6 +931,47 @@ class RealDataPage(QWidget):
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
         self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
+
+    def _plot_abund(self, r):
+        """Merged false-colour composite PLUS one panel per component (background
+        included), one row. This is the OLD band-card view, kept because stage-1
+        unmixing runs in every path: the merge paints every substance's abundance
+        in its colour; each single panel is that component on black→colour with a
+        colour-bar. BLK/INK panels show where the gate sees non-analyte."""
+        from matplotlib.colors import LinearSegmentedColormap
+        self.c_abund.fig.clear()
+        nbcols = self._nb_colors(r)
+        allcols = self._all_colors(r)
+        Anb = r.A[:, r.nonbg]
+        mscale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
+        sub_vmax = float(np.quantile(Anb, 0.99)) if Anb.size else 1.0
+        sub_vmax = sub_vmax or 1.0
+        rows, cc, ny, nx, ux, uy = self._grid_rc(r)
+        origin, extent = self._extent_origin(ux, uy)
+        panels = [("merged", None)] + [(r.comps[k], k) for k in range(len(r.comps))]
+        n = len(panels)
+        for idx, (title, k) in enumerate(panels):
+            ax = self.c_abund.style(self.c_abund.fig.add_subplot(1, n, idx + 1))
+            if k is None:
+                cols = np.array([to_rgb(c) for c in nbcols])
+                img = np.zeros((ny, nx, 3))
+                img[rows, cc] = np.clip((Anb / mscale) @ cols, 0.0, 1.0)
+                ax.imshow(img, extent=extent, origin=origin, aspect="equal",
+                          interpolation="nearest")
+            else:
+                sc = (sub_vmax if not r.bg_mask[k]
+                      else float(np.quantile(r.A[:, k], 0.99)) or 1.0)
+                grid = np.zeros((ny, nx)); grid[rows, cc] = r.A[:, k]
+                cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", allcols[k]])
+                im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                               interpolation="nearest", cmap=cmap, vmin=0.0, vmax=sc)
+                cb = self.c_abund.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
+                cb.ax.tick_params(labelsize=7, colors="black")
+                title = title + (" (bkg)" if r.bg_mask[k] else "")
+            ax.set_title(title, fontsize=9)
+            ax.set_xticks([]); ax.set_yticks([])
+            self._click_axes.append(ax)
+        self.c_abund.fig.tight_layout(); self.c_abund.draw_idle()
 
     def _plot_conc(self, r):
         """Per-substance apparent SERS-equivalent concentration (µM) heat-maps — only when a
@@ -1163,13 +1222,21 @@ class RealDataPage(QWidget):
                 + ([f"{r.bg_score[i]:.4f}"] if has_bg else [])
                 for i in range(r.n_pixels)]
         write_csv(os.path.join(d, "per_pixel.csv"), head, rows)
+        # figures export WITHOUT the selection ring — the clicked-pixel highlight
+        # is a working aid, not figure content. Redraw clean, save, then restore.
+        _sel = self._sel
+        if _sel is not None:
+            self._sel = None; self._plot_pies(r)
         figs = [("real_band_maps", self.c_maps),
+                ("real_abundance_maps", self.c_abund),
                 ("real_composition_pies", self.c_pie),
                 ("real_composition", self.c_comp),
                 ("real_pixel_spectrum", self.c_spec)]
         if getattr(r, "calibrated", False) and r.conc is not None:
             figs.append(("real_concentration_maps", self.c_conc))
         n = _save_figs(figs, d)
+        if _sel is not None:
+            self._sel = _sel; self._plot_pies(r)         # put the highlight back
         self._export_readme(d, r, nb, [f[0] for f in figs])
         self.status.setText(f"exported README + 2 CSV + {n} PNG → {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
