@@ -65,6 +65,7 @@ class RealDataPage(QWidget):
         self._colors = {}           # per-substance colour override {name: '#hex'}
         self._bands = {}            # per-substance mapped wavenumber {name: cm⁻¹}
         self._band_spins = {}
+        self._extra_band = None     # user-added band panel (cm⁻¹); None = off
         COLOR_BUS.changed.connect(self._on_colors_changed)   # top-bar picker sync
         self.data_dir = PEST_DEFAULT
         self.test = None
@@ -241,16 +242,16 @@ class RealDataPage(QWidget):
         self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
-        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(300)
+        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(460)
         body.addWidget(card_maps)
 
         # 2) per-pixel composition pie | selected-pixel spectrum, side by side — right
         #    under the maps so a clicked pixel's spectrum shows without scrolling down
         self.c_pie = Canvas(); self.c_spec = Canvas()
         pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
-        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(340)
+        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(520)
         scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
-        slay.addWidget(self.c_spec); self.c_spec.setMinimumHeight(340)
+        slay.addWidget(self.c_spec); self.c_spec.setMinimumHeight(520)
         srow = QHBoxLayout(); srow.setSpacing(12)
         srow.addWidget(pcard, 1); srow.addWidget(scard, 1)
         srow_w = QWidget(); srow_w.setLayout(srow); body.addWidget(srow_w)
@@ -260,7 +261,7 @@ class RealDataPage(QWidget):
         self.card_conc, lay_conc = _card(
             "Apparent SERS-equivalent concentration (µM) — from the composition model, "
             "or from a loaded calibration when one is given")
-        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(300)
+        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(440)
         ccard, clay = _card("Composition (overall)")
         clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(300)
         crow = QHBoxLayout(); crow.setSpacing(12)
@@ -404,6 +405,36 @@ class RealDataPage(QWidget):
             sp.valueChanged.connect(lambda v, name=nm: self._on_band(name, v))
             self.bandrow.addWidget(sp)
             self._band_spins[nm] = sp
+        # ---- user-added extra panel: any wavenumber, e.g. a leaf/background band ----
+        # (asked for when TBZ 1010 lit up OUTSIDE the leaf — an extra band beside the
+        #  substance bands is how you check what that region actually is)
+        chk = QCheckBox("extra"); chk.setChecked(self._extra_band is not None)
+        chk.setToolTip("add one more band panel at any wavenumber — for checking a "
+                       "region that lights up where it should not (leaf, substrate…)")
+        sp = QDoubleSpinBox(); sp.setDecimals(1); sp.setSingleStep(5.0)
+        sp.setRange(lo, hi)
+        sp.setValue(self._extra_band if self._extra_band is not None
+                    else float(np.median(r.wn)))
+        sp.setFixedWidth(96); sp.setEnabled(chk.isChecked())
+        sp.setStyleSheet("QDoubleSpinBox{border:2px solid #8a94a3;"
+                         "border-radius:6px;padding:1px 4px;}")
+
+        def _extra_toggled(on, spin=sp):
+            spin.setEnabled(on)
+            self._extra_band = float(spin.value()) if on else None
+            if self._res is not None:
+                self._plot_maps(self._res)
+
+        def _extra_moved(v):
+            if self._extra_band is not None:
+                self._extra_band = float(v)
+                if self._res is not None:
+                    self._plot_maps(self._res)
+
+        chk.toggled.connect(_extra_toggled)
+        sp.valueChanged.connect(_extra_moved)
+        self.bandrow.addWidget(chk); self.bandrow.addWidget(sp)
+        self._extra_spin = sp
         self.bandrow.addStretch(1)
 
     def _on_band(self, name, value):
@@ -830,7 +861,8 @@ class RealDataPage(QWidget):
                 for v in chans]
         lims = [(a, b if b > a else a + 1.0) for a, b in lims]   # never a zero span
 
-        n = len(nb) + 1                                   # merge + one per substance
+        extra = self._extra_band                          # user-added band (or None)
+        n = len(nb) + 1 + (1 if extra is not None else 0) # merge + substances (+ extra)
         # ---- merged R/G/B: each channel stretched over its own P1..P99 ----
         ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, n, 1))
         cols = np.array([to_rgb(c) for c in nbcols])
@@ -866,6 +898,18 @@ class RealDataPage(QWidget):
             ax.set_title(f"{nm} @ {bands[i]:.0f} cm$^{{-1}}$", fontsize=9)
             # no selection ring on the band maps — it clutters them; the pie map
             # (beside the spectrum) carries the highlight instead
+            ax.set_xticks([]); ax.set_yticks([])
+            self._click_axes.append(ax)
+        if extra is not None:                              # user-added band, neutral grey
+            v = self._band_image(r, extra)
+            a, b = float(np.quantile(v, 0.01)), float(np.quantile(v, 0.99))
+            b = b if b > a else a + 1.0
+            ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, n, n))
+            grid = np.zeros((ny, nx)); grid[rows, cc] = v
+            cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", "#d7dde6"])
+            ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                      interpolation="nearest", cmap=cmap, vmin=a, vmax=b)
+            ax.set_title(f"extra @ {extra:.0f} cm$^{{-1}}$", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
         self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
