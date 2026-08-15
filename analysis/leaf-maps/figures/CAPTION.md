@@ -7,10 +7,13 @@
 
 ## Fig_leaf_panel
 
-**Mixture on leaves, before and after peeling.** (**a**) Raman maps of the
-mixture-treated leaves as applied and after the peel; rows are preparations and columns
-are readouts. Both maps cover 20 × 20 pixels at 100 µm steps (1900 × 1900 µm), so the
-two rows are directly comparable. Each panel is plotted after asymmetric-least-squares baseline
+**Mixture on leaves, before and after peeling.** (**a**) Raman maps of the same spot on
+the same mixture-treated leaf, as applied and after the peel; rows are preparations and
+columns are readouts. Both maps cover 20 × 20 pixels at 100 µm steps (1900 × 1900 µm),
+so the two rows are directly comparable. The peel lifts the ink together with the
+surface residue, and the ink reporter falls by 26 % between the rows; analyte removal
+should therefore be read against that baseline (THI 61 %, DQ 46 %, TBZ 31 % of the
+marker intensity removed, i.e. 0.53, 0.73 and 0.94 of the ink-normalised level retained). Each panel is plotted after asymmetric-least-squares baseline
 removal (λ = 1 × 10⁵, p = 0.01). The first column is the integrated intensity of the ink
 reporter band in the cellular-silent region (2100–2180 cm⁻¹), which reports how much ink
 is probed in each pixel; the remaining columns are the marker-band intensity of each
@@ -64,6 +67,8 @@ of the threshold. All three analytes clear the threshold on the mixture-treated 
 > (`analysis/dq9-sus-reproducibility/README.md` §3). 조제간 재현성 오차막대가 필요하면
 > 같은 조건을 한 번 더 조제해야 한다.
 >
-> peel 전후 감소를 쓸 때 — 두 맵의 면적은 같지만 **같은 잎의 같은 자리인지**는 확인되지
-> 않았다. 다른 자리라면 감소분에 자리 간 편차가 섞인다. 확인하고 캡션에 밝힐 것.
+> peel 전후 감소를 쓸 때 — 두 맵은 같은 잎 같은 자리이고 면적도 같다(확인됨). 다만
+> 필름이 잉크째 떼어내므로 **잉크는 두 맵 사이의 고정 기준물질이 아니다.** 마커/잉크
+> 비가 내려간 것은 "남은 잉크 한 단위당 분석물이 줄었다"는 뜻이니, 크기를 말할 때는
+> 절대 제거율(README §3-3)을 같이 쓸 것.
 > `leavesmix2peel2` 는 면적이 1/18 이라 같은 계열로 못 쓴다 (CSV 에는 있다).

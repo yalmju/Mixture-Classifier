@@ -10,6 +10,9 @@
         <성분>_<밴드>  마커밴드 +-10 cm-1 적분
         <성분>    그 성분 마커밴드 3개의 평균
         <성분>_over_ink   마커/잉크 — 기판 gain 이 상쇄되는 판독값
+  peel: 필름이 **잉크째** 떼어낸다 (사용자 확인 2026-08-15, 같은 잎 같은 자리).
+        그래서 잉크는 두 맵 사이에서 고정 기준물질이 아니다 — 픽셀 안 gain 상쇄에는
+        그대로 쓰되, 맵끼리는 잉크 자신의 제거율과 나란히 봐야 한다.
   대조군: `cov3` (잎에 잉크만) 를 blank 로 삼아 검출 대비를 낸다.
         contrast = 중앙값 - blank 중앙값,  SNR = contrast / blank SD,
         검출픽셀 = blank 평균 + 3 SD 를 넘는 픽셀 비율.
@@ -247,6 +250,28 @@ def main():
                 w.writerow([nm, int(b)] + [f"{v[s]:.4f}" for s in SAMPLES]
                            + [f"{max(v[s] for s in others)/v[CONTROL]:.2f}",
                               max(others, key=lambda s: v[s])])
+
+    # ---- peel 제거율 — 잉크가 같이 떨어지므로 잉크 자신의 제거율과 나란히 본다 ----
+    PEEL_PAIR = ("leavesmix", "leavesmix2peel")          # 같은 잎 같은 자리, 같은 격자
+    if all(k in feat for k in PEEL_PAIR):
+        a, b = PEEL_PAIR
+        ia, ib = np.median(feat[a]["ink2137"]), np.median(feat[b]["ink2137"])
+        with open(os.path.join(OUT, "peel_removal.csv"), "w", newline="",
+                  encoding="utf-8-sig") as f:
+            w = csv.writer(f)
+            w.writerow(["readout", "before_peel", "after_peel", "kept_fraction",
+                        "removed_pct", "kept_relative_to_ink"])
+            w.writerow(["ink2137", f"{ia:.6g}", f"{ib:.6g}", f"{ib/ia:.3f}",
+                        f"{100*(1-ib/ia):.1f}", "1.000"])
+            for nm in SUB:
+                va, vb = np.median(feat[a][nm]), np.median(feat[b][nm])
+                w.writerow([nm, f"{va:.6g}", f"{vb:.6g}", f"{vb/va:.3f}",
+                            f"{100*(1-vb/va):.1f}", f"{(vb/va)/(ib/ia):.3f}"])
+        print(f"\npeel 제거율 ({a} -> {b})   잉크 {100*(1-ib/ia):.0f}% 제거")
+        for nm in SUB:
+            va, vb = np.median(feat[a][nm]), np.median(feat[b][nm])
+            print(f"  {nm:>4}: {100*(1-vb/va):5.1f}% 제거   잉크 대비 잔존 "
+                  f"{(vb/va)/(ib/ia):.3f}")
 
     with open(os.path.join(OUT, "SOURCES.txt"), "w") as f:
         for s in SAMPLES:
