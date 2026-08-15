@@ -19,7 +19,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, to_rgb
 from matplotlib.lines import Line2D
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,31 +28,27 @@ DATA = os.path.join(ROOT, "data")
 FIGS = os.path.join(ROOT, "figures")
 
 # ============ ui_common.py 팔레트 ============
-PAGE, INK, MUTE, FAINT, LINE = "#fafbfc", "#1c2430", "#5b6673", "#98a1ac", "#e3e8ee"
+PAGE, INK, MUTE, FAINT, LINE = "#ffffff", "#141b24", "#4a5460", "#98a1ac", "#e3e8ee"
 BLUE, PINK, GREEN, AMBER, CORAL = "#1a73e8", "#c85a8f", "#4a9e2a", "#c98a15", "#d8542a"
 SER = {"DQ": BLUE, "TBZ": GREEN, "THI": PINK}
 MARK = {"DQ": "o", "TBZ": "s", "THI": "^"}              # 색 외 2차 부호화
 MARKERS = {"DQ": [1179, 1521, 1576], "TBZ": [779, 1011, 1549], "THI": [556, 1138, 1365]}
 
-SAMPLES = ["leaf_dq", "leaf_tb1", "leaf_thi2", "cov3",
-           "leavesmix", "leavesmix2peel", "leavesmix2peel2"]
+# 그림에 넣는 맵.  01_extract.py 는 7맵 전부를 처리하고 CSV 에도 전부 들어 있다 —
+# 여기서 고르는 것은 **그림에 그릴 열**뿐이다.  다시 넓히려면 이 목록만 늘리면 된다.
 CONTROL = "cov3"
-GROUPS = [("single analyte on leaf", ["leaf_dq", "leaf_tb1", "leaf_thi2"]),
-          ("control", ["cov3"]),
-          ("mixture on leaves", ["leavesmix", "leavesmix2peel", "leavesmix2peel2"])]
-SHOW = {"leaf_dq": "DQ", "leaf_tb1": "TBZ", "leaf_thi2": "THI", "cov3": "ink only",
-        "leavesmix": "mix", "leavesmix2peel": "peel", "leavesmix2peel2": "peel 2"}
-LONG = {"leaf_dq": "leaf · DQ", "leaf_tb1": "leaf · TBZ", "leaf_thi2": "leaf · THI",
-        "cov3": "leaf · ink only", "leavesmix": "leaves · mix",
-        "leavesmix2peel": "leaves · mix, peel", "leavesmix2peel2": "leaves · mix, peel 2"}
-AMB = ["#8a5e0a", AMBER, "#e0b45f"]                     # 혼합 시리즈 — 한 색상 명도 3단
-SCOL = {"leaf_dq": BLUE, "leaf_tb1": GREEN, "leaf_thi2": PINK, "cov3": MUTE,
-        "leavesmix": AMB[0], "leavesmix2peel": AMB[1], "leavesmix2peel2": AMB[2]}
-SHORT = {"leaf_dq": "DQ", "leaf_tb1": "TBZ", "leaf_thi2": "THI", "cov3": "ink only",
-         "leavesmix": "mix", "leavesmix2peel": "mix, peel",
+SAMPLES = [CONTROL, "leavesmix2peel", "leavesmix2peel2"]
+GROUPS = [("control", [CONTROL]),
+          ("mixture on leaves, peeled", ["leavesmix2peel", "leavesmix2peel2"])]
+SHOW = {"cov3": "ink only", "leavesmix2peel": "peel", "leavesmix2peel2": "peel 2"}
+LONG = {"cov3": "leaf · ink only", "leavesmix2peel": "leaves · mix, peel",
+        "leavesmix2peel2": "leaves · mix, peel 2"}
+SHORT = {"cov3": "ink only", "leavesmix2peel": "mix, peel",
          "leavesmix2peel2": "mix, peel 2"}
+AMB = ["#8a5e0a", AMBER]                                # peel 시리즈 — 한 색상 명도 2단
+SCOL = {"cov3": MUTE, "leavesmix2peel": AMB[1], "leavesmix2peel2": AMB[0]}
 SDASH = {s: "-" for s in SAMPLES}
-SDASH.update({"leavesmix2peel": (0, (4, 1.8)), "leavesmix2peel2": (0, (1.6, 1.4))})
+SDASH.update({"leavesmix2peel2": (0, (3.2, 1.6))})
 
 plt.rcParams.update({
     "font.family": "sans-serif",
@@ -73,9 +69,19 @@ def clean(ax):
     ax.tick_params(length=3, pad=2)
 
 
-def ramp(hexcol, lo="#f4f6f8"):
-    """옅은 회백색 -> 성분색.  0 이 배경과 이어지고 강도만 색으로 읽힌다."""
-    return LinearSegmentedColormap.from_list("r", [lo, hexcol])
+def _shade(hexcol, k):
+    """같은 색상의 명도 변형.  k<1 어둡게, k>1 흰쪽으로."""
+    r, g, b = to_rgb(hexcol)
+    if k <= 1:
+        return (r * k, g * k, b * k)
+    t = k - 1
+    return (r + (1 - r) * t, g + (1 - g) * t, b + (1 - b) * t)
+
+
+def ramp(hexcol, lo="#ffffff"):
+    """흰색 -> 성분색 -> 더 짙은 같은 색.  세 정거장이라 높은 쪽 대비가 살아난다."""
+    return LinearSegmentedColormap.from_list(
+        "r", [lo, _shade(hexcol, 1.55), hexcol, _shade(hexcol, .55)])
 
 
 D = np.load(os.path.join(DATA, "pixels.npz"), allow_pickle=True)
@@ -98,24 +104,24 @@ def grid(s, key):
 
 
 # ================================================================ Fig 1 — maps
-ROWS = [("ink2137", "Ink reporter\n2137 cm$^{-1}$", ramp(INK, "#f2f4f6")),
+ROWS = [("ink2137", "Ink reporter\n2137 cm$^{-1}$", ramp("#2b3a4a")),
         ("DQ_over_ink", "DQ marker\n/ ink", ramp(SER["DQ"])),
         ("TBZ_over_ink", "TBZ marker\n/ ink", ramp(SER["TBZ"])),
         ("THI_over_ink", "THI marker\n/ ink", ramp(SER["THI"]))]
 
-fig = plt.figure(figsize=(7.2, 4.95))
-gs = fig.add_gridspec(4, 7, hspace=.09, wspace=.09,
-                      left=.105, right=.885, top=.760, bottom=.035)
+fig = plt.figure(figsize=(4.9, 5.35))
+gs = fig.add_gridspec(4, len(SAMPLES), hspace=.09, wspace=.09,
+                      left=.205, right=.815, top=.755, bottom=.030)
 
 for i, (key, rlab, cmap) in enumerate(ROWS):
     allv = np.concatenate([D[f"{s}__{key}"] for s in SAMPLES])
-    vmin, vmax = np.percentile(allv, 2), np.percentile(allv, 98)
+    vmin, vmax = np.percentile(allv, 4), np.percentile(allv, 96)
     for j, s in enumerate(SAMPLES):
         ax = fig.add_subplot(gs[i, j])
         im = ax.imshow(grid(s, key), cmap=cmap, vmin=vmin, vmax=vmax,
                        origin="lower", interpolation="nearest", aspect="equal")
         for sp in ax.spines.values():
-            sp.set_visible(True); sp.set_color(LINE); sp.set_linewidth(.7)
+            sp.set_visible(True); sp.set_color(FAINT); sp.set_linewidth(.8)
         ax.set_xticks([]); ax.set_yticks([])
         if i == 0:                                   # 열 머리글 (축 바깥)
             n = len(np.unique(D[f"{s}__cols"]))
@@ -125,10 +131,10 @@ for i, (key, rlab, cmap) in enumerate(ROWS):
                     fontsize=6.2, color=MUTE)
         if j == 0:                                   # 행 라벨 (축 바깥)
             ax.set_ylabel(rlab, fontsize=7.6, labelpad=5, linespacing=1.35)
-        if j == 6:                                   # 행마다 컬러바 하나
+        if j == len(SAMPLES) - 1:                    # 행마다 컬러바 하나
             bb = ax.get_position()
-            cax = fig.add_axes([bb.x1 + .011, bb.y0 + bb.height * .10,
-                                .011, bb.height * .80])
+            cax = fig.add_axes([bb.x1 + .017, bb.y0 + bb.height * .10,
+                                .017, bb.height * .80])
             cb = fig.colorbar(im, cax=cax)
             cb.outline.set_visible(False)
             cb.ax.tick_params(length=2, width=.6, labelsize=6.5, colors=MUTE, pad=1.5)
@@ -140,25 +146,25 @@ for i, (key, rlab, cmap) in enumerate(ROWS):
 for gname, members in GROUPS:
     a = fig.axes[SAMPLES.index(members[0])].get_position()
     b = fig.axes[SAMPLES.index(members[-1])].get_position()
-    y = .868
+    y = .838
     fig.lines.append(Line2D([a.x0, b.x1], [y, y], transform=fig.transFigure,
                             color=FAINT, lw=.7))
     fig.text((a.x0 + b.x1) / 2, y + .011, gname, ha="center", va="bottom",
              fontsize=7.6, color=MUTE)
 
-fig.text(.5, .955, "Raman maps of the leaf-surface series",
-         ha="center", va="bottom", fontsize=11, fontweight="bold", color=INK)
-fig.text(.5, .922, "ALS-baselined · marker bands normalised to the ink reporter of the "
-                   "same pixel · intensity scale shared within a row",
-         ha="center", va="bottom", fontsize=7.6, color=MUTE)
+fig.text(.5, .952, "Raman maps of the peeled mixture series",
+         ha="center", va="bottom", fontsize=10.5, fontweight="bold", color=INK)
+fig.text(.5, .941, "ALS-baselined · marker bands normalised to the ink\nreporter of the "
+                   "same pixel · scale shared within a row",
+         ha="center", va="top", fontsize=7.4, color=MUTE, linespacing=1.35)
 out = os.path.join(FIGS, "Fig_leaf_maps.pdf")
 fig.savefig(out); fig.savefig(out.replace(".pdf", ".png"), dpi=400)
 print(out)
 
 # ======================================================== Fig 2 — 대표 스펙트럼
-fig = plt.figure(figsize=(7.2, 5.9))
+fig = plt.figure(figsize=(7.2, 4.2))
 gs = fig.add_gridspec(1, 2, width_ratios=[2.40, 1.0], wspace=.55,
-                      left=.070, right=.880, top=.845, bottom=.092)
+                      left=.085, right=.880, top=.775, bottom=.135)
 
 FP = (WN >= 400) & (WN <= 1800)
 SIL = (WN >= 2050) & (WN <= 2250)
@@ -169,18 +175,18 @@ OFF = max(np.ptp(norm[s][FP]) for s in SAMPLES) * .70
 ax = fig.add_subplot(gs[0, 0]); clean(ax)
 for nm, bands in MARKERS.items():
     for b in bands:
-        ax.axvline(b, color=SER[nm], lw=.7, alpha=.28, zorder=0)
+        ax.axvline(b, color=SER[nm], lw=.9, alpha=.40, zorder=0)
 for k, s in enumerate(SAMPLES[::-1]):
     y0 = OFF * k
     ax.fill_between(WN[FP], y0 + R[f"{s}__q25"][FP] / R[f"{s}__ink"],
                     y0 + R[f"{s}__q75"][FP] / R[f"{s}__ink"],
-                    color=SCOL[s], alpha=.16, linewidth=0, zorder=2)
-    ax.plot(WN[FP], y0 + norm[s][FP], color=SCOL[s], lw=.9, ls=SDASH[s], zorder=3)
+                    color=SCOL[s], alpha=.24, linewidth=0, zorder=2)
+    ax.plot(WN[FP], y0 + norm[s][FP], color=SCOL[s], lw=1.15, ls=SDASH[s], zorder=3)
     ax.text(1812, y0 + norm[s][FP][-1], LONG[s], fontsize=7.6, color=SCOL[s],
             va="center", ha="left", clip_on=False)          # 축 바깥 라벨
 ax.set_xlim(400, 1800)
 ax.set_xlabel("Raman shift (cm$^{-1}$)", fontsize=8.5)
-ax.set_ylabel("Intensity / ink 2137 cm$^{-1}$ band area   (offset)", fontsize=8.5)
+ax.set_ylabel("Intensity / ink band area   (offset)", fontsize=8.5, labelpad=4)
 ax.set_yticks([]); ax.spines["left"].set_visible(False)
 ax.set_xticks([400, 700, 1000, 1300, 1600, 1800])
 ax.legend([Line2D([0], [0], color=SER[n], lw=1.6, alpha=.6) for n in SER],
@@ -196,8 +202,8 @@ sp2 = max(np.ptp(R[f"{s}__med"][SIL]) for s in SAMPLES) * .70
 for k, s in enumerate(SAMPLES[::-1]):
     y0 = sp2 * k
     ax.fill_between(WN[SIL], y0 + R[f"{s}__q25"][SIL], y0 + R[f"{s}__q75"][SIL],
-                    color=SCOL[s], alpha=.16, linewidth=0, zorder=2)
-    ax.plot(WN[SIL], y0 + R[f"{s}__med"][SIL], color=SCOL[s], lw=.9, ls=SDASH[s], zorder=3)
+                    color=SCOL[s], alpha=.24, linewidth=0, zorder=2)
+    ax.plot(WN[SIL], y0 + R[f"{s}__med"][SIL], color=SCOL[s], lw=1.15, ls=SDASH[s], zorder=3)
 ax.set_xlim(2050, 2250); ax.set_xticks([2050, 2137, 2250])
 ax.set_xlabel("Raman shift (cm$^{-1}$)", fontsize=8.5)
 ax.set_ylabel("Intensity (counts, offset)", fontsize=8.5, labelpad=2)
@@ -208,9 +214,9 @@ for _ax, _L in zip(fig.axes, "ab"):
     bb = _ax.get_position()
     fig.text(max(bb.x0 - .054, .004), bb.y1 + .035, _L, fontsize=11, fontweight="bold",
              va="bottom", ha="left", color=INK)
-fig.text(.5, .955, "Representative spectra of the leaf-surface series",
+fig.text(.5, .930, "Representative spectra of the peeled mixture series",
          ha="center", va="bottom", fontsize=11, fontweight="bold", color=INK)
-fig.text(.5, .923, "Median of the pixels within one preparation; shading = interquartile "
+fig.text(.5, .893, "Median of the pixels within one preparation; shading = interquartile "
                    "range across those pixels",
          ha="center", va="bottom", fontsize=7.8, color=MUTE)
 out = os.path.join(FIGS, "Fig_leaf_spectra.pdf")
@@ -219,26 +225,26 @@ print(out)
 
 # ============================================ Fig 3 — 대조군 대비 (차이 + 검출률)
 OTHER = [s for s in SAMPLES if s != CONTROL]
-fig = plt.figure(figsize=(7.2, 4.6))
+fig = plt.figure(figsize=(7.2, 3.8))
 gs = fig.add_gridspec(1, 2, width_ratios=[2.30, 1.0], wspace=.50,
-                      left=.070, right=.800, top=.815, bottom=.115)
+                      left=.078, right=.800, top=.755, bottom=.150)
 
 # ---------- a : 차이 스펙트럼 ----------
 ax = fig.add_subplot(gs[0, 0]); clean(ax)
 for nm, bands in MARKERS.items():
     for b in bands:
-        ax.axvline(b, color=SER[nm], lw=.7, alpha=.28, zorder=0)
+        ax.axvline(b, color=SER[nm], lw=.9, alpha=.40, zorder=0)
 dif = {s: R[f"{s}__diff"] for s in OTHER}
 OFF3 = max(np.ptp(dif[s][FP]) for s in OTHER) * .72
 for k, s in enumerate(OTHER[::-1]):
     y0 = OFF3 * k
     ax.axhline(y0, color=LINE, lw=.6, zorder=1)          # 각 트레이스의 0 선
-    ax.plot(WN[FP], y0 + dif[s][FP], color=SCOL[s], lw=.9, ls=SDASH[s], zorder=3)
+    ax.plot(WN[FP], y0 + dif[s][FP], color=SCOL[s], lw=1.15, ls=SDASH[s], zorder=3)
     ax.text(1812, y0, SHORT[s], fontsize=7.6, color=SCOL[s], va="center", ha="left",
             clip_on=False)
 ax.set_xlim(400, 1800)
 ax.set_xlabel("Raman shift (cm$^{-1}$)", fontsize=8.5)
-ax.set_ylabel("Sample − control, ink-normalised   (offset)", fontsize=8.5)
+ax.set_ylabel("Sample − control   (offset)", fontsize=8.5, labelpad=4)
 ax.set_yticks([]); ax.spines["left"].set_visible(False)
 ax.set_xticks([400, 700, 1000, 1300, 1600, 1800])
 ax.legend([Line2D([0], [0], color=SER[n], lw=1.6, alpha=.6) for n in SER],
@@ -254,10 +260,10 @@ ax.axvline(0, color=LINE, lw=.7, zorder=0)
 for j, nm in enumerate(SER):
     off = (j - 1) * .24
     v = [DET[(s, nm)]["pct"] for s in SAMPLES]
-    ax.scatter(v, y + off, s=22, marker=MARK[nm], facecolor=SER[nm], edgecolor=PAGE,
-               linewidth=.6, zorder=3, label=nm)
+    ax.scatter(v, y + off, s=30, marker=MARK[nm], facecolor=SER[nm], edgecolor=PAGE,
+               linewidth=.7, zorder=3, label=nm)
     for yy, vv in zip(y + off, v):
-        ax.plot([0, vv], [yy, yy], color=SER[nm], lw=.8, alpha=.35, zorder=2)
+        ax.plot([0, vv], [yy, yy], color=SER[nm], lw=1.1, alpha=.55, zorder=2)
 ax.set_yticks(y)
 ax.set_yticklabels([LONG[s] for s in SAMPLES], fontsize=7.4)
 ax.yaxis.tick_right()                                # a 패널의 시료 라벨과 안 겹치게
@@ -273,9 +279,9 @@ for _ax, _L in zip(fig.axes, "ab"):
     bb = _ax.get_position()
     fig.text(max(bb.x0 - .058, .004), bb.y1 + .042, _L, fontsize=11, fontweight="bold",
              va="bottom", ha="left", color=INK)
-fig.text(.5, .945, "Analyte signal above the ink-only leaf control",
+fig.text(.5, .922, "Analyte signal above the ink-only leaf control",
          ha="center", va="bottom", fontsize=11, fontweight="bold", color=INK)
-fig.text(.5, .910, "Control = leaf carrying ink alone; both panels use its own pixels as "
+fig.text(.5, .882, "Control = leaf carrying ink alone; both panels use its own pixels as "
                    "the blank",
          ha="center", va="bottom", fontsize=7.8, color=MUTE)
 out = os.path.join(FIGS, "Fig_leaf_contrast.pdf")
