@@ -37,18 +37,16 @@ MARKERS = {"DQ": [1179, 1521, 1576], "TBZ": [779, 1011, 1549], "THI": [556, 1138
 # 그림에 넣는 맵.  01_extract.py 는 7맵 전부를 처리하고 CSV 에도 전부 들어 있다 —
 # 여기서 고르는 것은 **그림에 그릴 열**뿐이다.  다시 넓히려면 이 목록만 늘리면 된다.
 CONTROL = "cov3"
-SAMPLES = [CONTROL, "leavesmix2peel", "leavesmix2peel2"]
-GROUPS = [("control", [CONTROL]),
-          ("mixture on leaves, peeled", ["leavesmix2peel", "leavesmix2peel2"])]
-SHOW = {"cov3": "ink only", "leavesmix2peel": "peel", "leavesmix2peel2": "peel 2"}
-LONG = {"cov3": "leaf · ink only", "leavesmix2peel": "leaves · mix, peel",
-        "leavesmix2peel2": "leaves · mix, peel 2"}
-SHORT = {"cov3": "ink only", "leavesmix2peel": "mix, peel",
-         "leavesmix2peel2": "mix, peel 2"}
-AMB = ["#8a5e0a", AMBER]                                # peel 시리즈 — 한 색상 명도 2단
-SCOL = {"cov3": MUTE, "leavesmix2peel": AMB[1], "leavesmix2peel2": AMB[0]}
+SAMPLES = ["leavesmix", "leavesmix2peel"]               # 둘 다 20x20 / 1900 um — 면적이 같다
+GROUPS = [("mixture on leaves", SAMPLES)]
+SHOW = {"leavesmix": "as applied", "leavesmix2peel": "after peel"}
+LONG = {"leavesmix": "leaves · mix", "leavesmix2peel": "leaves · mix, peel",
+        CONTROL: "leaf · ink only"}
+SHORT = {"leavesmix": "mix", "leavesmix2peel": "mix, peel", CONTROL: "ink only"}
+AMB = ["#8a5e0a", AMBER]                                # 혼합 시리즈 — 한 색상 명도 2단
+SCOL = {"leavesmix": AMB[0], "leavesmix2peel": AMB[1], CONTROL: MUTE}
 SDASH = {s: "-" for s in SAMPLES}
-SDASH.update({"leavesmix2peel2": (0, (3.2, 1.6))})
+SDASH.update({"leavesmix2peel": (0, (3.2, 1.6))})
 
 plt.rcParams.update({
     "font.family": "sans-serif",
@@ -152,7 +150,7 @@ for gname, members in GROUPS:
     fig.text((a.x0 + b.x1) / 2, y + .011, gname, ha="center", va="bottom",
              fontsize=7.6, color=MUTE)
 
-fig.text(.5, .952, "Raman maps of the peeled mixture series",
+fig.text(.5, .952, "Raman maps of the mixture series, before and after peeling",
          ha="center", va="bottom", fontsize=10.5, fontweight="bold", color=INK)
 fig.text(.5, .941, "ALS-baselined · marker bands normalised to the ink\nreporter of the "
                    "same pixel · scale shared within a row",
@@ -214,7 +212,7 @@ for _ax, _L in zip(fig.axes, "ab"):
     bb = _ax.get_position()
     fig.text(max(bb.x0 - .054, .004), bb.y1 + .035, _L, fontsize=11, fontweight="bold",
              va="bottom", ha="left", color=INK)
-fig.text(.5, .930, "Representative spectra of the peeled mixture series",
+fig.text(.5, .930, "Representative spectra of the mixture series",
          ha="center", va="bottom", fontsize=11, fontweight="bold", color=INK)
 fig.text(.5, .893, "Median of the pixels within one preparation; shading = interquartile "
                    "range across those pixels",
@@ -254,22 +252,23 @@ ax.legend([Line2D([0], [0], color=SER[n], lw=1.6, alpha=.6) for n in SER],
           borderpad=0, borderaxespad=0)
 
 # ---------- b : 픽셀 검출률 ----------
+DET_ROWS = [CONTROL] + [s for s in SAMPLES if s != CONTROL]   # 대조군 = 오경보 바닥
 ax = fig.add_subplot(gs[0, 1]); clean(ax)
-y = np.arange(len(SAMPLES))[::-1]
+y = np.arange(len(DET_ROWS))[::-1]
 ax.axvline(0, color=LINE, lw=.7, zorder=0)
 for j, nm in enumerate(SER):
     off = (j - 1) * .24
-    v = [DET[(s, nm)]["pct"] for s in SAMPLES]
+    v = [DET[(s, nm)]["pct"] for s in DET_ROWS]
     ax.scatter(v, y + off, s=30, marker=MARK[nm], facecolor=SER[nm], edgecolor=PAGE,
                linewidth=.7, zorder=3, label=nm)
     for yy, vv in zip(y + off, v):
         ax.plot([0, vv], [yy, yy], color=SER[nm], lw=1.1, alpha=.55, zorder=2)
 ax.set_yticks(y)
-ax.set_yticklabels([LONG[s] for s in SAMPLES], fontsize=7.4)
+ax.set_yticklabels([LONG[s] for s in DET_ROWS], fontsize=7.4)
 ax.yaxis.tick_right()                                # a 패널의 시료 라벨과 안 겹치게
 ax.spines["left"].set_visible(False)
 ax.tick_params(axis="y", length=0, pad=3)
-ax.set_ylim(-.6, len(SAMPLES) - .4)
+ax.set_ylim(-.6, len(DET_ROWS) - .4)
 ax.set_xlim(-3, 103); ax.set_xticks([0, 50, 100])
 ax.set_xlabel("Pixels above control mean + 3 SD (%)", fontsize=8.5)
 ax.legend(loc="lower right", bbox_to_anchor=(1, 1.005), ncol=3, fontsize=7.4,
@@ -368,7 +367,7 @@ for _ax, _L, _dx in ((axmap[0][0], "a", L_LAB / W - .012), (ax, "b", .070)):
     bb = _ax.get_position()
     fig.text(max(bb.x0 - _dx, .004), bb.y1 + .008, _L, fontsize=11, fontweight="bold",
              va="bottom", ha="left", color=INK)
-fig.text(.5, 1 - .28 / H, "Peeled mixture series — maps and representative spectra",
+fig.text(.5, 1 - .28 / H, "Mixture on leaves, before and after peeling",
          ha="center", va="bottom", fontsize=10.5, fontweight="bold", color=INK)
 out = os.path.join(FIGS, "Fig_leaf_panel.pdf")
 fig.savefig(out); fig.savefig(out.replace(".pdf", ".png"), dpi=400)

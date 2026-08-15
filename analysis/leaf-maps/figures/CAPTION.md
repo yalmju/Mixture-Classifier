@@ -7,40 +7,38 @@
 
 ## Fig_leaf_panel
 
-**Peeled mixture series — maps and representative spectra.** (**a**) Raman maps of the
-ink-only leaf control and two peels of the mixture-treated leaves; rows are preparations
-and columns are readouts. Each panel is plotted after asymmetric-least-squares baseline
+**Mixture on leaves, before and after peeling.** (**a**) Raman maps of the
+mixture-treated leaves as applied and after the peel; rows are preparations and columns
+are readouts. Both maps cover 20 × 20 pixels at 100 µm steps (1900 × 1900 µm), so the
+two rows are directly comparable. Each panel is plotted after asymmetric-least-squares baseline
 removal (λ = 1 × 10⁵, p = 0.01). The first column is the integrated intensity of the ink
 reporter band in the cellular-silent region (2100–2180 cm⁻¹), which reports how much ink
 is probed in each pixel; the remaining columns are the marker-band intensity of each
 analyte (DQ 1179/1521/1576, TBZ 779/1011/1549, THI 556/1138/1365 cm⁻¹), averaged over
 the three bands (± 10 cm⁻¹) and divided by the ink reporter intensity of the same pixel,
 so that pixel-to-pixel differences in substrate enhancement cancel. The colour bar under
-each column applies to all three rows. Grid and mapped side length are given beside each
-row — panels drawn at the same size cover 1900 µm for the first peel and 450 µm for the
-control and the second peel. (**b**) Median spectrum of the pixels of each map,
+each column applies to both rows, and grid and mapped side length are repeated beside
+each row. (**b**) Median spectrum of the pixels of each map,
 normalised to the integrated ink reporter band of the same map and offset vertically;
 shading spans the interquartile range of the pixels within that one preparation, and
 vertical lines mark the marker bands used in (a).
 
 ## Fig_leaf_maps
 
-**Raman maps of the peeled mixture series.** Each panel is one map, plotted after
-asymmetric-least-squares baseline removal (λ = 1 × 10⁵, p = 0.01); the grid and the side
-length of the mapped area are given above each column, so panels drawn at the same size
-cover different areas — the peeled mixture map spans 1900 µm at 100 µm steps while the
-control and the second peel span 450 µm at 50 µm steps. Columns are the ink-only leaf
-control and two peels of the mixture-treated leaves. **Top row**, integrated intensity of the ink reporter band in the
+**Raman maps of the mixture series, before and after peeling.** Each panel is one map,
+plotted after asymmetric-least-squares baseline removal (λ = 1 × 10⁵, p = 0.01); both
+maps span 20 × 20 pixels at 100 µm steps (1900 × 1900 µm), as printed above each column.
+**Top row**, integrated intensity of the ink reporter band in the
 cellular-silent region (2100–2180 cm⁻¹), which reports how much ink is probed in each
 pixel. **Lower rows**, the marker-band intensity of each analyte (DQ 1179/1521/1576,
 TBZ 779/1011/1549, THI 556/1138/1365 cm⁻¹), averaged over the three bands (± 10 cm⁻¹)
 and divided by the ink reporter intensity of the same pixel, so that pixel-to-pixel
 differences in substrate enhancement cancel. The intensity scale is shared across the
-three maps within a row (limits given by the colour bar) but not between rows.
+two maps within a row (limits given by the colour bar) but not between rows.
 
 ## Fig_leaf_spectra
 
-**Representative spectra of the peeled mixture series.** (**a**) Median spectrum of the
+**Representative spectra of the mixture series.** (**a**) Median spectrum of the
 pixels of each map in the fingerprint region, normalised to the integrated ink reporter
 band (2100–2180 cm⁻¹) of the same map and offset vertically for display; shading spans
 the interquartile range of the pixels within that one preparation. Vertical lines mark
@@ -57,15 +55,15 @@ panels. (**a**) Ink-normalised median spectrum of each preparation minus that of
 control, offset vertically; thin horizontal lines mark zero for each trace and vertical
 lines mark the marker bands. (**b**) Percentage of pixels in each map whose
 ink-normalised marker intensity exceeds the control mean + 3 SD, computed separately for
-each analyte. The control itself returns 2–4 %, which sets the false-positive floor of
-the threshold. All three analytes clear the threshold on the peeled mixture leaves
-(DQ 10 %, TBZ 36 %, THI 48 %) and on the second peel (19 %, 22 %, 29 %).
+each analyte; the control row is included because its 2–4 % sets the false-positive floor
+of the threshold. All three analytes clear the threshold on the mixture-treated leaves
+(DQ 53 %, TBZ 43 %, THI 81 %) and fall after the peel (10 %, 36 %, 48 %).
 
 > 산포 표기 주의 — 음영과 픽셀 통계는 **한 조제 안**(10 × 10 = 100, 또는 20 × 20 = 400)
 > 픽셀에서 나온 것이지 독립 반복이 아니다. 수식어 없는 `n = 100` 은 쓰지 말 것
 > (`analysis/dq9-sus-reproducibility/README.md` §3). 조제간 재현성 오차막대가 필요하면
 > 같은 조건을 한 번 더 조제해야 한다.
 >
-> 두 peel 맵의 검출률을 나란히 쓸 때 — `leavesmix2peel` 은 1900 µm 변, `leavesmix2peel2`
-> 는 450 µm 변이라 뒤엣것이 보는 면적이 1/18 이다. 48% → 29% 를 "한 번 더 벗겨서 줄었다"
-> 로 읽으면 안 된다. 캡션에 면적을 밝혀 두었고, 주장하려면 같은 면적으로 다시 잴 것.
+> peel 전후 감소를 쓸 때 — 두 맵의 면적은 같지만 **같은 잎의 같은 자리인지**는 확인되지
+> 않았다. 다른 자리라면 감소분에 자리 간 편차가 섞인다. 확인하고 캡션에 밝힐 것.
+> `leavesmix2peel2` 는 면적이 1/18 이라 같은 계열로 못 쓴다 (CSV 에는 있다).
