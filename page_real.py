@@ -995,14 +995,40 @@ class RealDataPage(QWidget):
                        facecolors="none", edgecolors=BLUE, linewidths=1.8, zorder=6)
 
     def _plot_comp(self, r):
+        """Overall composition as BARS (one per substance, its colour, % label), with
+        the apparent µM as a red line + markers on a twin axis when a calibration is
+        loaded — the Origin bar+line look, readable straight into a figure. The pie
+        never showed a small component well and gave no second axis to hang µM on."""
         ax = self.c_comp.new_ax()
         cols = self._nb_colors(r); nb = [r.comps[i] for i in r.nonbg]
         mr = self._mean_ratio(r)                          # corrected when toggle on
-        keep = [i for i in range(len(nb)) if mr[i] >= 0.01] or [int(mr.argmax())]
-        ax.pie([mr[i] for i in keep], labels=[nb[i] for i in keep],
-               colors=[cols[i] for i in keep], autopct="%1.0f%%",
-               textprops={"fontsize": 10, "color": INK})
-        ax.set_aspect("equal")
+        xs = np.arange(len(nb))
+        ax.bar(xs, mr * 100.0, width=0.62, color=cols, edgecolor="none", zorder=2)
+        for i, v in enumerate(mr):
+            ax.annotate(f"{100 * v:.0f}%", (xs[i], v * 100.0), xytext=(0, 3),
+                        textcoords="offset points", ha="center", fontsize=9, color=INK)
+        ax.set_xticks(xs); ax.set_xticklabels(nb, fontsize=9)
+        ax.set_ylabel("composition (%)", fontsize=9)
+        ax.set_ylim(0, max(100.0, float(mr.max()) * 100.0 * 1.18))
+        ax.tick_params(labelsize=8)
+        # apparent µM per substance (hit pixels, median) — red line on the right axis
+        if getattr(r, "calibrated", False) and getattr(r, "conc", None) is not None:
+            hit = self._hit(r)
+            um = np.full(len(nb), np.nan)
+            if hit.any():
+                um_all = r.conc[hit] * 1e6
+                with np.errstate(invalid="ignore"):
+                    for i in range(len(nb)):
+                        v = um_all[:, i]
+                        v = v[np.isfinite(v) & (v > 0)]
+                        um[i] = float(np.median(v)) if v.size else np.nan
+            if np.isfinite(um).any():
+                ax2 = ax.twinx()
+                ax2.plot(xs, um, color=RED, lw=1.2, marker="s", ms=4, zorder=3)
+                ax2.set_ylabel("apparent µM (median, hit px)", fontsize=9, color=RED)
+                ax2.tick_params(labelsize=8, colors=RED)
+                ax2.spines["right"].set_color(RED)
+                ax2.set_ylim(bottom=0)
         self.c_comp.fig.tight_layout(); self.c_comp.draw_idle()
 
     def _plot_spec(self, r, i):
