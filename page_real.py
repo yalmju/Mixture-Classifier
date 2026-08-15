@@ -369,6 +369,7 @@ class RealDataPage(QWidget):
         self.c_maps.mpl_connect("button_press_event", self._on_click)
         self.c_abund.mpl_connect("button_press_event", self._on_click)
         self.c_pie.mpl_connect("button_press_event", self._on_click)
+        self.c_conc.mpl_connect("button_press_event", self._on_click)
 
 
     # ---- small builders ----
@@ -968,6 +969,7 @@ class RealDataPage(QWidget):
 
     def _apply(self, r):
         self._res = r; self._sel = None
+        self._click_axes = []            # one reset per run — every plot re-registers
         self.pbar.hide()
         self.btn.setEnabled(True); self.btn.setText("Unmix")
         ov = getattr(self, "_bl_override", None)
@@ -1026,10 +1028,9 @@ class RealDataPage(QWidget):
         from matplotlib.colors import LinearSegmentedColormap
         if not self.c_maps.isVisible():           # folded — skip the work entirely
             self._fold_dirty["maps"] = True
-            self._click_axes = []
             return
         self._fold_dirty["maps"] = False
-        self.c_maps.fig.clear(); self._click_axes = []
+        self.c_maps.fig.clear()
         nbcols = self._nb_colors(r)
         nb = [r.comps[j] for j in r.nonbg]
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
@@ -1199,6 +1200,7 @@ class RealDataPage(QWidget):
             cb.ax.tick_params(labelsize=8, colors="black")       # same 0..vmax on every panel
             ax.set_title(f"{nm} (µM; scale capped at hit-pixel P90)", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
+            self._click_axes.append(ax)
         # ---- summary bars: the maps show WHERE, this shows HOW MUCH ----
         axb = self.c_conc.style(self.c_conc.fig.add_subplot(1, n, n))
         med = np.full(len(nb), np.nan); q1 = med.copy(); q3 = med.copy()
@@ -1348,7 +1350,7 @@ class RealDataPage(QWidget):
                                edgecolors=BLUE, linewidths=1.8, zorder=7))
             except Exception:
                 pass
-        for c in (self.c_maps, self.c_abund, self.c_pie):
+        for c in (self.c_maps, self.c_abund, self.c_pie, self.c_conc):
             c.draw_idle()
 
     def _mark_sel(self, ax, r):
