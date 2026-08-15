@@ -254,6 +254,7 @@ class RealDataPage(QWidget):
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
         lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(460)
+        self._add_fold(lay_maps, self.c_maps, "band maps", opened=True, key="maps")
         body.addWidget(card_maps)
 
         # 1b) unmixed abundance maps — NNLS runs FIRST in every path (the gate), so
@@ -264,6 +265,7 @@ class RealDataPage(QWidget):
             "Unmixed maps — per-substance abundance from stage-1 unmixing "
             "(NNLS/MCR; model runs show its per-pixel probabilities)")
         lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(460)
+        self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=False, key="abund")
         body.addWidget(card_ab)
 
         # 2) per-pixel composition pie | selected-pixel spectrum, side by side — right
@@ -315,6 +317,7 @@ class RealDataPage(QWidget):
                       (self.c_spec, "Click a pixel in a map to see its spectrum")]:
             cv.placeholder(m)
         self.c_maps.mpl_connect("button_press_event", self._on_click)
+        self.c_abund.mpl_connect("button_press_event", self._on_click)
         self.c_pie.mpl_connect("button_press_event", self._on_click)
 
 
@@ -407,6 +410,27 @@ class RealDataPage(QWidget):
             out[nm] = float(wl[0]) if wl else float(
                 r.wn[int(np.argmax(r.templates[r.nonbg][i]))])
         return out
+
+    def _add_fold(self, lay, canvas, name, opened, key):
+        """Fold a heavy card: the button sits under the title, the canvas hides, and
+        while hidden the card is NOT rendered at all — scrolling gets shorter and a
+        run gets faster. Reopening replots if a result arrived meanwhile."""
+        if not hasattr(self, "_fold_dirty"):
+            self._fold_dirty = {}
+        self._fold_dirty[key] = False
+        btn = QPushButton(("▾ " if opened else "▸ ") + name)
+        btn.setObjectName("ghost"); btn.setCheckable(True); btn.setChecked(opened)
+        btn.setStyleSheet("text-align:left; padding:2px 6px;")
+        canvas.setVisible(opened)
+
+        def _tgl(on, c=canvas, k=key, b_=btn, nm=name):
+            c.setVisible(on)
+            b_.setText(("▾ " if on else "▸ ") + nm)
+            if on and self._fold_dirty.get(k) and self._res is not None:
+                (self._plot_maps if k == "maps" else self._plot_abund)(self._res)
+
+        btn.toggled.connect(_tgl)
+        lay.insertWidget(1, btn)                  # right under the card title
 
     def _band_of(self, r, name):
         """Chosen band for a substance, defaulting to its VIP band on first sight."""
@@ -912,6 +936,11 @@ class RealDataPage(QWidget):
         the SAME stretch as the merge — their colour-bars carry the real intensity
         values, so nothing about the contrast is hidden."""
         from matplotlib.colors import LinearSegmentedColormap
+        if not self.c_maps.isVisible():           # folded — skip the work entirely
+            self._fold_dirty["maps"] = True
+            self._click_axes = []
+            return
+        self._fold_dirty["maps"] = False
         self.c_maps.fig.clear(); self._click_axes = []
         nbcols = self._nb_colors(r)
         nb = [r.comps[j] for j in r.nonbg]
@@ -986,6 +1015,10 @@ class RealDataPage(QWidget):
         in its colour; each single panel is that component on black→colour with a
         colour-bar. BLK/INK panels show where the gate sees non-analyte."""
         from matplotlib.colors import LinearSegmentedColormap
+        if not self.c_abund.isVisible():          # folded — skip the work entirely
+            self._fold_dirty["abund"] = True
+            return
+        self._fold_dirty["abund"] = False
         self.c_abund.fig.clear()
         if getattr(r, "A", None) is None:                  # some result types carry no A
             self.c_abund.draw_idle(); return
@@ -1012,10 +1045,11 @@ class RealDataPage(QWidget):
                       else float(np.quantile(r.A[:, k], 0.99)) or 1.0)
                 grid = np.zeros((ny, nx)); grid[rows, cc] = r.A[:, k]
                 cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", allcols[k]])
-                im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                               interpolation="nearest", cmap=cmap, vmin=0.0, vmax=sc)
-                cb = self.c_abund.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
-                cb.ax.tick_params(labelsize=7, colors="black")
+                # no colour-bars — they size off the full axes box and shrink the
+                # map beside the merge (same reason the band card dropped them);
+                # the numbers live in per_pixel.csv (A_ columns)
+                ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                          interpolation="nearest", cmap=cmap, vmin=0.0, vmax=sc)
                 title = title + (" (bkg)" if r.bg_mask[k] else "")
             ax.set_title(title, fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
@@ -1157,7 +1191,9 @@ class RealDataPage(QWidget):
         if segs:
             ax.add_collection(LineCollection(segs, colors=self.PIE_GRID,
                                              linewidths=1.6, zorder=6))
+        self._sel_art = None                     # fig was cleared — old ring is gone
         self._mark_sel(ax, r)
+        self._pie_ax = ax                        # clicks re-ring THIS axes cheaply
         ax.set_xlim(x.min() - sx, x.max() + sx)
         ax.set_ylim(*((y.max() + sy, y.min() - sy) if self._flip()
                       else (y.min() - sy, y.max() + sy)))
@@ -1172,45 +1208,29 @@ class RealDataPage(QWidget):
         self.c_pie.fig.tight_layout(); self.c_pie.draw_idle()
 
     def _mark_sel(self, ax, r):
+        """Draw (or move) the selection ring as ONE artist — a click must not
+        rebuild 2400 wedges; that is what made clicking feel dead on big maps."""
+        art = getattr(self, "_sel_art", None)
+        if art is not None:
+            try:
+                art.remove()
+            except Exception:
+                pass
+            self._sel_art = None
         if self._sel is not None:
-            ax.scatter([r.coords[self._sel, 0]], [r.coords[self._sel, 1]], s=120,
-                       facecolors="none", edgecolors=BLUE, linewidths=1.8, zorder=6)
+            self._sel_art = ax.scatter(
+                [r.coords[self._sel, 0]], [r.coords[self._sel, 1]], s=120,
+                facecolors="none", edgecolors=BLUE, linewidths=1.8, zorder=7)
 
     def _plot_comp(self, r):
-        """Overall composition as BARS (one per substance, its colour, % label), with
-        the apparent µM as a red line + markers on a twin axis when a calibration is
-        loaded — the Origin bar+line look, readable straight into a figure. The pie
-        never showed a small component well and gave no second axis to hang µM on."""
         ax = self.c_comp.new_ax()
         cols = self._nb_colors(r); nb = [r.comps[i] for i in r.nonbg]
         mr = self._mean_ratio(r)                          # corrected when toggle on
-        xs = np.arange(len(nb))
-        ax.bar(xs, mr * 100.0, width=0.62, color=cols, edgecolor="none", zorder=2)
-        for i, v in enumerate(mr):
-            ax.annotate(f"{100 * v:.0f}%", (xs[i], v * 100.0), xytext=(0, 3),
-                        textcoords="offset points", ha="center", fontsize=9, color=INK)
-        ax.set_xticks(xs); ax.set_xticklabels(nb, fontsize=9)
-        ax.set_ylabel("composition (%)", fontsize=9)
-        ax.set_ylim(0, max(100.0, float(mr.max()) * 100.0 * 1.18))
-        ax.tick_params(labelsize=8)
-        # apparent µM per substance (hit pixels, median) — red line on the right axis
-        if getattr(r, "calibrated", False) and getattr(r, "conc", None) is not None:
-            hit = self._hit(r)
-            um = np.full(len(nb), np.nan)
-            if hit.any():
-                um_all = r.conc[hit] * 1e6
-                with np.errstate(invalid="ignore"):
-                    for i in range(len(nb)):
-                        v = um_all[:, i]
-                        v = v[np.isfinite(v) & (v > 0)]
-                        um[i] = float(np.median(v)) if v.size else np.nan
-            if np.isfinite(um).any():
-                ax2 = ax.twinx()
-                ax2.plot(xs, um, color=RED, lw=1.2, marker="s", ms=4, zorder=3)
-                ax2.set_ylabel("apparent µM (median, hit px)", fontsize=9, color=RED)
-                ax2.tick_params(labelsize=8, colors=RED)
-                ax2.spines["right"].set_color(RED)
-                ax2.set_ylim(bottom=0)
+        keep = [i for i in range(len(nb)) if mr[i] >= 0.01] or [int(mr.argmax())]
+        ax.pie([mr[i] for i in keep], labels=[nb[i] for i in keep],
+               colors=[cols[i] for i in keep], autopct="%1.0f%%",
+               textprops={"fontsize": 10, "color": INK})
+        ax.set_aspect("equal")
         self.c_comp.fig.tight_layout(); self.c_comp.draw_idle()
 
     def _plot_spec(self, r, i):
@@ -1264,7 +1284,10 @@ class RealDataPage(QWidget):
              + (r.coords[:, 1] - event.ydata) ** 2)
         self._sel = int(d.argmin())
         self._plot_spec(r, self._sel)
-        self._plot_pies(r)                              # redraw the pie's highlight ring
+        pax = getattr(self, "_pie_ax", None)     # move the ring only — never rebuild
+        if pax is not None:
+            self._mark_sel(pax, r)
+            self.c_pie.draw_idle()
 
     # ---- export ----
     def _export(self):
