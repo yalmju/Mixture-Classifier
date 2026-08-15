@@ -88,7 +88,17 @@ class RealDataPage(QWidget):
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
 
-        ctl = QHBoxLayout(); ctl.setSpacing(8)
+        # ── left control rail | right results ─────────────────────────────
+        # Everything you LOAD or SET lives in a fixed 300px rail on the left;
+        # the right side is nothing but results. One screen, no hunting.
+        outer = QHBoxLayout(); outer.setSpacing(14)
+        root.addLayout(outer, 1)
+        leftw = QWidget(); leftw.setFixedWidth(300)
+        left = QVBoxLayout(leftw)
+        left.setContentsMargins(0, 0, 0, 0); left.setSpacing(10)
+        outer.addWidget(leftw)
+
+        ctl = QVBoxLayout(); ctl.setSpacing(6)
         test_b = QPushButton("Load test map…"); test_b.setObjectName("ghost")
         test_b.clicked.connect(self._browse_test)
         self.test_lbl = QLabel("no test map"); self.test_lbl.setObjectName("field")
@@ -181,13 +191,19 @@ class RealDataPage(QWidget):
         self.pbar = QProgressBar(); self.pbar.setRange(0, 0)   # indeterminate = busy
         self.pbar.setFixedWidth(120); self.pbar.setFixedHeight(8)
         self.pbar.setTextVisible(False); self.pbar.hide()
-        # main row: only what you touch on every run
-        ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x)
+        # rail top: what you touch on every run
+        _r1 = QHBoxLayout(); _r1.setSpacing(6)
+        _r1.addWidget(test_b); _r1.addWidget(self.test_lbl, 1)
+        _r1.addWidget(self.test_x)
+        ctl.addLayout(_r1)
         ctl.addLayout(self.cmb_method)
+        self.dlm_lbl.setWordWrap(True)
         ctl.addWidget(self.dlm_lbl)
-        ctl.addStretch(1)
-        ctl.addWidget(exp_b); ctl.addWidget(self.pbar); ctl.addWidget(self.btn)
-        root.addLayout(ctl)
+        _r2 = QHBoxLayout(); _r2.setSpacing(6)
+        _r2.addWidget(self.btn, 1); _r2.addWidget(exp_b)
+        ctl.addLayout(_r2)
+        ctl.addWidget(self.pbar)
+        left.addLayout(ctl)
 
         # everything else folds away — sources (models / calibration / correction) and the
         # per-pixel thresholds are set once and then just sit there cluttering the header
@@ -195,7 +211,7 @@ class RealDataPage(QWidget):
         self.opt_tgl.setCheckable(True); self.opt_tgl.setChecked(False)
         self.opt_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
         self.opt_tgl.toggled.connect(self._toggle_opts)
-        root.addWidget(self.opt_tgl)
+        left.addWidget(self.opt_tgl)
 
         self.optbox = QWidget(); obl = QVBoxLayout(self.optbox)
         obl.setContentsMargins(0, 0, 0, 0); obl.setSpacing(8)
@@ -204,42 +220,44 @@ class RealDataPage(QWidget):
             lbl.setStyleSheet("font-weight:600; margin-top:2px;")
             return lbl
 
-        obl.addWidget(_group("sources — set once, they stay loaded"))
-        srow = QHBoxLayout(); srow.setSpacing(8)
-        srow.addWidget(model_b); srow.addWidget(self.model_lbl)
-        srow.addWidget(dlm_b)
-        srow.addWidget(bg_b); srow.addWidget(self.bg_lbl); srow.addWidget(self.bg_x)
-        srow.addWidget(cal_b); srow.addWidget(self.cal_lbl); srow.addWidget(self.cal_x)
-        srow.addWidget(corr_b); srow.addLayout(corrcol)
-        srow.addStretch(1)
-        obl.addLayout(srow)
-        obl.addWidget(_group("pixel gate & view — what counts as a hit, how it is drawn"))
-        trow = QHBoxLayout(); trow.setSpacing(10)
-        trow.addLayout(hitcol); trow.addLayout(self.thr); trow.addLayout(relcol)
-        trow.addLayout(flipcol)
-        trow.addStretch(1)
-        obl.addLayout(trow)
-        root.addWidget(self.optbox)
+        obl.addWidget(_group("sources"))
+        for _lbl in (self.model_lbl, self.bg_lbl, self.cal_lbl):
+            _lbl.setWordWrap(True)
+        obl.addWidget(model_b); obl.addWidget(self.model_lbl)
+        obl.addWidget(dlm_b)
+        _bgrow = QHBoxLayout(); _bgrow.setSpacing(4)
+        _bgrow.addWidget(bg_b, 1); _bgrow.addWidget(self.bg_x)
+        obl.addLayout(_bgrow); obl.addWidget(self.bg_lbl)
+        _calrow = QHBoxLayout(); _calrow.setSpacing(4)
+        _calrow.addWidget(cal_b, 1); _calrow.addWidget(self.cal_x)
+        obl.addLayout(_calrow); obl.addWidget(self.cal_lbl)
+        obl.addWidget(corr_b); obl.addLayout(corrcol)
+        obl.addWidget(_group("pixel gate & view"))
+        obl.addLayout(hitcol); obl.addLayout(self.thr); obl.addLayout(relcol)
+        obl.addLayout(flipcol)
+        left.addWidget(self.optbox)
         self._toggle_opts(False)
         self.cmb_method.itemAt(1).widget().currentIndexChanged.connect(
             lambda _=0: self._sync_controls())
         self._sync_controls()
 
         self.status = QLabel(""); self.status.setObjectName("sub")
-        root.addWidget(self.status)
+        self.status.setWordWrap(True)
+        left.addWidget(self.status)
 
-        kpis = QHBoxLayout(); kpis.setSpacing(12)
+        kpis = QGridLayout(); kpis.setSpacing(8)
         self.k_dom = Kpi("dominant"); self.k_n = Kpi("substances")
-        self.k_hit = Kpi("hit % (not background)"); self.k_px = Kpi("pixels")
-        for k in (self.k_dom, self.k_n, self.k_hit, self.k_px):
-            kpis.addWidget(k)
-        root.addLayout(kpis)
+        self.k_hit = Kpi("hit %"); self.k_px = Kpi("pixels")
+        kpis.addWidget(self.k_dom, 0, 0); kpis.addWidget(self.k_n, 0, 1)
+        kpis.addWidget(self.k_hit, 1, 0); kpis.addWidget(self.k_px, 1, 1)
+        left.addLayout(kpis)
 
         # per-substance colour swatches (click to recolour), filled after a result
         self.swatches = QHBoxLayout(); self.swatches.setSpacing(6)
         self.swatches.addWidget(self._mk_lbl("colours:"))
         self.swatches.addStretch(1)
-        root.addLayout(self.swatches)
+        left.addLayout(self.swatches)
+        left.addStretch(1)
 
         # ---------- stacked result sections (scrollable) ----------
         body = QVBoxLayout(); body.setSpacing(12)
@@ -320,7 +338,7 @@ class RealDataPage(QWidget):
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(bodyw)
         scroll.setStyleSheet("QScrollArea{background:transparent;}")
-        root.addWidget(scroll, 1)
+        outer.addWidget(scroll, 1)
 
         for cv, m in [(self.c_maps, "Load a test map, then Unmix"),
                       (self.c_pie, "Composition appears here"),
