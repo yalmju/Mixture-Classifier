@@ -490,11 +490,17 @@ class RealDataPage(QWidget):
 
             esp.valueChanged.connect(_moved)
             self.bandrow.addWidget(esp)
-        plus = QPushButton("+"); plus.setObjectName("ghost"); plus.setFixedWidth(28)
+        # plain buttons, fixed square, explicit padding — the ghost style's padding
+        # clipped the +/− glyphs into blank squares at 28px ("지우기안된다")
+        _pm_css = ("QPushButton{min-width:30px; max-width:30px; padding:1px 0; "
+                   "font-size:14px; font-weight:600;}")
+        plus = QPushButton("+"); plus.setObjectName("ghost")
+        plus.setStyleSheet(_pm_css)
         plus.setToolTip("add a band panel at a wavenumber you type — e.g. a leaf or "
                         "substrate band, to see what a region that should be empty "
                         "actually is")
-        minus = QPushButton("−"); minus.setObjectName("ghost"); minus.setFixedWidth(28)
+        minus = QPushButton("-"); minus.setObjectName("ghost")
+        minus.setStyleSheet(_pm_css)
         minus.setEnabled(bool(self._extra_bands))
         minus.setToolTip("remove the last added band panel")
 
@@ -513,7 +519,8 @@ class RealDataPage(QWidget):
                 if self._res is not None:
                     self._plot_maps(self._res)
 
-        plus.clicked.connect(_plus); minus.clicked.connect(_minus)
+        plus.clicked.connect(lambda _=False: _plus())
+        minus.clicked.connect(lambda _=False: _minus())
         self.bandrow.addWidget(plus); self.bandrow.addWidget(minus)
         self.bandrow.addStretch(1)
 
