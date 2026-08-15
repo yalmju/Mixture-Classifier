@@ -281,7 +281,7 @@ class RealDataPage(QWidget):
             "or from a loaded calibration when one is given")
         lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(460)
         ccard, clay = _card("Composition (overall)")
-        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(300)
+        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(460)
         crow = QHBoxLayout(); crow.setSpacing(12)
         crow.addWidget(self.card_conc, 3); crow.addWidget(ccard, 2)
         crow_w = QWidget(); crow_w.setLayout(crow); body.addWidget(crow_w)
