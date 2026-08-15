@@ -1022,6 +1022,7 @@ class RealDataPage(QWidget):
             return
         self._fold_dirty["maps"] = False
         self.c_maps.fig.clear()
+        self._exp_maps = []            # (label, ax, cb_ax) for one-file-per-panel export
         nbcols = self._nb_colors(r)
         nb = [r.comps[j] for j in r.nonbg]
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
@@ -1063,6 +1064,7 @@ class RealDataPage(QWidget):
         ax.set_title("merged (R/G/B)", fontsize=9)
         ax.set_xticks([]); ax.set_yticks([])
         # no legend under the merge — the per-panel titles already carry name + band
+        self._exp_maps.append(("band_merged", ax, None))
         self._click_axes.append(ax)
 
         # ---- one panel per substance, its own band ----
@@ -1086,6 +1088,7 @@ class RealDataPage(QWidget):
             cb = self.c_maps.fig.colorbar(_im, ax=ax, orientation="horizontal",
                                           fraction=0.05, pad=0.05)
             cb.ax.tick_params(labelsize=7, colors="black")
+            self._exp_maps.append((f"band_{nm}", ax, cb.ax))
             self._click_axes.append(ax)
         for ei, wl in enumerate(extras):                   # user-added bands, own hue
             v = ex_chans[ei]
@@ -1101,6 +1104,7 @@ class RealDataPage(QWidget):
             cb = self.c_maps.fig.colorbar(_im, ax=ax, orientation="horizontal",
                                           fraction=0.05, pad=0.05)
             cb.ax.tick_params(labelsize=7, colors="black")
+            self._exp_maps.append((f"band_extra_{wl:.0f}", ax, cb.ax))
             self._click_axes.append(ax)
         self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
 
@@ -1116,6 +1120,7 @@ class RealDataPage(QWidget):
             return
         self._fold_dirty["abund"] = False
         self.c_abund.fig.clear()
+        self._exp_abund = []
         if getattr(r, "A", None) is None:                  # some result types carry no A
             self.c_abund.draw_idle(); return
         nbcols = self._nb_colors(r)
@@ -1138,6 +1143,7 @@ class RealDataPage(QWidget):
         n = len(panels)
         for idx, (title, k) in enumerate(panels):
             ax = self.c_abund.style(self.c_abund.fig.add_subplot(1, n, idx + 1))
+            cb = None
             if k is None:
                 cols = np.array([to_rgb(c) for c in nbcols])
                 _nrm = np.clip(Anb / mscale, 0.0, 1.0)
@@ -1163,6 +1169,8 @@ class RealDataPage(QWidget):
                 title = title + (" (bkg)" if r.bg_mask[k] else "")
             ax.set_title(title, fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
+            self._exp_abund.append((f"abund_{title.split(' ')[0]}", ax,
+                                    cb.ax if cb is not None else None))
             self._click_axes.append(ax)
         self.c_abund.fig.tight_layout(); self.c_abund.draw_idle()
 
@@ -1174,6 +1182,7 @@ class RealDataPage(QWidget):
             return
         self.card_conc.setVisible(True)
         self.c_conc.fig.clear()
+        self._exp_conc = []
         nb = [r.comps[i] for i in r.nonbg]; nbcols = self._nb_colors(r)
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
@@ -1198,6 +1207,7 @@ class RealDataPage(QWidget):
                            interpolation="nearest", cmap=cmap, vmin=0.0, vmax=vmax)
             cb = self.c_conc.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, shrink=0.48, aspect=14)
             cb.ax.tick_params(labelsize=8, colors="black")       # same 0..vmax on every panel
+            self._exp_conc.append((f"uM_{nm}", ax, cb.ax))
             ax.set_title(f"{nm} (µM; scale capped at hit-pixel P90)", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
@@ -1245,6 +1255,7 @@ class RealDataPage(QWidget):
                        + (f" · {vol:g} µL" if vol > 0 else ""), fontsize=8)
         axb.tick_params(labelsize=8)
         axb.set_ylim(bottom=0)
+        self._exp_conc.append(("uM_summary_bars", axb, None))
         self.c_conc.fig.tight_layout(); self.c_conc.draw_idle()
 
     # Final pie-map style (settled with the 260812 trio map): pure black ground,
@@ -1318,6 +1329,7 @@ class RealDataPage(QWidget):
                                              linewidths=1.6, zorder=6))
         self._sel_arts = []                      # figs were cleared — old rings gone
         self._pie_ax = ax
+        self._exp_pie = [("composition_pies", ax, None)]
         ax.set_xlim(x.min() - sx, x.max() + sx)
         ax.set_ylim(*((y.max() + sy, y.min() - sy) if self._flip()
                       else (y.min() - sy, y.max() + sy)))
@@ -1480,10 +1492,38 @@ class RealDataPage(QWidget):
         if getattr(r, "calibrated", False) and r.conc is not None:
             figs.append(("real_concentration_maps", self.c_conc))
         n = _save_figs(figs, d)
+        # one file PER PANEL as well — figures are for the screen, panels are what
+        # actually lands in a slide. Each crop includes its own title and ramp.
+        import matplotlib.transforms as _mt
+        pdir = os.path.join(d, "panels"); os.makedirs(pdir, exist_ok=True)
+        np_ = 0
+        groups = [(self.c_maps, getattr(self, "_exp_maps", [])),
+                  (self.c_abund, getattr(self, "_exp_abund", [])),
+                  (self.c_pie, getattr(self, "_exp_pie", [])),
+                  (self.c_conc, getattr(self, "_exp_conc", []))]
+        for cv, entries in groups:
+            if not entries or not cv.isVisible():
+                continue
+            cv.draw()                                    # renderer must be current
+            ren = cv.get_renderer() if hasattr(cv, "get_renderer") else None
+            for label, ax, cbax in entries:
+                try:
+                    bb = ax.get_tightbbox(ren)
+                    if cbax is not None:
+                        bb = _mt.Bbox.union([bb, cbax.get_tightbbox(ren)])
+                    bb = bb.transformed(cv.fig.dpi_scale_trans.inverted()).padded(0.05)
+                    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_"
+                                   for ch in label)
+                    cv.fig.savefig(os.path.join(pdir, f"{safe}.png"),
+                                   dpi=300, bbox_inches=bb, transparent=True)
+                    np_ += 1
+                except Exception:
+                    pass                                 # one bad crop must not kill export
         if _sel is not None:
             self._sel = _sel; self._plot_pies(r)         # put the highlight back
         self._export_readme(d, r, nb, [f[0] for f in figs])
-        self.status.setText(f"exported README + 2 CSV + {n} PNG → {os.path.basename(d)}")
+        self.status.setText(f"exported README + 2 CSV + {n} PNG + {np_} panel PNG "
+                            f"→ {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _export_readme(self, d, r, nb, fig_names):
