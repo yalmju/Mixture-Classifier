@@ -66,7 +66,7 @@ class RealDataPage(QWidget):
         self._bands = {}            # per-substance mapped wavenumber {name: cm⁻¹}
         self._band_spins = {}
         self._extra_bands = []      # user-added band panels (cm⁻¹); + adds, − removes
-        self._scale_txt = {"maps": "", "abund": ""}   # manual display scale, '' = auto
+        self._scale_ui = {}         # key -> (manual chk, min spin, max spin)
         COLOR_BUS.changed.connect(self._on_colors_changed)   # top-bar picker sync
         self.data_dir = PEST_DEFAULT
         self.test = None
@@ -273,6 +273,7 @@ class RealDataPage(QWidget):
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
         lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(460)
+        lay_maps.addLayout(self._scale_row("maps", 1500.0))
         self._add_fold(lay_maps, self.c_maps, "band maps", opened=True, key="maps")
 
         # 1b) unmixed abundance maps — NNLS runs FIRST in every path (the gate), so
@@ -284,24 +285,8 @@ class RealDataPage(QWidget):
             "NNLS/MCR runs show abundances; a composition model shows its per-pixel "
             "probabilities. ALL panels share ONE scale (0–1 for probabilities, "
             "0–P99 for abundances) so brightness compares across components")
-        _abrow = QHBoxLayout(); _abrow.setSpacing(6)
-        _abl = QLabel("scale"); _abl.setObjectName("field")
-        self.abund_scale_edit = QLineEdit(); self.abund_scale_edit.setFixedWidth(84)
-        self.abund_scale_edit.setPlaceholderText("auto | 0-1")
-        self.abund_scale_edit.setToolTip("display range for every abundance panel - "
-                                         "type lo-hi, blank = auto (0-1 for "
-                                         "probabilities, 0-P99 for abundances)")
-
-        def _absc():
-            self._scale_txt["abund"] = self.abund_scale_edit.text()
-            if self._res is not None:
-                self._plot_abund(self._res)
-
-        self.abund_scale_edit.editingFinished.connect(_absc)
-        _abrow.addWidget(_abl); _abrow.addWidget(self.abund_scale_edit)
-        _abrow.addStretch(1)
-        lay_ab.addLayout(_abrow)
         lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(460)
+        lay_ab.addLayout(self._scale_row("abund", 1.0))
         self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=True, key="abund")
         # band | abundance half-and-half on one row — raw evidence beside the
         # stage-1 split, no scrolling between them
@@ -463,21 +448,41 @@ class RealDataPage(QWidget):
         return out
 
     def _parse_scale(self, key):
-        """'0-1' / '0,1500' typed by the user -> (lo, hi); blank or nonsense = None."""
-        t = (self._scale_txt.get(key) or "").strip().replace(" ", "")
-        if not t:
+        """(lo, hi) from the card's manual min/max when ticked; else None = auto."""
+        ui = self._scale_ui.get(key)
+        if not ui:
             return None
-        for sep in ("-", ","):
-            if sep in t[1:]:
-                head, tail = t[:1], t[1:]
-                pa, pb = tail.split(sep, 1)
-                try:
-                    lo, hi = float(head + pa), float(pb)
-                    if hi > lo:
-                        return (lo, hi)
-                except ValueError:
-                    pass
-        return None
+        chk, mn, mx = ui
+        if not chk.isChecked():
+            return None
+        lo, hi = float(mn.value()), float(mx.value())
+        return (lo, hi) if hi > lo else None
+
+    def _scale_row(self, key, hi_default):
+        """manual min/max for EVERY panel in the card. The ramps themselves sit
+        under each panel as real horizontal colour-bars in that panel's hue."""
+        row = QHBoxLayout(); row.setSpacing(6)
+        chk = QCheckBox("manual scale")
+        chk.setToolTip("pin every panel in this card to this min–max; "
+                       "unticked = auto")
+        mn = QDoubleSpinBox(); mn.setDecimals(3); mn.setRange(-1e9, 1e9)
+        mn.setValue(0.0); mn.setFixedWidth(92); mn.setEnabled(False)
+        mx = QDoubleSpinBox(); mx.setDecimals(3); mx.setRange(-1e9, 1e9)
+        mx.setValue(hi_default); mx.setFixedWidth(92); mx.setEnabled(False)
+        self._scale_ui[key] = (chk, mn, mx)
+
+        def _upd(_=None):
+            mn.setEnabled(chk.isChecked()); mx.setEnabled(chk.isChecked())
+            if self._res is not None:
+                (self._plot_maps if key == "maps" else self._plot_abund)(self._res)
+
+        chk.toggled.connect(_upd)
+        mn.editingFinished.connect(_upd); mx.editingFinished.connect(_upd)
+        row.addWidget(chk)
+        row.addWidget(QLabel("min")); row.addWidget(mn)
+        row.addWidget(QLabel("max")); row.addWidget(mx)
+        row.addStretch(1)
+        return row
 
     def _add_fold(self, lay, canvas, name, opened, key):
         """Fold a heavy card: the button sits under the title, the canvas hides, and
@@ -588,20 +593,6 @@ class RealDataPage(QWidget):
         plus.clicked.connect(lambda _=False: _plus())
         minus.clicked.connect(lambda _=False: _minus())
         self.bandrow.addWidget(plus); self.bandrow.addWidget(minus)
-        self.bandrow.addWidget(self._mk_lbl("scale"))
-        se = QLineEdit(); se.setFixedWidth(84)
-        se.setPlaceholderText("auto | 0-1500")
-        se.setText(self._scale_txt.get("maps", ""))
-        se.setToolTip("display range for EVERY band panel (merge included) - "
-                      "type lo-hi, blank = auto (each channel's P1-P99)")
-
-        def _sc():
-            self._scale_txt["maps"] = se.text()
-            if self._res is not None:
-                self._plot_maps(self._res)
-
-        se.editingFinished.connect(_sc)
-        self.bandrow.addWidget(se)
         self.bandrow.addStretch(1)
 
     def _on_band(self, name, value):
@@ -1083,15 +1074,18 @@ class RealDataPage(QWidget):
             ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, n, i + 2))
             grid = np.zeros((ny, nx)); grid[rows, cc] = chans[i]
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", nbcols[i]])
-            ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                      interpolation="nearest", cmap=cmap,
-                      vmin=lims[i][0], vmax=lims[i][1])
+            _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                            interpolation="nearest", cmap=cmap,
+                            vmin=lims[i][0], vmax=lims[i][1])
             # mathtext, not "cm⁻¹" — Arial has no superscript-minus glyph, so the
             # literal character renders as a box in the exported PNG
             ax.set_title(f"{nm} @ {bands[i]:.0f} cm$^{{-1}}$", fontsize=9)
-            # no selection ring on the band maps — it clutters them; the pie map
-            # (beside the spectrum) carries the highlight instead
             ax.set_xticks([]); ax.set_yticks([])
+            # ramp UNDER the panel — horizontal bars share the panel's width, so
+            # (unlike the old vertical ones) they cannot outgrow the map
+            cb = self.c_maps.fig.colorbar(_im, ax=ax, orientation="horizontal",
+                                          fraction=0.05, pad=0.05)
+            cb.ax.tick_params(labelsize=7, colors="black")
             self._click_axes.append(ax)
         for ei, wl in enumerate(extras):                   # user-added bands, own hue
             v = ex_chans[ei]
@@ -1100,10 +1094,13 @@ class RealDataPage(QWidget):
                 self.c_maps.fig.add_subplot(1, n, len(nb) + 2 + ei))
             grid = np.zeros((ny, nx)); grid[rows, cc] = v
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", ex_cols[ei]])
-            ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                      interpolation="nearest", cmap=cmap, vmin=va, vmax=vb)
+            _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                            interpolation="nearest", cmap=cmap, vmin=va, vmax=vb)
             ax.set_title(f"@ {wl:.0f} cm$^{{-1}}$", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
+            cb = self.c_maps.fig.colorbar(_im, ax=ax, orientation="horizontal",
+                                          fraction=0.05, pad=0.05)
+            cb.ax.tick_params(labelsize=7, colors="black")
             self._click_axes.append(ax)
         self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
 
@@ -1158,8 +1155,11 @@ class RealDataPage(QWidget):
                 # no colour-bars — they size off the full axes box and shrink the
                 # map beside the merge (same reason the band card dropped them);
                 # the numbers live in per_pixel.csv (A_ columns)
-                ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                          interpolation="nearest", cmap=cmap, vmin=vlo, vmax=sc)
+                _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                                interpolation="nearest", cmap=cmap, vmin=vlo, vmax=sc)
+                cb = self.c_abund.fig.colorbar(_im, ax=ax, orientation="horizontal",
+                                               fraction=0.05, pad=0.05)
+                cb.ax.tick_params(labelsize=7, colors="black")
                 title = title + (" (bkg)" if r.bg_mask[k] else "")
             ax.set_title(title, fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
