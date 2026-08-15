@@ -279,6 +279,19 @@ class RealDataPage(QWidget):
         self.card_conc, lay_conc = _card(
             "Apparent SERS-equivalent concentration (µM) — from the composition model, "
             "or from a loaded calibration when one is given")
+        vrow = QHBoxLayout(); vrow.setSpacing(6)
+        _vl = QLabel("dispensed volume (µL) — 0 = off"); _vl.setObjectName("field")
+        self.vol_spin = QDoubleSpinBox(); self.vol_spin.setDecimals(1)
+        self.vol_spin.setRange(0.0, 100.0); self.vol_spin.setSingleStep(0.5)
+        self.vol_spin.setValue(0.0); self.vol_spin.setFixedWidth(84)
+        self.vol_spin.setToolTip(
+            "volume of the droplet/ink you dispensed. When set, the summary bars "
+            "also show the apparent amount = median µM × volume (pmol). APPARENT — "
+            "it reads the SERS-equivalent concentration, not a mass balance.")
+        self.vol_spin.valueChanged.connect(
+            lambda _=0: self._plot_conc(self._res) if self._res is not None else None)
+        vrow.addWidget(_vl); vrow.addWidget(self.vol_spin); vrow.addStretch(1)
+        lay_conc.addLayout(vrow)
         lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(460)
         ccard, clay = _card("Composition (overall)")
         clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(460)
@@ -984,7 +997,7 @@ class RealDataPage(QWidget):
         nb = [r.comps[i] for i in r.nonbg]; nbcols = self._nb_colors(r)
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
-        n = len(nb) or 1
+        n = (len(nb) or 1) + 1                             # + summary bars at the end
         hit = self._hit(r)                                 # exclude saturated/low-R² px
         # SHARED µM colour axis across substances, so the maps are directly comparable
         um_all = r.conc * 1e6
@@ -1007,6 +1020,36 @@ class RealDataPage(QWidget):
             cb.ax.tick_params(labelsize=8, colors="black")       # same 0..vmax on every panel
             ax.set_title(f"{nm} (µM; scale capped at hit-pixel P90)", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
+        # ---- summary bars: the maps show WHERE, this shows HOW MUCH ----
+        axb = self.c_conc.style(self.c_conc.fig.add_subplot(1, n, n))
+        med = np.full(len(nb), np.nan); q1 = med.copy(); q3 = med.copy()
+        for i in range(len(nb)):
+            v = um_all[hit, i] if hit.any() else um_all[:, i]
+            v = v[np.isfinite(v) & (v > 0)]
+            if v.size:
+                med[i], q1[i], q3[i] = (float(np.median(v)),
+                                        float(np.quantile(v, 0.25)),
+                                        float(np.quantile(v, 0.75)))
+        xs = np.arange(len(nb))
+        ok = np.isfinite(med)
+        axb.bar(xs[ok], med[ok], width=0.6, color=[nbcols[i] for i in np.where(ok)[0]],
+                edgecolor="none", zorder=2)
+        axb.errorbar(xs[ok], med[ok],
+                     yerr=[(med - q1)[ok], (q3 - med)[ok]],
+                     fmt="none", ecolor=INK, elinewidth=1.0, capsize=3, zorder=3)
+        vol = float(self.vol_spin.value()) if hasattr(self, "vol_spin") else 0.0
+        for i in np.where(ok)[0]:
+            lab = f"{med[i]:.1f}"
+            if vol > 0:                                    # µM × µL = pmol
+                lab += chr(10) + f"≈{med[i] * vol:.0f} pmol"
+            axb.annotate(lab, (xs[i], q3[i]), xytext=(0, 4),
+                         textcoords="offset points", ha="center", fontsize=8,
+                         color=INK)
+        axb.set_xticks(xs); axb.set_xticklabels(nb, fontsize=8)
+        axb.set_ylabel("median µM (hit px, IQR)"
+                       + (f" · {vol:g} µL" if vol > 0 else ""), fontsize=8)
+        axb.tick_params(labelsize=8)
+        axb.set_ylim(bottom=0)
         self.c_conc.fig.tight_layout(); self.c_conc.draw_idle()
 
     # Final pie-map style (settled with the 260812 trio map): pure black ground,
