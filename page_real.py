@@ -17,7 +17,7 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QComboBox, QDoubleSpinBox, QSpinBox, QCheckBox, QFileDialog, QColorDialog,
-    QScrollArea, QFrame,
+    QScrollArea, QFrame, QProgressBar,
 )
 
 from ui_common import *
@@ -178,12 +178,15 @@ class RealDataPage(QWidget):
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
+        self.pbar = QProgressBar(); self.pbar.setRange(0, 0)   # indeterminate = busy
+        self.pbar.setFixedWidth(120); self.pbar.setFixedHeight(8)
+        self.pbar.setTextVisible(False); self.pbar.hide()
         # main row: only what you touch on every run
         ctl.addWidget(test_b); ctl.addWidget(self.test_lbl); ctl.addWidget(self.test_x)
         ctl.addLayout(self.cmb_method)
         ctl.addWidget(self.dlm_lbl)
         ctl.addStretch(1)
-        ctl.addWidget(exp_b); ctl.addWidget(self.btn)
+        ctl.addWidget(exp_b); ctl.addWidget(self.pbar); ctl.addWidget(self.btn)
         root.addLayout(ctl)
 
         # everything else folds away — sources (models / calibration / correction) and the
@@ -804,7 +807,11 @@ class RealDataPage(QWidget):
                                     "(or Load DL model…)")
                 self.status.setStyleSheet(f"color:{RED};"); return
         self.btn.setEnabled(False); self.btn.setText("Working…")
-        self.status.setText(""); self.status.setStyleSheet(f"color:{MUTE};")
+        self.pbar.show()
+        import time as _t
+        self._t0 = _t.time()
+        self.status.setText("● started — the bar keeps moving while the worker runs")
+        self.status.setStyleSheet(f"color:{MUTE};")
         start_worker(self, RealWorker(params, use_model=use_model),
                      done=self._apply, fail=self._error, progress=self._progress)
 
@@ -815,9 +822,13 @@ class RealDataPage(QWidget):
         self._sync_controls()                      # threshold unused in auto / model mode
 
     def _progress(self, msg):
-        self.btn.setText("Unmixing…"); self.status.setText("● " + msg)
+        import time as _t
+        el = _t.time() - getattr(self, "_t0", _t.time())
+        self.btn.setText("Unmixing…")
+        self.status.setText(f"● {msg}   ({el:.0f}s)")
 
     def _error(self, tb):
+        self.pbar.hide()
         self.btn.setEnabled(True); self.btn.setText("Unmix")
         self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
         self.status.setStyleSheet(f"color:{RED};")
@@ -825,6 +836,7 @@ class RealDataPage(QWidget):
 
     def _apply(self, r):
         self._res = r; self._sel = None
+        self.pbar.hide()
         self.btn.setEnabled(True); self.btn.setText("Unmix")
         ov = getattr(self, "_bl_override", None)
         self.status.setText(f"done — {r.method.upper()}" + ("" if ov is None else
