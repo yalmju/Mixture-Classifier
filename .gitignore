@@ -27,3 +27,7 @@ documentation/scripts/*.pkl
 documentation/scripts/*_signals*.json
 tmp/
 *.log
+
+# leaf-maps: 원본 스펙트럼과 중간 캐시는 넣지 않는다 (원본은 Google Drive)
+analysis/leaf-maps/raw/
+analysis/leaf-maps/data/*.npz
