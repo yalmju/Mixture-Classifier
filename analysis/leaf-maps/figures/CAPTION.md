@@ -5,6 +5,24 @@
 
 ---
 
+## Fig_leaf_panel
+
+**Peeled mixture series — maps and representative spectra.** (**a**) Raman maps of the
+ink-only leaf control and two peels of the mixture-treated leaves; rows are preparations
+and columns are readouts. Each panel is plotted after asymmetric-least-squares baseline
+removal (λ = 1 × 10⁵, p = 0.01). The first column is the integrated intensity of the ink
+reporter band in the cellular-silent region (2100–2180 cm⁻¹), which reports how much ink
+is probed in each pixel; the remaining columns are the marker-band intensity of each
+analyte (DQ 1179/1521/1576, TBZ 779/1011/1549, THI 556/1138/1365 cm⁻¹), averaged over
+the three bands (± 10 cm⁻¹) and divided by the ink reporter intensity of the same pixel,
+so that pixel-to-pixel differences in substrate enhancement cancel. The colour bar under
+each column applies to all three rows. Grid and mapped side length are given beside each
+row — panels drawn at the same size cover 1900 µm for the first peel and 450 µm for the
+control and the second peel. (**b**) Median spectrum of the pixels of each map,
+normalised to the integrated ink reporter band of the same map and offset vertically;
+shading spans the interquartile range of the pixels within that one preparation, and
+vertical lines mark the marker bands used in (a).
+
 ## Fig_leaf_maps
 
 **Raman maps of the peeled mixture series.** Each panel is one map, plotted after

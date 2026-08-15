@@ -287,3 +287,89 @@ fig.text(.5, .882, "Control = leaf carrying ink alone; both panels use its own p
 out = os.path.join(FIGS, "Fig_leaf_contrast.pdf")
 fig.savefig(out); fig.savefig(out.replace(".pdf", ".png"), dpi=400)
 print(out)
+
+# ==================================== Fig 4 — 슬라이드용 합본 (맵 위 · 스펙트럼 아래)
+#   행 = 시료, 열 = 판독값.  Fig_leaf_maps 를 90도 돌린 배치이고, 그 아래에 대표
+#   스펙트럼을 같은 폭으로 붙였다 — 슬라이드에 그대로 들어가는 한 장.
+#   기하는 inch 로 잡는다 — 맵 칸이 정사각이라야 열 사이가 벌어지지 않는다.
+COLS = [("ink2137", "Ink reporter\n2137 cm$^{-1}$", ramp("#2b3a4a"), "%.0f"),
+        ("DQ_over_ink", "DQ marker / ink", ramp(SER["DQ"]), "%.2f"),
+        ("TBZ_over_ink", "TBZ marker / ink", ramp(SER["TBZ"]), "%.2f"),
+        ("THI_over_ink", "THI marker / ink", ramp(SER["THI"]), "%.2f")]
+
+nr = len(SAMPLES)
+W = 7.2
+L_LAB, R_PAD = 1.30, 0.16                      # 행 라벨 자리 · 오른쪽 여백
+CELL = (W - L_LAB - R_PAD) / 4                 # 정사각 맵 칸 한 변
+T_TITLE, H_CBAR, H_GAP, H_SPEC, B_PAD = 0.68, 0.40, 0.46, 1.70, 0.52
+H = T_TITLE + CELL * nr + H_CBAR + H_GAP + H_SPEC + B_PAD
+fig = plt.figure(figsize=(W, H))
+gmap = fig.add_gridspec(nr, 4, hspace=.07, wspace=.07,
+                        left=L_LAB / W, right=1 - R_PAD / W,
+                        top=1 - T_TITLE / H, bottom=1 - (T_TITLE + CELL * nr) / H)
+gspec = fig.add_gridspec(1, 1, left=.085, right=.845,
+                         top=(B_PAD + H_SPEC) / H, bottom=B_PAD / H)
+
+axmap = [[None] * 4 for _ in range(nr)]
+for j, (key, clab, cmap, fmt) in enumerate(COLS):
+    allv = np.concatenate([D[f"{s}__{key}"] for s in SAMPLES])
+    vmin, vmax = np.percentile(allv, 4), np.percentile(allv, 96)
+    for i, s in enumerate(SAMPLES):
+        ax = fig.add_subplot(gmap[i, j]); axmap[i][j] = ax
+        im = ax.imshow(grid(s, key), cmap=cmap, vmin=vmin, vmax=vmax,
+                       origin="lower", interpolation="nearest", aspect="equal")
+        for sp in ax.spines.values():
+            sp.set_visible(True); sp.set_color(FAINT); sp.set_linewidth(.8)
+        ax.set_xticks([]); ax.set_yticks([])
+        if i == 0:                                       # 열 머리글 (축 바깥)
+            ax.set_title(clab, fontsize=8, pad=4, color=INK, linespacing=1.25)
+    bb0 = axmap[nr - 1][j].get_position()                # 열마다 가로 컬러바 하나
+    cax = fig.add_axes([bb0.x0 + bb0.width * .12, bb0.y0 - .30 * H_CBAR / H,
+                        bb0.width * .76, .075 * H_CBAR / H])
+    cb = fig.colorbar(im, cax=cax, orientation="horizontal")
+    cb.outline.set_visible(False)
+    cb.ax.tick_params(length=2, width=.6, labelsize=6.5, colors=MUTE, pad=1.5)
+    cb.set_ticks([vmin, vmax]); cb.set_ticklabels([fmt % vmin, fmt % vmax])
+
+for i, s in enumerate(SAMPLES):                          # 행 라벨 — 가로쓰기, 축 바깥
+    bb = axmap[i][0].get_position()
+    n = len(np.unique(D[f"{s}__cols"]))
+    fig.text(bb.x0 - .012, bb.y0 + bb.height / 2, LONG[s], fontsize=8.2, color=SCOL[s],
+             ha="right", va="bottom")
+    fig.text(bb.x0 - .012, bb.y0 + bb.height / 2 - .014,
+             f"{n}×{n} · {float(D[f'{s}__span']):.0f} µm", fontsize=6.8, color=MUTE,
+             ha="right", va="top")
+
+ax = fig.add_subplot(gspec[0, 0]); clean(ax)
+for nm, bands in MARKERS.items():
+    for b in bands:
+        ax.axvline(b, color=SER[nm], lw=.9, alpha=.40, zorder=0)
+OFF4 = max(np.ptp(norm[s][FP]) for s in SAMPLES) * .72
+for k, s in enumerate(SAMPLES[::-1]):
+    y0 = OFF4 * k
+    ax.fill_between(WN[FP], y0 + R[f"{s}__q25"][FP] / R[f"{s}__ink"],
+                    y0 + R[f"{s}__q75"][FP] / R[f"{s}__ink"],
+                    color=SCOL[s], alpha=.24, linewidth=0, zorder=2)
+    ax.plot(WN[FP], y0 + norm[s][FP], color=SCOL[s], lw=1.15, ls=SDASH[s], zorder=3)
+    ax.text(1812, y0 + norm[s][FP][-1], SHORT[s], fontsize=7.6, color=SCOL[s],
+            va="center", ha="left", clip_on=False)
+ax.set_xlim(400, 1800); ax.set_xticks([400, 700, 1000, 1300, 1600, 1800])
+ax.set_xlabel("Raman shift (cm$^{-1}$)", fontsize=8.5)
+ax.set_ylabel("Intensity / ink band area\n(offset)", fontsize=8, labelpad=4,
+              linespacing=1.35)
+ax.set_yticks([]); ax.spines["left"].set_visible(False)
+ax.legend([Line2D([0], [0], color=SER[n], lw=1.6, alpha=.6) for n in SER],
+          [f"{n}  " + ", ".join(str(b) for b in MARKERS[n]) for n in SER],
+          loc="lower left", bbox_to_anchor=(0, 1.005), ncol=3, fontsize=7.4,
+          handlelength=1.0, handletextpad=.4, columnspacing=1.4,
+          borderpad=0, borderaxespad=0)
+
+for _ax, _L, _dx in ((axmap[0][0], "a", L_LAB / W - .012), (ax, "b", .070)):
+    bb = _ax.get_position()
+    fig.text(max(bb.x0 - _dx, .004), bb.y1 + .008, _L, fontsize=11, fontweight="bold",
+             va="bottom", ha="left", color=INK)
+fig.text(.5, 1 - .28 / H, "Peeled mixture series — maps and representative spectra",
+         ha="center", va="bottom", fontsize=10.5, fontweight="bold", color=INK)
+out = os.path.join(FIGS, "Fig_leaf_panel.pdf")
+fig.savefig(out); fig.savefig(out.replace(".pdf", ".png"), dpi=400)
+print(out)

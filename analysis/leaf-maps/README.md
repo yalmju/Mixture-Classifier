@@ -26,12 +26,18 @@
 
 | 파일 | 내용 |
 |---|---|
+| **`figures/Fig_leaf_panel.pdf` / `.png`** | **슬라이드용 합본** — 맵(행=시료·열=판독값) 위, 대표 스펙트럼 아래 (7.2 × 8.1 in) |
 | `figures/Fig_leaf_maps.pdf` / `.png` | 4 판독값 × 3 열 = 12 패널 히트맵 (4.9 × 5.35 in) |
 | `figures/Fig_leaf_spectra.pdf` / `.png` | 대표 스펙트럼 2패널 (7.2 × 4.2 in) |
 | `figures/Fig_leaf_contrast.pdf` / `.png` | 대조군 대비 — 차이 스펙트럼 + 픽셀 검출률 (7.2 × 3.8 in) |
 | `figures/CAPTION.md` | 세 그림의 캡션 원문 |
 
-`Fig_leaf_maps` — 행이 판독값(잉크 2137 · DQ/잉크 · TBZ/잉크 · THI/잉크), 열이 시료다.
+`Fig_leaf_panel` — 슬라이드에 그대로 들어가는 한 장 (2026-08-15 요청 배치). a: 맵을
+**행 = 시료 / 열 = 판독값**으로 놓고 열마다 가로 컬러바를 달았다 (`Fig_leaf_maps` 를
+90° 돌린 배치). b: 바로 아래 같은 폭으로 대표 스펙트럼. 세기 축은 **열 단위로 공유**한다.
+
+`Fig_leaf_maps` — 위 합본의 맵만 따로. 행이 판독값(잉크 2137 · DQ/잉크 · TBZ/잉크 ·
+THI/잉크), 열이 시료다.
 **세기 축은 행 단위로 공유**하므로 같은 행 안에서 세 맵을 바로 비교할 수 있고,
 행끼리는 비교하면 안 된다. 맵마다 측정 면적이 다르므로 열 머리글에 격자와 한 변 길이를
 적었다 (450 µm 맵과 1900 µm 맵을 같은 크기 상자에 그렸다는 뜻이다).
@@ -192,6 +198,7 @@ python3 -u scripts/02_figures.py                # figures/ 생성
 
 | 경로 | 내용 |
 |---|---|
+| `figures/Fig_leaf_panel.*` | **슬라이드용 합본** — 맵 + 스펙트럼 한 장 |
 | `figures/Fig_leaf_maps.*` | 히트맵 12패널 (논문용) |
 | `figures/Fig_leaf_spectra.*` | 대표 스펙트럼 2패널 (논문용) |
 | `figures/Fig_leaf_contrast.*` | 대조군 대비 2패널 (논문용) |
