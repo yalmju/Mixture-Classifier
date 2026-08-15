@@ -1,0 +1,4 @@
+﻿substance,dispensed_estimate_uM,err_uM,truth_uM,recovery,assumption
+DQ,10.14,1.94,12.0,0.85,shared 2uL droplet 1.53 mm2
+TBZ,2.66,0.50,12.0,0.22,shared 2uL droplet 1.53 mm2
+THI,14.20,2.77,12.0,1.18,shared 2uL droplet 1.53 mm2
