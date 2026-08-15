@@ -965,6 +965,8 @@ class RealDataPage(QWidget):
         colour-bar. BLK/INK panels show where the gate sees non-analyte."""
         from matplotlib.colors import LinearSegmentedColormap
         self.c_abund.fig.clear()
+        if getattr(r, "A", None) is None:                  # some result types carry no A
+            self.c_abund.draw_idle(); return
         nbcols = self._nb_colors(r)
         allcols = self._all_colors(r)
         Anb = r.A[:, r.nonbg]
