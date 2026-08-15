@@ -363,6 +363,15 @@ class RealDataPage(QWidget):
     def _default_color(self, i):
         return SERIES[i % len(SERIES)]
 
+    def _all_colors(self, r):
+        """Colour per component (index in r.comps): its hue if a substance, else the
+        chosen background colour (saved override or grey). Removed in the band-map
+        rewrite; restored for the abundance card, which panels BLK/INK too."""
+        nb = self._nb_colors(r)
+        nbmap = {j: nb[i] for i, j in enumerate(r.nonbg)}
+        return [nbmap.get(k, self._colors.get(r.comps[k], BG_GREY))
+                for k in range(len(r.comps))]
+
     def _nb_colors(self, r):
         """Colour per non-background substance — a saved override or the default."""
         out = []
