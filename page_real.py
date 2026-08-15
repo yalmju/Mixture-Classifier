@@ -262,8 +262,10 @@ class RealDataPage(QWidget):
         #     what the camera saw, abundances = what stage-1 unmixing made of it.
         self.c_abund = Canvas()
         card_ab, lay_ab = _card(
-            "Unmixed maps — per-substance abundance from stage-1 unmixing "
-            "(NNLS/MCR; model runs show its per-pixel probabilities)")
+            "Unmixed maps — how stage-1 splits each pixel among the references. "
+            "NNLS/MCR runs show abundances; a composition model shows its per-pixel "
+            "probabilities. ALL panels share ONE scale (0–1 for probabilities, "
+            "0–P99 for abundances) so brightness compares across components")
         lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(460)
         self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=False, key="abund")
         body.addWidget(card_ab)
@@ -1026,8 +1028,12 @@ class RealDataPage(QWidget):
         allcols = self._all_colors(r)
         Anb = r.A[:, r.nonbg]
         mscale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
-        sub_vmax = float(np.quantile(Anb, 0.99)) if Anb.size else 1.0
-        sub_vmax = sub_vmax or 1.0
+        # ONE scale for every panel, background included — per-panel scales made the
+        # row unreadable (INK 0–0.08 next to BLK 0–0.8 looked equally bright).
+        # Probabilities get the natural fixed 0–1; abundances share a global P99.
+        Aall = np.asarray(r.A, float)
+        amax = float(np.nanmax(Aall)) if Aall.size else 1.0
+        vshared = 1.0 if amax <= 1.05 else (float(np.quantile(Aall, 0.99)) or 1.0)
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
         panels = [("merged", None)] + [(r.comps[k], k) for k in range(len(r.comps))]
@@ -1040,9 +1046,9 @@ class RealDataPage(QWidget):
                 img[rows, cc] = np.clip((Anb / mscale) @ cols, 0.0, 1.0)
                 ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest")
+                title = f"merged · panel scale 0–{vshared:g}"
             else:
-                sc = (sub_vmax if not r.bg_mask[k]
-                      else float(np.quantile(r.A[:, k], 0.99)) or 1.0)
+                sc = vshared
                 grid = np.zeros((ny, nx)); grid[rows, cc] = r.A[:, k]
                 cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", allcols[k]])
                 # no colour-bars — they size off the full axes box and shrink the
