@@ -274,7 +274,6 @@ class RealDataPage(QWidget):
         lay_maps.addLayout(self.bandrow)
         lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(460)
         self._add_fold(lay_maps, self.c_maps, "band maps", opened=True, key="maps")
-        body.addWidget(card_maps)
 
         # 1b) unmixed abundance maps — NNLS runs FIRST in every path (the gate), so
         #     its per-substance abundances belong beside the raw band maps: bands =
@@ -303,8 +302,12 @@ class RealDataPage(QWidget):
         _abrow.addStretch(1)
         lay_ab.addLayout(_abrow)
         lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(460)
-        self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=False, key="abund")
-        body.addWidget(card_ab)
+        self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=True, key="abund")
+        # band | abundance half-and-half on one row — raw evidence beside the
+        # stage-1 split, no scrolling between them
+        mrow = QHBoxLayout(); mrow.setSpacing(12)
+        mrow.addWidget(card_maps, 1); mrow.addWidget(card_ab, 1)
+        mrow_w = QWidget(); mrow_w.setLayout(mrow); body.addWidget(mrow_w)
 
         # 2) per-pixel composition pie | selected-pixel spectrum, side by side — right
         #    under the maps so a clicked pixel's spectrum shows without scrolling down
