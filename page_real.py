@@ -1479,6 +1479,51 @@ class RealDataPage(QWidget):
                 + ([f"{r.bg_score[i]:.4f}"] if has_bg else [])
                 for i in range(r.n_pixels)]
         write_csv(os.path.join(d, "per_pixel.csv"), head, rows)
+        ncsv = 2
+        # band-map values per pixel (extras included) — per_pixel.csv carries the
+        # unmixed numbers; this carries what the band panels actually display
+        _bands = [(nm, self._band_of(r, nm)) for nm in nb]
+        _extras = list(self._extra_bands)
+        _chans = ([self._band_image(r, wl) for _nm, wl in _bands]
+                  + [self._band_image(r, wl) for wl in _extras])
+        _bh = (["x", "y"] + [f"band_{nm}_{wl:.0f}" for nm, wl in _bands]
+               + [f"extra_{wl:.0f}" for wl in _extras])
+        _br = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}"]
+               + [f"{c[i]:.6g}" for c in _chans] for i in range(r.n_pixels)]
+        write_csv(os.path.join(d, "band_maps.csv"), _bh, _br)
+        ncsv += 1
+        # the µM summary-bar table, numbers identical to the drawn bars
+        if cal:
+            _hit = self._hit(r)
+            _um = r.conc * 1e6
+            _tv = None
+            _txt = self.true_edit.text().strip() if hasattr(self, "true_edit") else ""
+            if _txt:
+                try:
+                    _pp = [float(t) for t in _txt.replace(" ", "").split(",")]
+                    if len(_pp) == len(nb) and all(v > 0 for v in _pp):
+                        _tv = _pp
+                except ValueError:
+                    _tv = None
+            _vol = float(self.vol_spin.value()) if hasattr(self, "vol_spin") else 0.0
+            _sr = []
+            for i, nm in enumerate(nb):
+                v = _um[_hit, i] if _hit.any() else _um[:, i]
+                v = v[np.isfinite(v) & (v > 0)]
+                if not v.size:
+                    _sr.append([nm, "0", "", "", "", "", "", ""])
+                    continue
+                med = float(np.median(v))
+                _sr.append([nm, str(int(v.size)), f"{med:.4f}",
+                            f"{float(np.quantile(v, 0.25)):.4f}",
+                            f"{float(np.quantile(v, 0.75)):.4f}",
+                            f"{_tv[i]:g}" if _tv else "",
+                            f"{100 * med / _tv[i]:.1f}" if _tv else "",
+                            f"{med * _vol:.2f}" if _vol > 0 else ""])
+            write_csv(os.path.join(d, "um_summary.csv"),
+                      ["substance", "n_hit_px", "median_uM", "q1_uM", "q3_uM",
+                       "true_uM", "recovery_pct", "apparent_amount_pmol"], _sr)
+            ncsv += 1
         # figures export WITHOUT the selection ring — the clicked-pixel highlight
         # is a working aid, not figure content. Redraw clean, save, then restore.
         _sel = self._sel
@@ -1522,7 +1567,7 @@ class RealDataPage(QWidget):
         if _sel is not None:
             self._sel = _sel; self._plot_pies(r)         # put the highlight back
         self._export_readme(d, r, nb, [f[0] for f in figs])
-        self.status.setText(f"exported README + 2 CSV + {n} PNG + {np_} panel PNG "
+        self.status.setText(f"exported README + {ncsv} CSV + {n} PNG + {np_} panel PNG "
                             f"→ {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
 
