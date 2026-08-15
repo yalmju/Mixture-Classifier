@@ -17,7 +17,7 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QComboBox, QDoubleSpinBox, QSpinBox, QCheckBox, QFileDialog, QColorDialog,
-    QScrollArea, QFrame, QProgressBar,
+    QScrollArea, QFrame, QProgressBar, QLineEdit,
 )
 
 from ui_common import *
@@ -297,7 +297,16 @@ class RealDataPage(QWidget):
             "it reads the SERS-equivalent concentration, not a mass balance.")
         self.vol_spin.valueChanged.connect(
             lambda _=0: self._plot_conc(self._res) if self._res is not None else None)
-        vrow.addWidget(_vl); vrow.addWidget(self.vol_spin); vrow.addStretch(1)
+        vrow.addWidget(_vl); vrow.addWidget(self.vol_spin)
+        _tl = QLabel("true µM (a,b,c) — blank = off"); _tl.setObjectName("field")
+        self.true_edit = QLineEdit(); self.true_edit.setFixedWidth(110)
+        self.true_edit.setPlaceholderText("12,12,12")
+        self.true_edit.setToolTip("dispensed truth per substance, comma-separated in "
+                                  "the panel order. Adds a red tick at each true value "
+                                  "and a recovery % under the bars.")
+        self.true_edit.editingFinished.connect(
+            lambda: self._plot_conc(self._res) if self._res is not None else None)
+        vrow.addWidget(_tl); vrow.addWidget(self.true_edit); vrow.addStretch(1)
         lay_conc.addLayout(vrow)
         lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(460)
         ccard, clay = _card("Composition (overall)")
@@ -1121,8 +1130,22 @@ class RealDataPage(QWidget):
                      yerr=[(med - q1)[ok], (q3 - med)[ok]],
                      fmt="none", ecolor=INK, elinewidth=1.0, capsize=3, zorder=3)
         vol = float(self.vol_spin.value()) if hasattr(self, "vol_spin") else 0.0
+        tv = None
+        txt = self.true_edit.text().strip() if hasattr(self, "true_edit") else ""
+        if txt:
+            try:
+                parts = [float(t) for t in txt.replace(" ", "").split(",")]
+                if len(parts) == len(nb) and all(v > 0 for v in parts):
+                    tv = parts
+            except ValueError:
+                tv = None
+        if tv is not None:                                 # red tick = dispensed truth
+            axb.plot(xs, tv, ls="none", marker="_", ms=16, mew=1.8, color=RED,
+                     zorder=4)
         for i in np.where(ok)[0]:
             lab = f"{med[i]:.1f}"
+            if tv is not None:
+                lab += chr(10) + f"rec {100 * med[i] / tv[i]:.0f}%"
             if vol > 0:                                    # µM × µL = pmol
                 lab += chr(10) + f"≈{med[i] * vol:.0f} pmol"
             axb.annotate(lab, (xs[i], q3[i]), xytext=(0, 4),
@@ -1204,9 +1227,8 @@ class RealDataPage(QWidget):
         if segs:
             ax.add_collection(LineCollection(segs, colors=self.PIE_GRID,
                                              linewidths=1.6, zorder=6))
-        self._sel_art = None                     # fig was cleared — old ring is gone
-        self._mark_sel(ax, r)
-        self._pie_ax = ax                        # clicks re-ring THIS axes cheaply
+        self._sel_arts = []                      # figs were cleared — old rings gone
+        self._pie_ax = ax
         ax.set_xlim(x.min() - sx, x.max() + sx)
         ax.set_ylim(*((y.max() + sy, y.min() - sy) if self._flip()
                       else (y.min() - sy, y.max() + sy)))
@@ -1219,6 +1241,28 @@ class RealDataPage(QWidget):
                   loc="upper center", bbox_to_anchor=(0.5, -0.02),
                   ncol=len(handles), frameon=False)
         self.c_pie.fig.tight_layout(); self.c_pie.draw_idle()
+
+    def _update_sel_rings(self, r):
+        """One ring on EVERY map (band, abundance, pie) at the clicked pixel — the
+        click lands far from the pie, so the ring must appear where you clicked."""
+        for art in getattr(self, "_sel_arts", []):
+            try:
+                art.remove()
+            except Exception:
+                pass
+        self._sel_arts = []
+        if self._sel is None:
+            return
+        px = float(r.coords[self._sel, 0]); py = float(r.coords[self._sel, 1])
+        for ax in self._click_axes:
+            try:
+                self._sel_arts.append(
+                    ax.scatter([px], [py], s=120, facecolors="none",
+                               edgecolors=BLUE, linewidths=1.8, zorder=7))
+            except Exception:
+                pass
+        for c in (self.c_maps, self.c_abund, self.c_pie):
+            c.draw_idle()
 
     def _mark_sel(self, ax, r):
         """Draw (or move) the selection ring as ONE artist — a click must not
@@ -1297,10 +1341,7 @@ class RealDataPage(QWidget):
              + (r.coords[:, 1] - event.ydata) ** 2)
         self._sel = int(d.argmin())
         self._plot_spec(r, self._sel)
-        pax = getattr(self, "_pie_ax", None)     # move the ring only — never rebuild
-        if pax is not None:
-            self._mark_sel(pax, r)
-            self.c_pie.draw_idle()
+        self._update_sel_rings(r)                # rings on every map, never a rebuild
 
     # ---- export ----
     def _export(self):
