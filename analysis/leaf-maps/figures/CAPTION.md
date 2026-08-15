@@ -13,7 +13,10 @@ columns are readouts. Both maps cover 20 × 20 pixels at 100 µm steps (1900 × 
 so the two rows are directly comparable. The peel lifts the ink together with the
 surface residue, and the ink reporter falls by 26 % between the rows; analyte removal
 should therefore be read against that baseline (THI 61 %, DQ 46 %, TBZ 31 % of the
-marker intensity removed, i.e. 0.53, 0.73 and 0.94 of the ink-normalised level retained). Each panel is plotted after asymmetric-least-squares baseline
+marker intensity removed, i.e. 0.53, 0.73 and 0.94 of the ink-normalised level retained).
+This peel was deliberately rough: it took 42 % of the ink where the ink was thickest and
+12 % where it was thinnest, so the removal figures are a lower bound on what the film can
+lift rather than a measure of its recovery. Each panel is plotted after asymmetric-least-squares baseline
 removal (λ = 1 × 10⁵, p = 0.01). The first column is the integrated intensity of the ink
 reporter band in the cellular-silent region (2100–2180 cm⁻¹), which reports how much ink
 is probed in each pixel; the remaining columns are the marker-band intensity of each

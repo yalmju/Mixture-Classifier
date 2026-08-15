@@ -267,6 +267,13 @@ def main():
                 va, vb = np.median(feat[a][nm]), np.median(feat[b][nm])
                 w.writerow([nm, f"{va:.6g}", f"{vb:.6g}", f"{vb/va:.3f}",
                             f"{100*(1-vb/va):.1f}", f"{(vb/va)/(ib/ia):.3f}"])
+            # 잉크가 고른 두께로 걷혔나 — 분위수끼리 맞대 본다.  두 맵은 스테이지
+            # 좌표계가 달라(재장착) 픽셀 단위 차감은 못 하고, 분포 비교까지가 한계다.
+            for q in (10, 25, 50, 75, 90):
+                qa = np.percentile(feat[a]["ink2137"], q)
+                qb = np.percentile(feat[b]["ink2137"], q)
+                w.writerow([f"ink2137_p{q}", f"{qa:.6g}", f"{qb:.6g}", f"{qb/qa:.3f}",
+                            f"{100*(1-qb/qa):.1f}", ""])
         print(f"\npeel 제거율 ({a} -> {b})   잉크 {100*(1-ib/ia):.0f}% 제거")
         for nm in SUB:
             va, vb = np.median(feat[a][nm]), np.median(feat[b][nm])
