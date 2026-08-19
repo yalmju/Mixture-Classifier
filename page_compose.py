@@ -459,6 +459,7 @@ class ComposePanel(QWidget):
         self.c_tri = Canvas(); self.c_tri.setMinimumHeight(300)
         self.c_tri.placeholder("Train to see held-out composition recovery")
         tlay.addWidget(self.c_tri); plots.addWidget(tcard, 1)
+        self._tri_title = tlay.itemAt(0).widget()
         root.addLayout(plots, 1)
 
         plots2 = QHBoxLayout(); plots2.setSpacing(12)
@@ -467,6 +468,7 @@ class ComposePanel(QWidget):
         self.c_parity = Canvas(); self.c_parity.setMinimumHeight(300)
         self.c_parity.placeholder("Train to see the per-substance parity")
         play.addWidget(self.c_parity); plots2.addWidget(pcard, 1)
+        self._parity_title = play.itemAt(0).widget()
         ecard, elay = _card("Per-substance error — mean |predicted − true| fraction "
                             "(lower = better)")
         self.c_err = Canvas(); self.c_err.setMinimumHeight(300)
@@ -734,6 +736,47 @@ class ComposePanel(QWidget):
         ax.set_xticks(x); ax.set_xticklabels([label[m] for m in methods], fontsize=8.5)
         ax.set_ylabel("composition error (%p)  — leave-one-out")
         self.c_err.fig.tight_layout(); self.c_err.draw_idle()
+
+        # The parity and ternary canvases belong to a TRAINED model and sit idle during a
+        # benchmark, so the two comparisons the table leads with get a figure each rather
+        # than living only in the CSV.
+        self._parity_title.setText(
+            f"Accuracy — conditions recovered within the declared cut (≤{cut:g} %p)"
+            if cut is not None else "Accuracy — no cut was declared for this run")
+        if cut is None:
+            self.c_parity.placeholder("No accuracy cut declared — set one in advanced "
+                                      "BEFORE running, then re-run the benchmark")
+        else:
+            axa = self.c_parity.new_ax()
+            acc = [100 * summ.get(m, {}).get("acc_at_cut", float("nan")) for m in methods]
+            axa.bar(x, acc, 0.62, color=[TEAL if m == "mlp" else MUTE for m in methods],
+                    edgecolor="white", alpha=0.9)
+            for xi, a in zip(x, acc):
+                if a == a:
+                    axa.text(xi, a + 1.5, f"{a:.0f}%", ha="center", fontsize=8, color=INK)
+            axa.set_xticks(x); axa.set_xticklabels([label[m] for m in methods], fontsize=8.5)
+            axa.set_ylim(0, 105); axa.set_ylabel(f"conditions within {cut:g} %p (%)")
+            self.c_parity.fig.tight_layout(); self.c_parity.draw_idle()
+
+        # recovery: mean(pred/true)·100 per substance, ±SE, with 100% marked. Read it
+        # WITH the deviation chart — over- and under-recovery cancel in this mean.
+        self._tri_title.setText("Recovery per substance — mean(predicted / prepared) × 100 "
+                                "± SE (100% = exact; read next to the error chart)")
+        axv = self.c_tri.new_ax()
+        bw = 0.8 / max(len(subs), 1)
+        for si, s in enumerate(subs):
+            vals = [summ.get(m, {}).get("recovery", {}).get(
+                        s, (float("nan"), float("nan"), 0)) for m in methods]
+            axv.bar(x + (si - (len(subs) - 1) / 2) * bw, [v[0] for v in vals], bw * 0.9,
+                    yerr=[v[1] if v[1] == v[1] else 0.0 for v in vals], capsize=3,
+                    color=substance_color(s, si), edgecolor="white", alpha=0.9,
+                    label=s, error_kw=dict(lw=0.9, ecolor=INK))
+        axv.axhline(100, color=INK, ls="--", lw=1.0)
+        axv.set_xticks(x); axv.set_xticklabels([label[m] for m in methods], fontsize=8.5)
+        axv.set_ylabel("recovery (%)")
+        axv.legend(fontsize=8, framealpha=0, ncol=len(subs))
+        self.c_tri.fig.tight_layout(); self.c_tri.draw_idle()
+
         axr = self.c_roc.new_ax()                           # ROC overlay
         axr.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0)
         for j, m in enumerate(methods):
@@ -809,17 +852,13 @@ class ComposePanel(QWidget):
         self.save_b.setEnabled(True)
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         self._rows = rows
+        self._restore_model_titles()      # the canvases go back to the model's plots
         try:
             self._plot_triangle(rows)
         except Exception:
             import traceback as _tb
             print(_tb.format_exc(), file=sys.stderr)
         self._plot_loss(model.get("train_eval", {}).get("loss", []))
-        self._err_title.setText("Per-substance error — mean |predicted − true| fraction "
-                                "(lower = better)")
-        self._roc_title.setText("Detection ROC — is each substance present? "
-                                "(threshold the predicted fraction)")
-        self._canvas_shows = "model"       # c_err / c_roc go back to the model's plots
         try:
             self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
         except Exception:
@@ -1026,13 +1065,17 @@ class ComposePanel(QWidget):
         # c_err / c_roc are SHARED with the benchmark: whichever ran last is on screen.
         # Name them for what they actually show, or a benchmark chart would leave here
         # as "composition_error.png" and be read as the model's per-substance error.
+        # A benchmark takes over four of the five canvases (error, ROC, parity, ternary),
+        # so a session that both trained and benchmarked can only export the panels the
+        # LAST run drew. Name them for what they actually show, or the benchmark's charts
+        # would leave as composition_*.png and be read as the model's own results.
         showing_bench = getattr(self, "_canvas_shows", "model") == "bench"
-        figs = [("composition_learning_curve", self.c_loss),
-                ("composition_triangle", self.c_tri),
-                ("composition_parity", self.c_parity)]
-        figs += ([("benchmark_error", self.c_err), ("benchmark_roc", self.c_roc)]
-                 if showing_bench else
-                 [("composition_error", self.c_err), ("composition_roc", self.c_roc)])
+        figs = [("composition_learning_curve", self.c_loss)]
+        figs += (self._bench_figs() if showing_bench else
+                 [("composition_triangle", self.c_tri),
+                  ("composition_parity", self.c_parity),
+                  ("composition_error", self.c_err),
+                  ("composition_roc", self.c_roc)])
         n = _save_figs(figs, d)
         n += self._export_grid_figs(d, rows, subs)
         # a benchmark run in this session leaves with the model, not silently dropped
@@ -1176,6 +1219,29 @@ class ComposePanel(QWidget):
                             f"({len(entries)} maps)")
         self.status.setStyleSheet(f"color:{MUTE};")
 
+    def _restore_model_titles(self):
+        """Hand the four shared panels back to the trained model. A benchmark relabels
+        them (accuracy / recovery / method comparison), so training or loading a model
+        afterwards has to put the captions back or the plots would describe the wrong run."""
+        self._canvas_shows = "model"
+        self._tri_title.setText("Held-out recovery (leave-one-out) — true (○) vs "
+                                "predicted (●, colour = accuracy)")
+        self._parity_title.setText("Parity per substance — predicted vs true fraction "
+                                   "(on the line = exact)")
+        self._err_title.setText("Per-substance error — mean |predicted − true| fraction "
+                                "(lower = better)")
+        self._roc_title.setText("Detection ROC — is each substance present? "
+                                "(threshold the predicted fraction)")
+
+    def _bench_figs(self):
+        """The benchmark's four panels, as (filename, canvas). The accuracy panel is
+        skipped when no cut was declared — it holds a placeholder, not a chart."""
+        figs = [("benchmark_error", self.c_err), ("benchmark_recovery", self.c_tri),
+                ("benchmark_roc", self.c_roc)]
+        if getattr(self, "_bench_cut", None) is not None:
+            figs.insert(1, ("benchmark_accuracy", self.c_parity))
+        return figs
+
     def _write_bench_csvs(self, d, subs):
         """The benchmark table + its raw predictions and ROC points, into folder ``d``.
         Shared by both export paths so a benchmark leaves with its numbers whether or
@@ -1254,8 +1320,7 @@ class ComposePanel(QWidget):
         n = 0
         if bench:
             self._write_bench_csvs(d, subs)
-            n += _save_figs([("benchmark_error", self.c_err),
-                             ("benchmark_roc", self.c_roc)], d)
+            n += _save_figs(self._bench_figs(), d)
         if kf:
             write_csv(os.path.join(d, "kfold_errors.csv"), ["fold", "composition_error"],
                       [[i + 1, f"{e:.4f}"] for i, e in enumerate(kf.get("errors", []))]
@@ -1296,7 +1361,7 @@ class ComposePanel(QWidget):
             rows.append((f"mix {i + 1}", tv, pv))
         if rows:
             self._rows = rows
-            self._canvas_shows = "model"
+            self._restore_model_titles()
             self._plot_triangle(rows); self._plot_parity(rows)
             self._plot_error(rows); self._plot_roc(rows)
             self._plot_loss(model.get("train_eval", {}).get("loss", []))
