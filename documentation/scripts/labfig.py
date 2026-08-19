@@ -3,13 +3,16 @@
   색은 하드코딩하지 않는다. `ACF_PEST_DB/Pure/colors.json` 이 단일 출처이고,
   앱 상단바에서 색을 바꾸면 이 그림도 따라 바뀐다.
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import json, os
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from cycler import cycler
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+DB = paths.DB
 SUB = ["DQ", "TBZ", "THI"]
 
 _FALLBACK = {"DQ": "#008cf7", "TBZ": "#95dc2a", "THI": "#f35376"}
@@ -18,7 +21,7 @@ _FALLBACK = {"DQ": "#008cf7", "TBZ": "#95dc2a", "THI": "#f35376"}
 def colors(data_dir=f"{DB}/Pure"):
     """앱이 저장한 성분별 색 (없으면 기본값)."""
     try:
-        m = json.load(open(os.path.join(data_dir, "colors.json")))
+        m = json.load(open(os.path.join(data_dir, "colors.json"), encoding="utf-8"))
         return {s: m.get(s, _FALLBACK[s]) for s in SUB}
     except Exception:
         return dict(_FALLBACK)

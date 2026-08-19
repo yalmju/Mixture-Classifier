@@ -207,6 +207,19 @@ def main():
         except Exception:
             pass
     app = QApplication(sys.argv)
+    # PyQt6 aborts the whole process (0xC0000409 on Windows) when a slot raises.
+    # Show the traceback and keep running instead — a broken plot must not kill
+    # an hour of loaded state.
+    def _excepthook(t, v, tb):
+        import traceback
+        txt = "".join(traceback.format_exception(t, v, tb))
+        print(txt, file=sys.stderr)
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(None, "UNMIXR — unexpected error", txt[-1600:])
+        except Exception:
+            pass
+    sys.excepthook = _excepthook
     app.setStyleSheet(QSS)
     # the real OS UI font: Segoe UI on Windows, SF Pro on macOS, the desktop's
     # font on Linux — hardcoding "Segoe UI" left mac/Linux on a Qt fallback

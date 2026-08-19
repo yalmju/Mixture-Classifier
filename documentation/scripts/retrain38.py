@@ -1,48 +1,26 @@
 """저농도 38조건(Baseline260808 32 + tert-new 6)으로 재학습. 4-fold 조건단위 검증."""
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os, re, glob
 import numpy as np
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
+REPO = paths.REPO
 sys.path.insert(0, REPO)
 import dl_model
 from real_data import load_map
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+DB = paths.DB
 PURE = f"{DB}/Pure"
 import paths
 CALIB = paths.calibration()          # 하드코딩하면 조용히 사전학습이 꺼진다
 BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
-SUB = ["DQ", "TBZ", "THI"]
+import mixtures as MX
+SUB = MX.SUB
 
-
-def parse_hi(nm):
-    c = {"DQ": 0.0, "TBZ": 0.0, "THI": 0.0}
-    for k, v in re.findall(r"(DQ|TBZ|TH[I1])(\d+)", nm):
-        c["THI" if k.startswith("TH") else k] += float(v)
-    return c
-
-
-HI = []
-for p in sorted(glob.glob(f"{DB}/Ratio/Ratio_mix/*orrected.csv")):
-    nm = os.path.basename(p).split("_corrected")[0].split("-corrected")[0]
-    if nm in BAD:
-        continue
-    c = parse_hi(nm)
-    if sum(c.values()):
-        HI.append((p, c, {k: v * 1e-6 for k, v in c.items()}))
-
-# ---- 저농도: 조성(최종 µM)을 키로 묶는다. 같은 조성의 다른 파일은 반복으로 취급 ----
-LO = {}
-for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-    m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-    key = tuple(int(m.group(i)) // 3 for i in (1, 2, 3))
-    LO.setdefault(key, []).append(p)
-OLD = {(6, 6, 24): 1, (12, 12, 12): 2, (24, 6, 6): 3, (6, 6, 6): 4, (24, 24, 24): 5, (12, 12, 48): 6}
-for key, n in OLD.items():
-    for r in (1, 2, 3):
-        p = f"{DB}/tert-new-baseline/{n}-{r}_corrected.csv"
-        if os.path.exists(p):
-            LO.setdefault(key, []).append(p)
+# 라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`).
+HI = MX.items(("high",))
+LO = MX.groups(("grid",), replicates=True)
 
 keys = sorted(LO)
 print(f"고농도 {len(HI)}맵 · 저농도 {len(keys)}조건 {sum(len(v) for v in LO.values())}맵")

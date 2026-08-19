@@ -17,13 +17,16 @@
 
   실행:  python3 -u isotherm_figs.py
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import os, sys
 import numpy as np
 from scipy.optimize import curve_fit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+REPO = paths.REPO
+DB = paths.DB
 sys.path.insert(0, REPO); sys.path.insert(0, HERE)
 
 import paths

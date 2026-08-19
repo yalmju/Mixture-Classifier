@@ -22,7 +22,7 @@ LV = [3, 6, 12, 24]
 SRC = sys.argv[1] if len(sys.argv) > 1 else f"{DESK}/retrain64_blanksips.txt"
 
 mlp = {}
-for l in open(SRC):
+for l in open(SRC, encoding="utf-8"):
     if not re.search(r"\|\s+[\d.]+% \|", l):
         continue
     p = [x.strip() for x in l.split("|")]

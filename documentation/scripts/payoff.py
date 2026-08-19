@@ -1,10 +1,13 @@
 """1) 총농도(2137 밴드) x 조성(분석물 비) = 개별 성분 농도, LOO
    2) 템플릿 범위를 silent region까지 넓히면 blank 누출(=LOD)이 줄어드나"""
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, math, os
 import numpy as np
 from scipy.optimize import nnls
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
+REPO = paths.REPO
 sys.path.insert(0, REPO)
 sys.path.insert(0, "/private/tmp/claude-501/-Users-seungki2-Documents-GitHub-Mixture-Classifier--claude-worktrees-ink-check-6maps-run-ad8cec/61a536fa-e12d-4dee-8d68-95377dbe80ce/scratchpad")
 import unmix, silent as S
@@ -51,7 +54,7 @@ print(f"  [비교] 분석물 단독(게인 가정): DQ 2.04 · TBZ 1.50 · THI 1
 print("\n" + "=" * 78)
 print("2. 템플릿 범위 확장 -> blank 누출(LOD 바닥)이 줄어드나")
 print("=" * 78)
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB/Pure"
+DB = paths.PURE
 names, WN, means = unmix._templates(DB, True, None)
 WN = np.asarray(WN, float)
 SI = [names.index(s) for s in SUB]

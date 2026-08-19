@@ -1,4 +1,7 @@
 """tert-new-baseline: 6조건 x 3반복 = 18맵. 재현성 + A/B + 전이성 + 성분별 오차."""
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, math, os
 import numpy as np
 from scipy.optimize import nnls
@@ -12,7 +15,7 @@ names, wn_t, P = ink6.templates()
 SUB = ["DQ", "TBZ", "THI"]
 SI = [names.index(s) for s in SUB]
 IK = names.index("INK")
-D = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB/tert-new-baseline"
+D = f"{paths.DB}/tert-new-baseline"
 OLD = "/Volumes/Seungki/260805/tert-new"
 COMP = {1: (6, 6, 24), 2: (12, 12, 12), 3: (24, 6, 6),
         4: (6, 6, 6), 5: (24, 24, 24), 6: (12, 12, 48)}

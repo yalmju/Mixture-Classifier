@@ -1,0 +1,20 @@
+{
+ "created": "2026-08-14 22:57",
+ "labels": "Ratio/260814_mixture_final (파일명 = 최종 µM)",
+ "sets": [
+  "high",
+  "grid"
+ ],
+ "replicates": true,
+ "n_maps": 114,
+ "n_conditions": 99,
+ "arm": "blank,sips — include_blank=True, sim_iso=sips_dq, sim_nuisance=False",
+ "use_pretrain": true,
+ "calibration": "STD\\260727_Spec\\calibration_spectra.csv",
+ "epochs": 120,
+ "seed": 0,
+ "px_per_map": 20,
+ "nnls_screen": true,
+ "train_seconds": 881,
+ "note": "전 조건 학습 — held-out 이 아니다. 검증 숫자는 retrain_all/piemap_compute 를 쓸 것."
+}

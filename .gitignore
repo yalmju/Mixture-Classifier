@@ -27,3 +27,8 @@ documentation/scripts/*.pkl
 documentation/scripts/*_signals*.json
 tmp/
 *.log
+
+# 학습 완료 모델 (Drive 결과 폴더에 사본을 둔다)
+documentation/scripts/*.pkl
+documentation/scripts/*.npz
+documentation/scripts/*_signals*.json

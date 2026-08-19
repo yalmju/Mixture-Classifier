@@ -24,7 +24,7 @@ sys.path.insert(0, HERE)
 import paths
 
 DB = paths.DB
-OUT = f"{DB}/260808_data interpret/panels"
+OUT = f"{paths.INTERP}/panels"
 SUB = ["DQ", "TBZ", "THI"]
 TRUE = 100.0 / 3
 os.makedirs(OUT, exist_ok=True)

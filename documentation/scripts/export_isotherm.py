@@ -32,7 +32,7 @@ from calibration import fit_B, fit_isotherm, fit_sips
 from dl_model import _refs
 
 DB = paths.DB
-OUT = f"{DB}/260808_data interpret/panels"
+OUT = f"{paths.INTERP}/panels"
 SUB = ["DQ", "TBZ", "THI"]
 WORK = (3.0, 24.0)          # 혼합물 작업 구간 (µM/성분) — 그림의 음영
 os.makedirs(OUT, exist_ok=True)

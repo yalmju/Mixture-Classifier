@@ -24,8 +24,8 @@ sys.path.insert(0, HERE)
 import paths
 
 DB = paths.DB
-CACHE = f"{DB}/260808_data interpret/piemap_260812/piemap_data.pkl"
-OUT = f"{DB}/260808_data interpret/panels"
+CACHE = f"{paths.INTERP}/piemap_260812/piemap_data.pkl"
+OUT = f"{paths.INTERP}/panels"
 SUB = ["DQ", "TBZ", "THI"]
 FOLDS = 4
 os.makedirs(OUT, exist_ok=True)

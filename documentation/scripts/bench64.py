@@ -4,7 +4,9 @@
   로 2026-07-31 자다. 64조건 격자 이전이고 숫자도 논문 그림과 다르다. 자료가 없으니
   다시 돌린다.
 
-  `retrain64.py` 와 **같은 데이터 수집**을 쓴다 (DQ9-sus 제외, md5 중복 제외, 파일명 ÷3).
+  데이터 수집은 `mixtures.py` 한 곳이다 — 라벨은 `260814_mixture_final` 파일명이 최종 µM
+  이고, 여기서 나눗셈을 하지 않는다. (예전에는 고농도 파일명을 그대로 µM 로 읽어 이성분
+  2배·삼성분 3배 과대였다. `mixtures.py` 머리말 참조.)
   다만 `benchmark_loo` 는 방법 비교용이라 `include_blank` · `sim_iso` 를 받지 않는다 —
   **채택 구성이 아니라 base 구성에서의 방법 비교**다. 표에 그렇게 적을 것.
 
@@ -22,6 +24,9 @@
   트리를 100 으로 줄인다. RF 는 여기서 고전 ML 기준선일 뿐이고 성능은 100↔300 에서
   포화한다 — 채택 방법(MLP)과의 격차 안에 묻힌다. 캡션에 트리 수를 적을 것.
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os, re, glob, csv, json, hashlib, time
 import numpy as np
 
@@ -30,13 +35,13 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, REPO)
 import dl_model
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-PURE = f"{DB}/Pure"
-import paths
+import mixtures as MX
+
+DB = paths.DB
+PURE = paths.PURE
 CALIB = paths.calibration()          # 하드코딩하면 조용히 사전학습이 꺼진다
-OUT = f"{DB}/260808_data interpret/panels"
-BAD = {"DQ500TBZ100", "DQ1000TBZ100"}
-SUB = ["DQ", "TBZ", "THI"]
+OUT = f"{paths.INTERP}/panels"
+SUB = MX.SUB
 EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 120
 PXPM = int(sys.argv[2]) if len(sys.argv) > 2 else 20
 TREES = int(sys.argv[3]) if len(sys.argv) > 3 else 100
@@ -44,43 +49,9 @@ CNN_EP = int(sys.argv[4]) if len(sys.argv) > 4 else 40
 os.makedirs(OUT, exist_ok=True)
 
 
-def parse_hi(nm):
-    c = {"DQ": 0.0, "TBZ": 0.0, "THI": 0.0}
-    for k, v in re.findall(r"(DQ|TBZ|TH[I1])(\d+)", nm):
-        c["THI" if k.startswith("TH") else k] += float(v)
-    return c
-
-
-items, seen = [], set()
-
-
-def add(path, conc):
-    h = hashlib.md5(open(path, "rb").read()).hexdigest()
-    if h in seen:
-        return
-    seen.add(h)
-    items.append((path, conc, {k: v * 1e-6 for k, v in conc.items()}))
-
-
-for p in sorted(glob.glob(f"{DB}/Ratio/Ratio_mix/*orrected.csv")):
-    nm = os.path.basename(p).split("_corrected")[0].split("-corrected")[0]
-    if nm in BAD:
-        continue
-    c = parse_hi(nm)
-    if sum(c.values()):
-        add(p, c)
-for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-    if "DQ9-sus" in p:
-        continue
-    m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-    add(p, dict(zip(SUB, [int(m.group(i)) / 3.0 for i in (1, 2, 3)])))
-OLD = {(6, 6, 24): 1, (12, 12, 12): 2, (24, 6, 6): 3, (6, 6, 6): 4, (24, 24, 24): 5,
-       (12, 12, 48): 6}
-for key, n in OLD.items():
-    for r in (1, 2, 3):
-        p = f"{DB}/tert-new-baseline/{n}-{r}_corrected.csv"
-        if os.path.exists(p):
-            add(p, dict(zip(SUB, map(float, key))))
+# 등몰 계열(equimolar)은 뺀다 — 그 8맵은 "조성에 희석 정보가 0" 인 판별 장치라 학습셋에
+# 넣지 않기로 한 세트다 (TODO.md §6). 예전 수집과 같은 구성이다.
+items = MX.items(("high", "grid"), replicates=True)
 
 METHODS = [("nnls", "NNLS"), ("pls", "PLS"), ("rf", "Random Forest"),
            ("cnn", "1D-CNN"), ("mlp", "MLP")]
@@ -159,7 +130,13 @@ write("panel_de_predictions.csv",
       ["method", "condition"] + [f"true_{s}_pct" for s in nb] + [f"pred_{s}_pct" for s in nb],
       predrows)
 import shutil
-shutil.rmtree(CKPT, ignore_errors=True)          # 다 끝났으니 부분 저장은 치운다
+# 다 끝났으니 부분 저장은 치운다. `ignore_errors=True` 로 삼키면 안 된다 — 이 저장소는
+# Google Drive 위에 있어서 동기화가 파일을 잡고 있으면 rmtree 가 조용히 실패하고,
+# 남은 폴더를 "아직 도는 중" 으로 오해하게 된다 (2026-08-14 에 실제로 물렸다).
+try:
+    shutil.rmtree(CKPT)
+except OSError as e:
+    print(f"⚠ 부분 저장을 못 지웠다 — 손으로 치울 것: {CKPT}\n  ({e})", flush=True)
 print(f"\n{time.time() - t0:.0f}s · → {OUT}")
 _cnn_note = (f"**CNN 은 {CNN_EP} epoch 으로 줄여 돌렸다** (다른 방법은 {EPOCHS}) — "
              f"CNN 이 불리한 쪽으로 치우친 비교다."

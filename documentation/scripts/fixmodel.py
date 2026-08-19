@@ -3,13 +3,16 @@
 학습셋 = 고농도 Ratio_mix 34맵 + 저농도 tert-new 18맵(6조건).
 조건 단위 leave-one-out. (a) 스펙트럼만  (b) 스펙트럼 + 2137밴드비
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os, re, glob, math
 import numpy as np
 from scipy.optimize import nnls
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
+REPO = paths.REPO
 sys.path.insert(0, REPO)
 sys.path.insert(0, "/private/tmp/claude-501/-Users-seungki2-Documents-GitHub-Mixture-Classifier--claude-worktrees-ink-check-6maps-run-ad8cec/61a536fa-e12d-4dee-8d68-95377dbe80ce/scratchpad")
 import ink6, unmix
@@ -17,14 +20,14 @@ from real_data import load_map
 from sers_mixture import als_baseline
 
 names, WN, means = unmix._templates(
-    "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB/Pure", True, None)
+    paths.PURE, True, None)
 WN = np.asarray(WN, float)
 FP = (WN >= 500) & (WN <= 1800)
 P = unmix._l2(unmix._baseline_removed(means[:, FP], True))
 SUB = ["DQ", "TBZ", "THI"]
 SI = [names.index(s) for s in SUB]
 BAND = 2136.7
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+DB = paths.DB
 BAD = {"DQ500TBZ100", "DQ1000TBZ100"}          # 라벨 오류로 확인된 것
 
 
@@ -46,24 +49,13 @@ def feats(path, already_bl):
     return spec, math.log10(max(band / max(ana, 1e-9), 1e-6))
 
 
-def parse(nm):
-    toks = re.findall(r"(DQ|TBZ|TH[I1])(\d+)", nm)
-    c = {"DQ": 0.0, "TBZ": 0.0, "THI": 0.0}
-    for k, v in toks:
-        c["THI" if k.startswith("TH") else k] += float(v)
-    return np.array([c["DQ"], c["TBZ"], c["THI"]])
-
-
 rows = []                                                  # (cond_id, spec, scale, y)
-for p in sorted(glob.glob(f"{DB}/Ratio/Ratio_mix/*_corrected.csv")):
-    nm = os.path.basename(p).replace("_corrected.csv", "").replace("-corrected.csv", "")
-    if nm in BAD:
-        continue
-    C = parse(nm)
-    if C.sum() == 0:
-        continue
-    s, sc = feats(p, already_bl=True)
-    rows.append((f"hi:{nm}", s, sc, C / C.sum()))
+# 라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`).
+import mixtures as MX
+for _m in MX.catalogue(("high",)):
+    C = np.array(_m.conc, float)
+    s, sc = feats(_m.path, already_bl=True)
+    rows.append((f"hi:{_m.name}", s, sc, C / C.sum()))
 COMP = {1: (6, 6, 24), 2: (12, 12, 12), 3: (24, 6, 6),
         4: (6, 6, 6), 5: (24, 24, 24), 6: (12, 12, 48)}
 for n, C in COMP.items():

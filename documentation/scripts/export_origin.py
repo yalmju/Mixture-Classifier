@@ -9,6 +9,9 @@
 
   실행:  python3 -u export_origin.py [출력폴더]
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import os, re, sys, json, glob
 import numpy as np
 
@@ -17,8 +20,8 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, REPO)
 import grid_figs as GF
 
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-INTERP = os.environ.get("INTERP_DIR") or f"{DB}/260808_data interpret"   # 테스트용 우회
+DB = paths.DB
+INTERP = os.environ.get("INTERP_DIR") or f"{paths.INTERP}"   # 테스트용 우회
 OUT = sys.argv[1] if len(sys.argv) > 1 else f"{INTERP}/origin_data"
 SUB = ["DQ", "TBZ", "THI"]
 os.makedirs(OUT, exist_ok=True)
@@ -45,7 +48,7 @@ def need(path, name, note):
 # ------------------------------------------------------------------ 조성: 조건별 (삼각형·파이·격자)
 def load_retrain(path):
     rows, concs = [], []
-    for l in open(path):
+    for l in open(path, encoding="utf-8"):
         if not re.search(r"\|\s+[\d.]+% \|", l):
             continue
         p = [x.strip() for x in l.split("|")]
@@ -151,7 +154,7 @@ for tag, fn in (("clip-only", "conc38_signals_cliponly.json"),
     p = f"{HERE}/{fn}"
     if not os.path.exists(p):
         missing.append((fn, "신호값")); continue
-    d = json.load(open(p))
+    d = json.load(open(p, encoding="utf-8"))
     body = []
     for path, v in d.items():
         nm = os.path.basename(path).replace("_corrected.csv", "")

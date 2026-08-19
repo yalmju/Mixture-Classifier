@@ -24,7 +24,7 @@ SRC = f"{DESK}/retrain64_blanksips.txt"
 
 # ------------------------------------------------------------------ 조성 데이터
 def load_comp(grid_only=True):
-    L = [l for l in open(SRC) if re.search(r"\|\s+[\d.]+% \|", l)]
+    L = [l for l in open(SRC, encoding="utf-8") if re.search(r"\|\s+[\d.]+% \|", l)]
     C, T, P = [], [], []
     for l in L:
         p = [x.strip() for x in l.split("|")]

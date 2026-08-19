@@ -16,12 +16,15 @@
 
   실행:  python3 -u piemap_grid.py
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import os, sys, pickle
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
-sys.path.insert(0, f"{DB}/260808_data interpret/64conditions")
+DB = paths.DB
+sys.path.insert(0, f"{paths.INTERP}/64conditions")
 import labfig
 labfig.setup()
 import matplotlib.pyplot as plt

@@ -1,0 +1,8 @@
+{
+ "arm": "blank,ink,sips — sim_nuisance=True",
+ "n_maps": 114,
+ "epochs": 120,
+ "seed": 0,
+ "created": "2026-08-15 01:19",
+ "purpose": "잉크 지배 필름(글씨 맵)용 — 채택 blank,sips 는 BLK 헤드가 필름에서 0% (2026-08-15)"
+}

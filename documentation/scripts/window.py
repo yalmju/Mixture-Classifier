@@ -3,6 +3,9 @@
 아래 끝(LOD): 광자 노이즈인가, 템플릿 누출인가?  -> VIP 마커밴드로 재면 좁아지나?
 위  끝(매몰): 자기 포화인가, 경쟁자에 밀려서인가?
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, math
 import numpy as np
 from scipy.optimize import nnls
@@ -15,7 +18,7 @@ from sers_mixture import als_baseline
 names, wn_t, P = ink6.templates()
 SUB = ["DQ", "TBZ", "THI"]
 SI = [names.index(s) for s in SUB]
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB/Pure"
+DB = paths.PURE
 COMP = {1: (6, 6, 24), 2: (12, 12, 12), 3: (24, 6, 6),
         4: (6, 6, 6), 5: (24, 24, 24), 6: (12, 12, 48)}
 maps = sorted(COMP)

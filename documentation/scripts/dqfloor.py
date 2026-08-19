@@ -12,12 +12,15 @@
 
   실행:  python3 -u dqfloor.py
 """
+import os as _os, sys as _sys                 # paths 부트스트랩 — 기계마다 마운트가 다르다
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import paths
 import sys, os, re, glob, json, hashlib
 import numpy as np
 from scipy.optimize import nnls
 
-REPO = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/github/Mixture Classifier"
-DB = "/Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB"
+REPO = paths.REPO
+DB = paths.DB
 sys.path.insert(0, REPO)
 
 from unmix import _templates, _baseline_removed, _l2
@@ -52,24 +55,11 @@ def sigs(path):
     return list(a3) + list(a5)
 
 
-# ---- 저농도 맵 (retrain64 와 같은 규칙) ----
-LO, seen = {}, set()
+# ---- 저농도 맵 — 라벨은 `260814_mixture_final` 파일명 = 최종 µM (`mixtures.py`) ----
+import mixtures as MX
+LO = MX.groups(("grid",), replicates=("baseline",))     # 격자 폴더만 — 65맵
 
-
-def add(key, p):
-    h = hashlib.md5(open(p, "rb").read()).hexdigest()
-    if h not in seen:
-        seen.add(h); LO.setdefault(key, []).append(p)
-
-
-for p in sorted(glob.glob(f"{DB}/Ratio/Baseline260808/DQ*/DQ*_corrected.csv")):
-    if "DQ9-sus" in p:
-        continue
-    m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)", os.path.basename(p))
-    if m:
-        add(tuple(int(m.group(i)) // 3 for i in (1, 2, 3)), p)
-
-cache = json.load(open(CACHE)) if os.path.exists(CACHE) else {}
+cache = json.load(open(CACHE, encoding="utf-8")) if os.path.exists(CACHE) else {}
 todo = [(k, p) for k in sorted(LO) for p in LO[k] if p not in cache]
 for i, (k, p) in enumerate(todo, 1):
     print(f"  신호 {i}/{len(todo)}  {os.path.basename(p)}", flush=True)
