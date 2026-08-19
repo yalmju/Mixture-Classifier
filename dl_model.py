@@ -901,7 +901,13 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
             continue
         ckey = "r:" + ",".join(f"{v:.6f}" for v in vec)
         _w, cube, _m, _c = load_map(it[0])
-        for ya in _map_spectra(cube, mask, px_per_map):
+        # Honour the dataset's baseline flag, as train_model and apply_model do. This
+        # defaulted to True, so with baseline=False — references already corrected
+        # upstream, which is this dataset's setting — every map was ALS-corrected a
+        # second time and then fitted against templates that were not. It is the same
+        # double-correction apply_model was fixed for; measured here on DQ10-TB10-TH10,
+        # it cost NNLS 11.2 -> 14.2 %p and the VIP band 15.6 -> 18.0 %p.
+        for ya in _map_spectra(cube, mask, px_per_map, baseline_correct=baseline):
             X.append(_composition_features(ya)); Y.append(vec)
             gkey.append(ckey)                         # group = the CONDITION, not the map
     X = np.array(X, np.float32); Y = np.array(Y, np.float32)
@@ -976,9 +982,20 @@ def benchmark_summary(bench, cut_pp=None):
         cut is passed, and the cut must be DECLARED before looking at the results —
         picking it afterwards is cherry-picking (see HANDOFF 2026-08-19 §3).
     dev_by_k — {"pure"/"binary"/"ternary"/"mean": (mean %p, SE %p, n)} — the deviation
-        split by how many components the condition actually contains (the paper's
-        Binary/Ternary/Mean bars). "ternary" is k≥3; groups with no conditions are
-        absent; "mean" is over every condition, identical to mean_dev_pp.
+        split by how many components the condition actually contains. "ternary" is k≥3;
+        groups with no conditions are absent; "mean" is over every condition, identical
+        to mean_dev_pp.
+    rmse_pp — (mean, SE, n) of the per-condition root-mean-square component error, in
+        percentage points. Same units as the deviation but squared-weighted, so one badly
+        missed component costs more than three small slips. Report alongside, not instead:
+        deviation is the number the reproducibility floor is measured in.
+    logratio — (mean, SE, n) of the Aitchison (centred-log-ratio) distance, the standard
+        distance for compositional data — it compares the RATIOS themselves, so being 2x
+        off on a minor component costs exactly what being 2x off on the major one costs.
+        The %p metrics cannot see that: on DQ24-TB12-TH6, predicting THI six times too
+        low is 11.6 %p (inside a 15 %p cut) while halving DQ is 17.1 %p (outside), even
+        though the second is the smaller ratio error. Dimensionless; 0 = exact, and ~0.57
+        is what a single 2-fold miss costs on a ternary mixture.
     """
     subs = list(bench.get("subs", []))
     out = {}
@@ -1008,8 +1025,11 @@ def benchmark_summary(bench, cut_pp=None):
               (("pure", k == 1), ("binary", k == 2), ("ternary", k >= 3))
               if sel.any()}
         by["mean"] = _stat(dev)
+        rmse = np.sqrt(((Pd - T) ** 2).mean(axis=1)) * 100.0
+        from composition import aitchison_distance
+        lr = np.array([aitchison_distance(T[i], Pd[i]) for i in range(len(T))])
         entry = {"n": int(len(T)), "mean_dev_pp": float(dev.mean()), "recovery": rec,
-                 "dev_by_k": by}
+                 "dev_by_k": by, "rmse_pp": _stat(rmse), "logratio": _stat(lr)}
         if cut_pp is not None:
             entry["acc_at_cut"] = float((dev <= float(cut_pp)).mean()) if len(dev) else float("nan")
         out[m] = entry

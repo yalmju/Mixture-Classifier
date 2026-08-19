@@ -436,9 +436,12 @@ class ComposePanel(QWidget):
         # detection AUC. Hidden until a benchmark has run. Recovery is direction-aware
         # but over/under CANCEL in its mean, so it is shown next to the deviation, never
         # alone (HANDOFF 2026-08-19 §3).
-        self.bench_lbl2 = QLabel("Benchmark table — leave-one-out, same folds for every "
-                                 "method. Recovery = mean(pred/true)·100 over conditions "
-                                 "where the substance is present (true=0 excluded).")
+        self.bench_lbl2 = QLabel(
+            "Benchmark table — leave-one-out, same folds for every method. "
+            "Mean dev and RMSE are percentage points of composition; log-ratio distance "
+            "(Aitchison) compares the ratios themselves, so a 2-fold miss costs the same "
+            "on a minor component as on the major one (~0.57 per 2-fold on a ternary). "
+            "Recovery = mean(pred/true)·100 where the substance is present (true=0 excluded).")
         self.bench_lbl2.setObjectName("sub"); self.bench_lbl2.setWordWrap(True)
         self.bench_lbl2.setVisible(False)
         root.addWidget(self.bench_lbl2)
@@ -795,7 +798,7 @@ class ComposePanel(QWidget):
 
         # the benchmark table — same benchmark_summary the chart above and the CSV
         # export read, so screen and file cannot disagree
-        cols = (["mean dev (%p)"]
+        cols = (["mean dev (%p)", "RMSE (%p)", "log-ratio dist"]
                 + ([f"accuracy ≤{cut:g} %p"] if cut is not None else [])
                 + [f"{s} recovery %±SE" for s in subs] + ["detection AUC"])
         self.bench_table.setColumnCount(len(cols))
@@ -804,7 +807,12 @@ class ComposePanel(QWidget):
         for i, m in enumerate(methods):
             e = summ.get(m, {})
             self.bench_table.setVerticalHeaderItem(i, QTableWidgetItem(label[m]))
-            vals = [f"{e.get('mean_dev_pp', float('nan')):.1f}"]
+            def _ms(key, dec=1):
+                mu, se, _n = e.get(key, (float("nan"), float("nan"), 0))
+                return f"{mu:.{dec}f} ± {se:.{dec}f}" if se == se else f"{mu:.{dec}f}"
+
+            vals = [f"{e.get('mean_dev_pp', float('nan')):.1f}", _ms("rmse_pp"),
+                    _ms("logratio", 2)]
             if cut is not None:
                 vals.append(f"{e.get('acc_at_cut', float('nan')) * 100:.0f}%")
             for s in subs:
@@ -1262,7 +1270,8 @@ class ComposePanel(QWidget):
         # the by-component-count split is off the chart now, but stays in the file
         kgroups = [g for g in ("pure", "binary", "ternary")
                    if any(g in e.get("dev_by_k", {}) for e in summ.values())]
-        head = ["method", "mean_deviation_pp", "composition_error", "detection_auc"]
+        head = ["method", "mean_deviation_pp", "rmse_pp", "rmse_se",
+                "logratio_distance", "logratio_se", "composition_error", "detection_auc"]
         for g in kgroups:
             head += [f"deviation_pp_{g}", f"deviation_se_{g}", f"n_{g}"]
         for s in subs:
@@ -1272,7 +1281,10 @@ class ComposePanel(QWidget):
         mrows = []
         for m in bench:
             e = summ.get(m, {})
+            rm, rs, _ = e.get("rmse_pp", (float("nan"),) * 3)
+            lm, ls, _ = e.get("logratio", (float("nan"),) * 3)
             row = [m, f"{e.get('mean_dev_pp', float('nan')):.2f}",
+                   f"{rm:.2f}", f"{rs:.2f}", f"{lm:.4f}", f"{ls:.4f}",
                    f"{self._bench_err[m]:.4f}",
                    f"{self._bench_auc.get(m, float('nan')):.4f}"]
             for g in kgroups:
