@@ -975,6 +975,10 @@ def benchmark_summary(bench, cut_pp=None):
     acc_at_cut — fraction of conditions with deviation ≤ ``cut_pp``. Only computed when a
         cut is passed, and the cut must be DECLARED before looking at the results —
         picking it afterwards is cherry-picking (see HANDOFF 2026-08-19 §3).
+    dev_by_k — {"pure"/"binary"/"ternary"/"mean": (mean %p, SE %p, n)} — the deviation
+        split by how many components the condition actually contains (the paper's
+        Binary/Ternary/Mean bars). "ternary" is k≥3; groups with no conditions are
+        absent; "mean" is over every condition, identical to mean_dev_pp.
     """
     subs = list(bench.get("subs", []))
     out = {}
@@ -993,7 +997,19 @@ def benchmark_summary(bench, cut_pp=None):
                 rec[s] = (float(q.mean()), se, n)
             else:
                 rec[s] = (float("nan"), float("nan"), 0)
-        entry = {"n": int(len(T)), "mean_dev_pp": float(dev.mean()), "recovery": rec}
+
+        def _stat(d):
+            n = int(len(d))
+            se = float(d.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
+            return (float(d.mean()), se, n) if n else (float("nan"), float("nan"), 0)
+
+        k = (T > 0).sum(axis=1)
+        by = {lab: _stat(dev[sel]) for lab, sel in
+              (("pure", k == 1), ("binary", k == 2), ("ternary", k >= 3))
+              if sel.any()}
+        by["mean"] = _stat(dev)
+        entry = {"n": int(len(T)), "mean_dev_pp": float(dev.mean()), "recovery": rec,
+                 "dev_by_k": by}
         if cut_pp is not None:
             entry["acc_at_cut"] = float((dev <= float(cut_pp)).mean()) if len(dev) else float("nan")
         out[m] = entry

@@ -684,7 +684,6 @@ class ComposePanel(QWidget):
         self._err_title.setText("Method comparison — composition error, leave-one-out "
                                 "(lower = better)")
         self._roc_title.setText("Method comparison — detection ROC, leave-one-out")
-        ax = self.c_err.new_ax()                            # error bar chart per method
         errs, aucs = [], {}
         for m in methods:
             T = _np.asarray(bench[m]["true"], float); P = _np.asarray(bench[m]["pred"], float)
@@ -695,11 +694,33 @@ class ComposePanel(QWidget):
                     for i in range(len(T))]
             self._bench[m] = rows
             aucs[m] = self._roc(rows)
-        x = _np.arange(len(methods))
-        ax.bar(x, [e * 100 for e in errs], color=[TEAL if m == "mlp" else MUTE for m in methods],
-               edgecolor="white", alpha=0.9)
+
+        # summary FIRST — the error chart and the table below both read from it
+        from dl_model import benchmark_summary
+        cut = getattr(self, "_bench_cut_pending", None)
+        self._bench_cut = cut
+        summ = benchmark_summary(bench, cut)
+        self._bench_summary = summ
+
+        # the paper's benchmark figure: Binary / Ternary / Mean bars per method,
+        # SE error bars on the condition groups, grayscale so it exports print-ready.
+        # Pure conditions (single component) still count inside Mean and in the CSV.
+        ax = self.c_err.new_ax()
+        show = [("binary", "Binary", "#c9c9c9"), ("ternary", "Ternary", "#7a7a7a"),
+                ("mean", "Mean", "white")]
+        show = [g for g in show
+                if any(g[0] in summ.get(m, {}).get("dev_by_k", {}) for m in methods)]
+        x = _np.arange(len(methods)); bw = 0.8 / max(len(show), 1)
+        for gi, (key, glab, col) in enumerate(show):
+            vals = [summ.get(m, {}).get("dev_by_k", {}).get(
+                        key, (float("nan"), float("nan"), 0)) for m in methods]
+            ax.bar(x + (gi - (len(show) - 1) / 2) * bw, [v[0] for v in vals],
+                   bw * 0.92, yerr=[v[1] if v[1] == v[1] else 0.0 for v in vals],
+                   capsize=3, color=col, edgecolor=INK, linewidth=0.8,
+                   label=glab, error_kw=dict(lw=0.9))
         ax.set_xticks(x); ax.set_xticklabels([label[m] for m in methods], fontsize=8.5)
-        ax.set_ylabel("composition error (%)  — leave-one-out")
+        ax.set_ylabel("composition error (%p)  — leave-one-out")
+        ax.legend(fontsize=8, framealpha=0)
         self.c_err.fig.tight_layout(); self.c_err.draw_idle()
         axr = self.c_roc.new_ax()                           # ROC overlay
         axr.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0)
@@ -717,13 +738,8 @@ class ComposePanel(QWidget):
         self._bench_err = dict(zip(methods, errs))
         self._bench_auc = {m: aucs[m][2] for m in methods}
 
-        # the benchmark table — the numbers come from ONE place (benchmark_summary),
-        # shared with the CSV export so screen and file cannot disagree
-        from dl_model import benchmark_summary
-        cut = getattr(self, "_bench_cut_pending", None)
-        self._bench_cut = cut
-        summ = benchmark_summary(bench, cut)
-        self._bench_summary = summ
+        # the benchmark table — same benchmark_summary the chart above and the CSV
+        # export read, so screen and file cannot disagree
         cols = (["mean dev (%p)"]
                 + ([f"accuracy ≤{cut:g} %p"] if cut is not None else [])
                 + [f"{s} recovery %±SE" for s in subs] + ["detection AUC"])
@@ -1161,7 +1177,13 @@ class ComposePanel(QWidget):
                 summ = benchmark_summary(self._bench_raw, getattr(self, "_bench_cut", None))
             summ = summ or {}
             cut = getattr(self, "_bench_cut", None)
+            # which condition groups exist in this run (pure/binary/ternary) — the
+            # numbers behind the Binary/Ternary/Mean bars go out with the figure
+            kgroups = [g for g in ("pure", "binary", "ternary")
+                       if any(g in e.get("dev_by_k", {}) for e in summ.values())]
             head = ["method", "mean_deviation_pp", "composition_error", "detection_auc"]
+            for g in kgroups:
+                head += [f"deviation_pp_{g}", f"deviation_se_{g}", f"n_{g}"]
             for s in subs:
                 head += [f"recovery_pct_{s}", f"recovery_se_{s}", f"recovery_n_{s}"]
             if cut is not None:
@@ -1172,6 +1194,9 @@ class ComposePanel(QWidget):
                 row = [m, f"{e.get('mean_dev_pp', float('nan')):.2f}",
                        f"{self._bench_err[m]:.4f}",
                        f"{self._bench_auc.get(m, float('nan')):.4f}"]
+                for g in kgroups:
+                    mu, se, nn = e.get("dev_by_k", {}).get(g, (float("nan"), float("nan"), 0))
+                    row += [f"{mu:.2f}", f"{se:.2f}", str(nn)]
                 for s in subs:
                     mu, se, nn = e.get("recovery", {}).get(s, (float("nan"), float("nan"), 0))
                     row += [f"{mu:.2f}", f"{se:.2f}", str(nn)]
