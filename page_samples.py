@@ -249,18 +249,22 @@ class SamplingPage(QWidget):
                 except ValueError:
                     pass
             if len(ratio) >= 2:
-                if self.chk_mix_uM.isChecked():
-                    # µM comes from the FILENAME — the single source of truth
-                    # (260814_mixture_final doctrine). The old mix_amounts cache
-                    # drifted out of row order once and silently scrambled EVERY
-                    # concentration label (101/101 mismatched, the µM head trained
-                    # on another map's answer key); a per-row cache is never again
-                    # trusted for µM.
-                    nm = os.path.splitext(os.path.basename(self.mix_files[row]))[0]
-                    amt = parse_mixture_label(nm, self._mix_ref_names()) or {}
-                    if not amt:                        # non-standard filename only
-                        amt = (self.mix_amounts[row]
-                               if row < len(self.mix_amounts) else {}) or ratio
+                # µM comes from the FILENAME — the single source of truth
+                # (260814_mixture_final doctrine). The old mix_amounts cache
+                # drifted out of row order once and silently scrambled EVERY
+                # concentration label (101/101 mismatched, the µM head trained
+                # on another map's answer key); a per-row cache is never again
+                # trusted for µM. Nor is the µM checkbox allowed to VETO the
+                # filename: with it unticked a single save used to strip conc
+                # from all 102 entries (2026-08-19, an app instance with the box
+                # off rewrote mixtures.json µM-less) — the checkbox only decides
+                # whether the row CACHE may stand in for a non-standard filename.
+                nm = os.path.splitext(os.path.basename(self.mix_files[row]))[0]
+                amt = parse_mixture_label(nm, self._mix_ref_names()) or {}
+                if not amt and self.chk_mix_uM.isChecked():   # non-standard filename only
+                    amt = (self.mix_amounts[row]
+                           if row < len(self.mix_amounts) else {}) or ratio
+                if amt:
                     items.append((self.mix_files[row], ratio,
                                   {k: float(v) * 1e-6 for k, v in amt.items() if float(v) > 0}))
                 else:
