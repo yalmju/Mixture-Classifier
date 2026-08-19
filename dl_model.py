@@ -396,6 +396,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     def _norm_rows(p):
         p = np.clip(np.asarray(p, float), 0, None); return p / (p.sum(1, keepdims=True) + 1e-12)
     loss_curve = []
+    comp = None                       # torch composition head (mlp branch only)
     if method == "nnls":                       # classical baseline: nothing is trained
         from dl_quantify import surface_composition
         comp_store = {"method": "nnls"}
@@ -543,8 +544,23 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         # single pseudo-map and change what the head is trained to predict.
         gp = np.asarray(abs_paths, object)[hv]
         gcond = np.asarray(abs_conds, object)[hv]
-        from dl_quantify import surface_composition
-        Rabs = surface_composition(_composition_features(Xabs[hv], 'legacy_l2'), P)
+        # ratio input from the trained COMPOSITION HEAD (full spectrum), not the
+        # template projection: the projection reads any strong ~1580 band as DQ,
+        # and the µM head inherited that single-band misreading. Falls back to
+        # the projection for non-torch composition heads.
+        uM_input_mode = "nnls_ratio+intensity_quantiles_v1"
+        Rabs = None
+        if method == "mlp" and comp is not None:
+            from dl_quantify import predict_composition
+            feats_abs = np.stack([_composition_features(y) for y in Xabs[hv]])
+            pk = np.clip(np.asarray(predict_composition(comp, feats_abs), float), 0, None)
+            cols = [subs.index(s_) for s_ in conc_subs]
+            R_ = pk[:, cols]
+            Rabs = R_ / (R_.sum(axis=1, keepdims=True) + 1e-12)
+            uM_input_mode = "mlp_ratio+intensity_quantiles_v1"
+        if Rabs is None:
+            from dl_quantify import surface_composition
+            Rabs = surface_composition(_composition_features(Xabs[hv], 'legacy_l2'), P)
         Xctx = _concentration_context_features(Xabs[hv], gp, Rabs)
         target = (np.log10(np.clip(C[hv], 1e-8, None)) + 6.0).astype(np.float32)
 
@@ -615,7 +631,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         uM = {"kind": "map_pooled_pixel_concentration_v1",
               "state": {k: v.detach().numpy() for k, v in net.state_dict().items()},
               "mu": mu, "sd": sd, "subs": list(conc_subs), "pool": "median_log10",
-              "input_mode": "nnls_ratio+intensity_quantiles_v1", "hidden": (128, 32),
+              "input_mode": uM_input_mode, "hidden": (128, 32),
               "raw_n_feat": Xabs.shape[1], "ratio_n_feat": len(conc_subs),
               "ood_threshold": float(np.quantile(dist, 0.99)),
               "ranges_M": np.asarray(ranges, float), "train_loss": loss_curve_uM,
@@ -910,7 +926,16 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
     X = np.asarray(spectra, float)
     if X.shape[1] == len(wn):
         X = X[:, mask]
-    if u.get("input_mode") == "nnls_ratio+intensity_quantiles_v1":
+    if u.get("input_mode") == "mlp_ratio+intensity_quantiles_v1":
+        # the composition head's full-spectrum ratios — the same eyes that already
+        # call this pixel right — normalised over the µM head's substances
+        pk = np.clip(np.asarray(apply_model_pixels(model, wn, spectra), float), 0, None)
+        subs_all = list(model["subs"])
+        cols = [subs_all.index(s_) for s_ in usubs if s_ in subs_all]
+        R_ = pk[:, cols]
+        ratios = R_ / (R_.sum(axis=1, keepdims=True) + 1e-12)
+        X = _concentration_context_features(X, ratios=ratios)
+    elif u.get("input_mode") == "nnls_ratio+intensity_quantiles_v1":
         from dl_quantify import surface_composition
         ratios = surface_composition(_composition_features(X, "legacy_l2"), model["P"])
         X = _concentration_context_features(X, ratios=ratios)
@@ -932,7 +957,22 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
         for i in range(0, len(Xe), 512):
             out.append(net(torch.tensor(Xe[i:i + 512])).numpy())
     logv = np.vstack(out)
-    result = (10.0 ** np.clip(logv, -3.0, 6.0), list(usubs))
+    um = 10.0 ** np.clip(logv, -3.0, 6.0)
+    # ---- answer INSIDE the trained range, never outside it -------------------
+    # The head extrapolates freely, and on out-of-distribution input the weak
+    # binder's inversion runs to thousands of µM ("한정된 범위 내에서 답해야지").
+    # Predictions are clamped to each substance's training range; a clamped pixel
+    # is FLAGGED, so downstream medians can drop it and the export names it.
+    clamped = np.zeros_like(um, bool)
+    rngs = u.get("ranges_M")
+    if rngs is not None:
+        r_um = np.asarray(rngs, float) * 1e6               # (n_subs, 2) in µM
+        for k in range(min(len(usubs), len(r_um))):
+            lo_u, hi_u = r_um[k]
+            if np.isfinite(lo_u) and np.isfinite(hi_u) and hi_u > lo_u:
+                clamped[:, k] = (um[:, k] < lo_u) | (um[:, k] > hi_u)
+                um[:, k] = np.clip(um[:, k], lo_u, hi_u)
+    result = (um, list(usubs))
     if not return_meta:
         return result
     meta = {}
@@ -940,7 +980,7 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
         dist = np.sqrt(np.mean(Xe ** 2, axis=1))
         ood = dist > float(u.get("ood_threshold", np.inf))
         meta = {"feature_ood": ood,
-                "component_ood": np.repeat(ood[:, None], len(usubs), axis=1),
+                "component_ood": np.repeat(ood[:, None], len(usubs), axis=1) | clamped,
                 "ranges_M": u.get("ranges_M")}
     return (*result, meta)
 
