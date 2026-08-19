@@ -75,7 +75,7 @@ def _cnn(n_feat, n_comp):
 
 def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
                  n_components=8, n_trees=300, P_ref=None, rf_max_features=None,
-                 band_mask=None):
+                 band_mask=None, mcr_iter=6):
     """Fit ``method`` on (Xtr, Ytr) and return composition predictions for Xte, rows
     summing to 1. Shared by the full-data fit and each leave-one-out fold so both use
     exactly the same estimator."""
@@ -98,6 +98,36 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
         else:                                  # no usable bands → plain NNLS, honestly
             Pm = P_ref
         p = surface_composition(_composition_features(raw, "legacy_l2"), Pm)
+    elif method == "null":
+        # The floor: always answer with the mean composition of the TRAINING conditions.
+        # A method that cannot beat this has learned nothing from the spectrum. Honest by
+        # construction here — Ytr already excludes the held-out condition.
+        p = np.repeat(np.asarray(Ytr, float).mean(axis=0, keepdims=True),
+                      len(np.atleast_2d(Xte)), axis=0)
+    elif method == "nnls_rf":
+        # NNLS, then ONE response factor per substance (dl_quantify.fit_response_factors),
+        # fitted on the training conditions only. The control for the paper's claim: if
+        # three numbers close most of the NNLS-to-learned gap, that gap was response
+        # factors, not spectral learning.
+        from dl_quantify import (surface_composition, fit_response_factors,
+                                 apply_response_factors)
+        raw_tr = np.expm1(np.clip(Xtr, 0, None))
+        raw_te = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        s_tr = surface_composition(_composition_features(raw_tr, "legacy_l2"), P_ref)
+        r = fit_response_factors(s_tr, np.asarray(Ytr, float))
+        s_te = surface_composition(_composition_features(raw_te, "legacy_l2"), P_ref)
+        p = apply_response_factors(s_te, r)
+    elif method == "mcr":
+        # MCR-ALS refines the component SPECTRA from the data (seeded by the pure
+        # templates), then decomposes the held-out spectrum on the refined ones — the
+        # answer to "your templates are not the real surface spectra". Uses no labels at
+        # all, and refines on the training rows only, so nothing leaks.
+        from unmix import _mcr_als, _l2
+        from dl_quantify import surface_composition
+        raw_tr = np.expm1(np.clip(Xtr, 0, None))
+        raw_te = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        _C, S = _mcr_als(_l2(raw_tr), np.asarray(P_ref, float), n_iter=int(mcr_iter))
+        p = surface_composition(_l2(raw_te), S)
     elif method == "pls":
         from sklearn.cross_decomposition import PLSRegression
         nc = max(1, min(int(n_components), len(Xtr) - 1, Xtr.shape[1]))
@@ -878,17 +908,26 @@ def kfold_stability(data_dir, items, method="mlp", folds=5, progress=None, seed=
 
 
 def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
-                  methods=("band", "nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
+                  methods=("null", "band", "nnls", "nnls_rf", "mcr", "pls", "rf",
+                           "cnn", "mlp"), epochs=350, seed=0,
                   use_pretrain=True,
                   n_components=8, n_trees=300, px_per_map=0, rf_max_features=None,
-                  cnn_epochs=None, band_window=10.0):
+                  cnn_epochs=None, band_window=10.0, mcr_iter=6):
     """Leave-one-out comparison of the composition methods on the SAME mixtures — the
     honest counterpart to the train-set numbers. Maps are loaded once, then every method
     is refit per fold. Returns {method: {"true", "pred"}} plus "subs".
 
-    'band' is the VIP-band NNLS: the plain NNLS restricted to each compound's
-    least-cross-talk marker windows (± ``band_window`` cm⁻¹), exactly what the Validate
-    tab offers — included so the simplest defensible method is scored on the same folds."""
+    The ladder, cheapest rung first — the four training-free ones cost almost nothing and
+    each answers a different objection:
+      null     always the mean training composition — the floor every method must clear
+      band     NNLS on each compound's least-cross-talk marker windows (± ``band_window``
+               cm⁻¹), the Validate tab's decomposition
+      nnls     NNLS on the whole spectrum, the classical baseline
+      nnls_rf  NNLS + one response factor per substance, fitted on the training fold —
+               the control that asks how much of the learned gain is just that
+      mcr      MCR-ALS: refine the component spectra from the data, then decompose —
+               the answer to "your templates are not the real surface spectra"
+    then pls / rf / cnn / mlp, which are refit per fold."""
     from real_data import load_map
     from dl_quantify import simulate_mixtures, _ratio
     subs, wn, mask, P, lo, hi = _refs(data_dir, baseline, trim)
@@ -960,7 +999,8 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
             pred = _fit_predict(meth, X[tr], Y[tr], X[te], pre=pre, epochs=ep,
                                 seed=seed + i, n_components=n_components,
                                 n_trees=n_trees, P_ref=P,
-                                rf_max_features=rf_max_features, band_mask=band_mask)
+                                rf_max_features=rf_max_features, band_mask=band_mask,
+                                mcr_iter=mcr_iter)
             tv.append(Y[te[0]].tolist()); pv.append(np.asarray(pred, float).mean(0).tolist())
         out[meth] = {"true": tv, "pred": pv}
     return out

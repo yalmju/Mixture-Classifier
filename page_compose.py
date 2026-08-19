@@ -709,7 +709,7 @@ class ComposePanel(QWidget):
         # maps, not folds: repeats of one ratio are held out together (that is the point
         # of grouping), so the fold count is the number of distinct ratios and is only
         # known once the maps are loaded — the progress line reports it.
-        self.status.setText(f"● leave-one-out benchmark — {len(items)} maps × 6 methods, "
+        self.status.setText(f"● leave-one-out benchmark — {len(items)} maps × 9 methods, "
                             "one mean spectrum per map (pixel-level would need ~18 GB per "
                             "CNN fold)")
         self.status.setStyleSheet(f"color:{MUTE};")
@@ -729,8 +729,10 @@ class ComposePanel(QWidget):
         recovery %±SE per substance · detection AUC)."""
         import numpy as _np
         subs = list(bench.get("subs", []))
-        methods = [m for m in ("band", "nnls", "pls", "rf", "cnn", "mlp") if m in bench]
-        label = {"band": "VIP band", "nnls": "NNLS", "pls": "PLS", "rf": "RF",
+        methods = [m for m in ("null", "band", "nnls", "nnls_rf", "mcr", "pls", "rf",
+                               "cnn", "mlp") if m in bench]
+        label = {"null": "null", "band": "VIP band", "nnls": "NNLS",
+                 "nnls_rf": "NNLS+resp", "mcr": "MCR-ALS", "pls": "PLS", "rf": "RF",
                  "cnn": "1D-CNN", "mlp": "MLP"}
         self._bench = {}
         self._bench_raw = bench
