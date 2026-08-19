@@ -10,7 +10,7 @@ import numpy as np
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QSpinBox, QCheckBox, QLineEdit, QFileDialog, QDialog, QDialogButtonBox,
+    QSpinBox, QDoubleSpinBox, QCheckBox, QLineEdit, QFileDialog, QDialog, QDialogButtonBox,
 )
 
 from ui_common import *
@@ -300,7 +300,7 @@ def _band_height(bl, m, local_base=True):
 
 
 def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=None,
-                local_base=True):
+                local_base=True, fit_range=None):
     """Calibration from a marker band: B = PEAK HEIGHT within peak ± window — above
     the window's local base by default — Langmuir- or linear-fit per compound.
     ``peak`` is one wavenumber (same band for every compound) or a {compound:
@@ -344,16 +344,25 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
             B = B - float(sum(_band_height(blk_mean, m, local_base)
                               for m in masks)[0])
             B = np.clip(B, 0.0, None)
-        dense = np.geomspace(C.min(), C.max(), 200)
+        # optional FIT WINDOW ("10–100 µM linearity"): only in-window points shape
+        # the fit and the R²; every point stays on the plot, and the fitted line
+        # is drawn across the window only, so what was claimed is what is shown
+        Cf, Bf = C, B
+        if fit_range is not None:
+            _fl, _fh = fit_range
+            _in = (C >= _fl) & (C <= _fh)
+            if len(np.unique(C[_in])) >= 3:
+                Cf, Bf = C[_in], B[_in]
+        dense = np.geomspace(Cf.min(), Cf.max(), 200)
         if model == "linear":
-            slope, b0 = _linear_fit(C, B)
+            slope, b0 = _linear_fit(Cf, Bf)
             iso.append((C, B, dense, slope * dense + b0))
-            r2.append(_r2_lin_on_means(C, B, slope, b0))
+            r2.append(_r2_lin_on_means(Cf, Bf, slope, b0))
             K_fit.append(slope); gA_fit.append(b0)     # slope, intercept
         else:
-            gA, K = _langmuir_fit(C, B)
+            gA, K = _langmuir_fit(Cf, Bf)
             iso.append((C, B, dense, _langmuir_B(dense, gA, K)))
-            r2.append(_r2_on_means(C, B, gA, K))
+            r2.append(_r2_on_means(Cf, Bf, gA, K))
             K_fit.append(K); gA_fit.append(gA)
         bv = (sum(_band_height(blk, m, local_base) for m in masks)
               if blk is not None else None)
@@ -387,7 +396,8 @@ def _competition(names, K, gA):
 
 
 def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
-               model="langmuir", baseline=True, blank=None, local_base=True):
+               model="langmuir", baseline=True, blank=None, local_base=True,
+               fit_range=None):
     from calibration import _langmuir_B
     if cal is None:
         raise ValueError("load a calibration (a dilution-series folder or CSV) first.")
@@ -395,14 +405,24 @@ def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
                           baseline=baseline)
     if peak_map:
         r = _peak_quant(cal, peak_map, model=model, baseline=baseline, blank=blank,
-                        local_base=local_base)
+                        local_base=local_base, fit_range=fit_range)
         r["single_bench"] = bench
         return r
     if peak_wn and peak_wn > 0:
         r = _peak_quant(cal, peak_wn, model=model, baseline=baseline, blank=blank,
-                        local_base=local_base)
+                        local_base=local_base, fit_range=fit_range)
         r["single_bench"] = bench
         return r
+    if fit_range is not None:                    # whole-spectrum mode: filter series
+        _fl, _fh = fit_range
+        axis0, names0, dils0 = cal
+        dils0 = [(np.asarray(c, float)[(np.asarray(c, float) >= _fl)
+                                       & (np.asarray(c, float) <= _fh)],
+                  np.asarray(sp)[(np.asarray(c, float) >= _fl)
+                                 & (np.asarray(c, float) <= _fh)])
+                 for c, sp in dils0]
+        if all(len(np.unique(c)) >= 3 for c, _ in dils0):
+            cal = (axis0, names0, dils0)
     lab = _real_lab(cal, baseline=baseline)
     calib = calibrate(lab["dilutions"], lab["P"], lab["names"])
 
@@ -594,6 +614,22 @@ class QuantifyPage(QWidget):
             "0 = signal is the whole-fingerprint projection (robust). Set a "
             "wavenumber to calibrate on that single marker band's intensity instead.")
         ctl.addLayout(self.sp_peak)
+        frcol = QVBoxLayout(); frcol.setSpacing(2)
+        _fr = QLabel("fit window µM (0–0 = all)"); _fr.setObjectName("field")
+        frcol.addWidget(_fr)
+        _frrow = QHBoxLayout(); _frrow.setSpacing(4)
+        self.sp_fitlo = QDoubleSpinBox(); self.sp_fitlo.setDecimals(1)
+        self.sp_fitlo.setRange(0.0, 1e6); self.sp_fitlo.setFixedWidth(70)
+        self.sp_fithi = QDoubleSpinBox(); self.sp_fithi.setDecimals(1)
+        self.sp_fithi.setRange(0.0, 1e6); self.sp_fithi.setFixedWidth(70)
+        for _spw in (self.sp_fitlo, self.sp_fithi):
+            _spw.setToolTip("fit (and R²) only inside this concentration window — "
+                            "e.g. 10–100 with 'linear' ticked answers the classic "
+                            "linear-dynamic-range question. All points stay on the "
+                            "plot; the fitted line spans the window. LOD/LOQ keep "
+                            "using the full series.")
+            _frrow.addWidget(_spw)
+        frcol.addLayout(_frrow); ctl.addLayout(frcol)
         lcol = QVBoxLayout(); lcol.setSpacing(2)
         _ll = QLabel("fit"); _ll.setObjectName("field"); lcol.addWidget(_ll)
         self.chk_linear = QCheckBox("linear")
@@ -1105,6 +1141,11 @@ class QuantifyPage(QWidget):
                       model="linear" if self.chk_linear.isChecked() else "langmuir",
                       baseline=not self.chk_baselined.isChecked(),
                       local_base=self.chk_localbase.isChecked(),
+                      fit_range=((self.sp_fitlo.value() * 1e-6,
+                                  self.sp_fithi.value() * 1e-6)
+                                 if self.sp_fithi.value() > self.sp_fitlo.value() > 0
+                                 or (self.sp_fitlo.value() == 0
+                                     and self.sp_fithi.value() > 0) else None),
                       blank=self._load_blank())     # Samples BLK → blank-based LOD
         self.btn.setEnabled(False); self.btn.setText("Working…")
         start_worker(self, QuantWorker(params), done=self._apply, fail=self._error)
