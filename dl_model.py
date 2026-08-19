@@ -74,7 +74,8 @@ def _cnn(n_feat, n_comp):
 
 
 def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
-                 n_components=8, n_trees=300, P_ref=None, rf_max_features=None):
+                 n_components=8, n_trees=300, P_ref=None, rf_max_features=None,
+                 band_mask=None):
     """Fit ``method`` on (Xtr, Ytr) and return composition predictions for Xte, rows
     summing to 1. Shared by the full-data fit and each leave-one-out fold so both use
     exactly the same estimator."""
@@ -83,6 +84,20 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
         from dl_quantify import surface_composition
         raw = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
         p = surface_composition(_composition_features(raw, "legacy_l2"), P_ref)
+    elif method == "band":                     # VIP-band NNLS: no training either — the
+        # same NNLS, but fit only on each compound's least-cross-talk marker windows
+        # (``band_mask``, computed once by the caller from the pure templates). This is
+        # the Validate tab's VIP-band decomposition, scored on the benchmark's terms.
+        from dl_quantify import surface_composition
+        raw = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        if band_mask is not None and np.asarray(band_mask, bool).any():
+            bm = np.asarray(band_mask, bool)
+            raw = raw[:, bm]
+            Pm = np.asarray(P_ref, float)[:, bm]
+            Pm = Pm / (np.linalg.norm(Pm, axis=1, keepdims=True) + 1e-12)
+        else:                                  # no usable bands → plain NNLS, honestly
+            Pm = P_ref
+        p = surface_composition(_composition_features(raw, "legacy_l2"), Pm)
     elif method == "pls":
         from sklearn.cross_decomposition import PLSRegression
         nc = max(1, min(int(n_components), len(Xtr) - 1, Xtr.shape[1]))
@@ -863,13 +878,17 @@ def kfold_stability(data_dir, items, method="mlp", folds=5, progress=None, seed=
 
 
 def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
-                  methods=("nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
+                  methods=("band", "nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
                   use_pretrain=True,
                   n_components=8, n_trees=300, px_per_map=0, rf_max_features=None,
-                  cnn_epochs=None):
+                  cnn_epochs=None, band_window=10.0):
     """Leave-one-out comparison of the composition methods on the SAME mixtures — the
     honest counterpart to the train-set numbers. Maps are loaded once, then every method
-    is refit per fold. Returns {method: {"true", "pred"}} plus "subs"."""
+    is refit per fold. Returns {method: {"true", "pred"}} plus "subs".
+
+    'band' is the VIP-band NNLS: the plain NNLS restricted to each compound's
+    least-cross-talk marker windows (± ``band_window`` cm⁻¹), exactly what the Validate
+    tab offers — included so the simplest defensible method is scored on the same folds."""
     from real_data import load_map
     from dl_quantify import simulate_mixtures, _ratio
     subs, wn, mask, P, lo, hi = _refs(data_dir, baseline, trim)
@@ -908,6 +927,17 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
         except Exception:
             pre = None
 
+    band_mask = None
+    if "band" in methods:
+        # VIP marker windows come from the PURE templates only — identical in every
+        # fold (no leakage), so the mask is computed once, not per condition.
+        from unmix import vip_bands, _vip_fit_mask
+        axis = np.asarray(wn, float)[mask]
+        band_mask = _vip_fit_mask(axis, vip_bands(axis, P, subs),
+                                  float(band_window), len(subs))
+        if progress and band_mask is not None:
+            progress(f"VIP bands — fitting on {int(band_mask.sum())}/{len(axis)} points")
+
     out = {"subs": subs}
     for mi, meth in enumerate(methods):
         uniq = list(dict.fromkeys(gkey.tolist()))
@@ -924,9 +954,49 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
             pred = _fit_predict(meth, X[tr], Y[tr], X[te], pre=pre, epochs=ep,
                                 seed=seed + i, n_components=n_components,
                                 n_trees=n_trees, P_ref=P,
-                                rf_max_features=rf_max_features)
+                                rf_max_features=rf_max_features, band_mask=band_mask)
             tv.append(Y[te[0]].tolist()); pv.append(np.asarray(pred, float).mean(0).tolist())
         out[meth] = {"true": tv, "pred": pv}
+    return out
+
+
+def benchmark_summary(bench, cut_pp=None):
+    """The benchmark table's numbers, from a ``benchmark_loo`` result — computed in ONE
+    place so the UI table and the CSV export cannot drift apart. Returns
+    {method: {"n", "mean_dev_pp", "recovery", ["acc_at_cut"]}}.
+
+    mean_dev_pp — mean composition deviation in percentage points (%p):
+        0.5·Σ|pred−true|·100 per condition, averaged. The headline number; report it
+        NEXT TO the measured reproducibility floor rather than through an accuracy cut.
+    recovery — {substance: (mean %, SE %, n)} of pred/true·100 over the conditions where
+        the substance is actually present. true=0 conditions are excluded (recovery is
+        undefined there — detection is the ROC's job). Direction shows (over/under), but
+        over- and under-recovery CANCEL in the mean, so never read it without mean_dev_pp.
+    acc_at_cut — fraction of conditions with deviation ≤ ``cut_pp``. Only computed when a
+        cut is passed, and the cut must be DECLARED before looking at the results —
+        picking it afterwards is cherry-picking (see HANDOFF 2026-08-19 §3).
+    """
+    subs = list(bench.get("subs", []))
+    out = {}
+    for m, r in bench.items():
+        if not isinstance(r, dict) or "true" not in r:
+            continue
+        T = np.asarray(r["true"], float); Pd = np.asarray(r["pred"], float)
+        dev = 0.5 * np.abs(Pd - T).sum(1) * 100.0
+        rec = {}
+        for j, s in enumerate(subs):
+            pres = T[:, j] > 0
+            n = int(pres.sum())
+            if n:
+                q = Pd[pres, j] / T[pres, j] * 100.0
+                se = float(q.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
+                rec[s] = (float(q.mean()), se, n)
+            else:
+                rec[s] = (float("nan"), float("nan"), 0)
+        entry = {"n": int(len(T)), "mean_dev_pp": float(dev.mean()), "recovery": rec}
+        if cut_pp is not None:
+            entry["acc_at_cut"] = float((dev <= float(cut_pp)).mean()) if len(dev) else float("nan")
+        out[m] = entry
     return out
 
 

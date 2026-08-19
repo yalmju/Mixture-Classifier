@@ -207,9 +207,13 @@ class ComposePanel(QWidget):
         brow = QHBoxLayout(); brow.setSpacing(8)
         blbl = QLabel("1 · compare methods:"); blbl.setObjectName("field")
         self.bench_b = QPushButton("Benchmark (LOO)"); self.bench_b.setObjectName("ghost")
-        self.bench_b.setToolTip("score NNLS / PLS / RF / 1D-CNN / MLP on the same mixtures "
-                                "with leave-one-out — composition error and detection ROC. "
-                                "Tells you which method to train; saves no model.")
+        self.bench_b.setToolTip("score VIP band / NNLS / PLS / RF / 1D-CNN / MLP on the "
+                                "same mixtures with leave-one-out — mean deviation (%p), "
+                                "recovery %±SE per substance, detection ROC, and accuracy "
+                                "at the cut declared in advanced (if any). VIP band = NNLS "
+                                "restricted to each compound's marker windows, the simplest "
+                                "rung of the ladder. Tells you which method to train; "
+                                "saves no model.")
         self.bench_b.clicked.connect(self._benchmark)
         self.kfold_b = QPushButton("5-fold check"); self.kfold_b.setObjectName("ghost")
         self.kfold_b.setToolTip("repeat the held-out test over all 5 one-in-five splits for "
@@ -307,6 +311,21 @@ class ComposePanel(QWidget):
                                  "the honest comparison. Lower it only to get a run finished, "
                                  "and say so wherever the numbers are used: the CNN is then "
                                  "scored undertrained against the rest.")
+        # the accuracy cut is DECLARED here, before the run — picking it after seeing the
+        # results is cherry-picking (HANDOFF 2026-08-19 §3). Mean deviation (%p) and
+        # per-substance recovery are always reported regardless; the cut only adds an
+        # accuracy column. 15 %p ≈ reproducibility floor (11.6) + 3; set 0 for no cut.
+        self.sp_cut = QDoubleSpinBox(); self.sp_cut.setObjectName("field")
+        self.sp_cut.setRange(0.0, 50.0); self.sp_cut.setDecimals(1)
+        self.sp_cut.setSingleStep(0.5); self.sp_cut.setValue(15.0)
+        self.sp_cut.setPrefix("declared cut "); self.sp_cut.setSuffix(" %p")
+        self.sp_cut.setSpecialValueText("no accuracy cut")
+        self.sp_cut.setToolTip("Benchmark only: a condition counts as 'correct' when its "
+                               "composition deviation is within this many percentage "
+                               "points. DECLARE it before running — choosing a cut after "
+                               "seeing the results is cherry-picking. 15 %p ≈ the measured "
+                               "repeat-preparation floor (11.6 %p) + 3; set to 0 to report "
+                               "mean deviation and recovery only, with no cut at all.")
 
         # ---- physics pre-training. These were hardcoded off (use_pretrain=False, and
         # calib_path never set), so a model trained here could not be the one the
@@ -351,7 +370,7 @@ class ComposePanel(QWidget):
         _adv2 = QHBoxLayout(); _adv2.setSpacing(8)
         for w in (self.chk_equal_volume, self.chk_blank,
                   self.chk_pretrain, self.cmb_iso, self.chk_nuisance,
-                  self.cmb_rfmf, self.sp_cnnep):
+                  self.cmb_rfmf, self.sp_cnnep, self.sp_cut):
             _adv2.addWidget(w)
         _adv2.addStretch(1)
         adv.addLayout(_adv1); adv.addLayout(_adv2)
@@ -408,6 +427,25 @@ class ComposePanel(QWidget):
         self.table.setMaximumHeight(140)
         root.addWidget(self.table)
         self._toggle_table(True)
+
+        # the Benchmark table — one row per method: mean deviation (%p), accuracy at the
+        # declared cut (only when one was declared), recovery %±SE per substance,
+        # detection AUC. Hidden until a benchmark has run. Recovery is direction-aware
+        # but over/under CANCEL in its mean, so it is shown next to the deviation, never
+        # alone (HANDOFF 2026-08-19 §3).
+        self.bench_lbl2 = QLabel("Benchmark table — leave-one-out, same folds for every "
+                                 "method. Recovery = mean(pred/true)·100 over conditions "
+                                 "where the substance is present (true=0 excluded).")
+        self.bench_lbl2.setObjectName("sub"); self.bench_lbl2.setWordWrap(True)
+        self.bench_lbl2.setVisible(False)
+        root.addWidget(self.bench_lbl2)
+        self.bench_table = QTableWidget(0, 0)
+        self.bench_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.bench_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.bench_table.setMaximumHeight(220)
+        self.bench_table.setVisible(False)
+        root.addWidget(self.bench_table)
 
         plots = QHBoxLayout(); plots.setSpacing(12)
         lcard, llay = _card("Learning curve — training loss vs epoch (MLP / CNN)")
@@ -604,13 +642,18 @@ class ComposePanel(QWidget):
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _benchmark(self):
-        """Leave-one-out comparison of NNLS / PLS / RF / CNN / MLP on the same mixtures."""
+        """Leave-one-out comparison of VIP band / NNLS / PLS / RF / CNN / MLP on the same
+        mixtures."""
         items = self._items_cache
         if len(items) < 3:
             self.status.setText("prepare ≥3 known-ratio mixtures in the Samples tab first")
             self.status.setStyleSheet(f"color:{RED};"); return
         params = self._opts(); params.pop("method", None); params.pop("loo", None)
         params["items"] = items; params["_benchmark"] = True
+        # the accuracy cut is frozen NOW, before any result exists — changing the spinbox
+        # afterwards must not re-score a finished run
+        v = float(self.sp_cut.value())
+        self._bench_cut_pending = v if v > 0 else None
         self.train_b.setEnabled(False); self.bench_b.setEnabled(False)
         self.bench_b.setText("Benchmarking…")
         self._cancelled = False; self.cancel_b.setVisible(True)
@@ -627,12 +670,16 @@ class ComposePanel(QWidget):
         self.pbar.setVisible(False); self.cancel_b.setVisible(False)
 
     def _done_bench(self, bench):
-        """Plot the LOO comparison: composition error per method + overlaid detection ROC."""
+        """Plot the LOO comparison: composition error per method + overlaid detection ROC,
+        and fill the benchmark table (mean deviation %p · accuracy at the declared cut ·
+        recovery %±SE per substance · detection AUC)."""
         import numpy as _np
         subs = list(bench.get("subs", []))
-        methods = [m for m in ("nnls", "pls", "rf", "cnn", "mlp") if m in bench]
-        label = {"nnls": "NNLS", "pls": "PLS", "rf": "RF", "cnn": "1D-CNN", "mlp": "MLP"}
+        methods = [m for m in ("band", "nnls", "pls", "rf", "cnn", "mlp") if m in bench]
+        label = {"band": "VIP band", "nnls": "NNLS", "pls": "PLS", "rf": "RF",
+                 "cnn": "1D-CNN", "mlp": "MLP"}
         self._bench = {}
+        self._bench_raw = bench
         self._bench_subs = subs
         self._err_title.setText("Method comparison — composition error, leave-one-out "
                                 "(lower = better)")
@@ -669,10 +716,43 @@ class ComposePanel(QWidget):
         self.c_roc.fig.tight_layout(); self.c_roc.draw_idle()
         self._bench_err = dict(zip(methods, errs))
         self._bench_auc = {m: aucs[m][2] for m in methods}
+
+        # the benchmark table — the numbers come from ONE place (benchmark_summary),
+        # shared with the CSV export so screen and file cannot disagree
+        from dl_model import benchmark_summary
+        cut = getattr(self, "_bench_cut_pending", None)
+        self._bench_cut = cut
+        summ = benchmark_summary(bench, cut)
+        self._bench_summary = summ
+        cols = (["mean dev (%p)"]
+                + ([f"accuracy ≤{cut:g} %p"] if cut is not None else [])
+                + [f"{s} recovery %±SE" for s in subs] + ["detection AUC"])
+        self.bench_table.setColumnCount(len(cols))
+        self.bench_table.setHorizontalHeaderLabels(cols)
+        self.bench_table.setRowCount(len(methods))
+        for i, m in enumerate(methods):
+            e = summ.get(m, {})
+            self.bench_table.setVerticalHeaderItem(i, QTableWidgetItem(label[m]))
+            vals = [f"{e.get('mean_dev_pp', float('nan')):.1f}"]
+            if cut is not None:
+                vals.append(f"{e.get('acc_at_cut', float('nan')) * 100:.0f}%")
+            for s in subs:
+                mu, se, n = e.get("recovery", {}).get(s, (float("nan"), float("nan"), 0))
+                vals.append("—" if not n else
+                            (f"{mu:.0f}±{se:.0f}% (n={n})" if se == se
+                             else f"{mu:.0f}% (n={n})"))
+            vals.append(f"{self._bench_auc.get(m, float('nan')):.3f}")
+            for c, v in enumerate(vals):
+                self.bench_table.setItem(i, c, QTableWidgetItem(v))
+        self.bench_lbl2.setVisible(True)
+        self.bench_table.setVisible(True)
+
         self.export_b.setEnabled(True)
         best = methods[int(_np.argmin(errs))]
         self.status.setText("leave-one-out benchmark — " + " · ".join(
-            f"{label[m]} {e:.0%}" for m, e in zip(methods, errs)) + f"   → best: {label[best]}")
+            f"{label[m]} {e:.0%}" for m, e in zip(methods, errs)) + f"   → best: {label[best]}"
+            + (f"   (accuracy cut declared: ≤{cut:g} %p)" if cut is not None
+               else "   (no accuracy cut — deviation only)"))
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _cancel(self):
@@ -1072,10 +1152,33 @@ class ComposePanel(QWidget):
             return
         n = 0
         if bench:
-            write_csv(os.path.join(d, "benchmark_metrics.csv"),
-                      ["method", "composition_error", "detection_auc"],
-                      [[m, f"{self._bench_err[m]:.4f}",
-                        f"{self._bench_auc.get(m, float('nan')):.4f}"] for m in bench])
+            # the paper's benchmark table: mean deviation (%p) + per-substance recovery
+            # %±SE always; accuracy only when a cut was DECLARED before the run. Same
+            # numbers as the on-screen table — both come from dl_model.benchmark_summary.
+            summ = getattr(self, "_bench_summary", None)
+            if summ is None and getattr(self, "_bench_raw", None):
+                from dl_model import benchmark_summary
+                summ = benchmark_summary(self._bench_raw, getattr(self, "_bench_cut", None))
+            summ = summ or {}
+            cut = getattr(self, "_bench_cut", None)
+            head = ["method", "mean_deviation_pp", "composition_error", "detection_auc"]
+            for s in subs:
+                head += [f"recovery_pct_{s}", f"recovery_se_{s}", f"recovery_n_{s}"]
+            if cut is not None:
+                head.append(f"accuracy_within_{cut:g}pp")
+            mrows = []
+            for m in bench:
+                e = summ.get(m, {})
+                row = [m, f"{e.get('mean_dev_pp', float('nan')):.2f}",
+                       f"{self._bench_err[m]:.4f}",
+                       f"{self._bench_auc.get(m, float('nan')):.4f}"]
+                for s in subs:
+                    mu, se, nn = e.get("recovery", {}).get(s, (float("nan"), float("nan"), 0))
+                    row += [f"{mu:.2f}", f"{se:.2f}", str(nn)]
+                if cut is not None:
+                    row.append(f"{e.get('acc_at_cut', float('nan')):.4f}")
+                mrows.append(row)
+            write_csv(os.path.join(d, "benchmark_metrics.csv"), head, mrows)
             rows_out = []
             for m, rws in bench.items():
                 for nm, tv, pv in rws:
