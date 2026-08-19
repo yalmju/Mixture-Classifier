@@ -681,6 +681,7 @@ class ComposePanel(QWidget):
         self._bench = {}
         self._bench_raw = bench
         self._bench_subs = subs
+        self._canvas_shows = "bench"        # c_err / c_roc now hold the method comparison
         self._err_title.setText("Method comparison — composition error, leave-one-out "
                                 "(lower = better)")
         self._roc_title.setText("Method comparison — detection ROC, leave-one-out")
@@ -802,6 +803,7 @@ class ComposePanel(QWidget):
                                 "(lower = better)")
         self._roc_title.setText("Detection ROC — is each substance present? "
                                 "(threshold the predicted fraction)")
+        self._canvas_shows = "model"       # c_err / c_roc go back to the model's plots
         try:
             self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
         except Exception:
@@ -1005,12 +1007,21 @@ class ComposePanel(QWidget):
                   ["presence_threshold", "0.05", "true fraction > threshold"],
                   ["roc_auc_micro", f"{auc_v:.6f}" if auc_v == auc_v else "",
                    "pooled component presence; not composition accuracy"]])
-        n = _save_figs([("composition_learning_curve", self.c_loss),
-                        ("composition_triangle", self.c_tri),
-                        ("composition_parity", self.c_parity),
-                        ("composition_error", self.c_err),
-                        ("composition_roc", self.c_roc)], d)
+        # c_err / c_roc are SHARED with the benchmark: whichever ran last is on screen.
+        # Name them for what they actually show, or a benchmark chart would leave here
+        # as "composition_error.png" and be read as the model's per-substance error.
+        showing_bench = getattr(self, "_canvas_shows", "model") == "bench"
+        figs = [("composition_learning_curve", self.c_loss),
+                ("composition_triangle", self.c_tri),
+                ("composition_parity", self.c_parity)]
+        figs += ([("benchmark_error", self.c_err), ("benchmark_roc", self.c_roc)]
+                 if showing_bench else
+                 [("composition_error", self.c_err), ("composition_roc", self.c_roc)])
+        n = _save_figs(figs, d)
         n += self._export_grid_figs(d, rows, subs)
+        # a benchmark run in this session leaves with the model, not silently dropped
+        if getattr(self, "_bench", None):
+            self._write_bench_csvs(d, self._result_subs())
         # ONE ternary only — the on-screen `composition_triangle` above. The extra
         # ternaries this used to write (vs-NNLS side-by-side, accuracy-shaded, RGB)
         # said the same thing three more times and buried the rest of the export.
@@ -1149,6 +1160,69 @@ class ComposePanel(QWidget):
                             f"({len(entries)} maps)")
         self.status.setStyleSheet(f"color:{MUTE};")
 
+    def _write_bench_csvs(self, d, subs):
+        """The benchmark table + its raw predictions and ROC points, into folder ``d``.
+        Shared by both export paths so a benchmark leaves with its numbers whether or
+        not a model was also trained this session. Metrics come from
+        dl_model.benchmark_summary — the same call the on-screen table reads."""
+        from io_utils import write_csv
+        bench = getattr(self, "_bench", None)
+        if not bench:
+            return
+        # mean deviation (%p) + per-substance recovery %±SE always; accuracy only when a
+        # cut was DECLARED before the run.
+        summ = getattr(self, "_bench_summary", None)
+        if summ is None and getattr(self, "_bench_raw", None):
+            from dl_model import benchmark_summary
+            summ = benchmark_summary(self._bench_raw, getattr(self, "_bench_cut", None))
+        summ = summ or {}
+        cut = getattr(self, "_bench_cut", None)
+        # the by-component-count split is off the chart now, but stays in the file
+        kgroups = [g for g in ("pure", "binary", "ternary")
+                   if any(g in e.get("dev_by_k", {}) for e in summ.values())]
+        head = ["method", "mean_deviation_pp", "composition_error", "detection_auc"]
+        for g in kgroups:
+            head += [f"deviation_pp_{g}", f"deviation_se_{g}", f"n_{g}"]
+        for s in subs:
+            head += [f"recovery_pct_{s}", f"recovery_se_{s}", f"recovery_n_{s}"]
+        if cut is not None:
+            head.append(f"accuracy_within_{cut:g}pp")
+        mrows = []
+        for m in bench:
+            e = summ.get(m, {})
+            row = [m, f"{e.get('mean_dev_pp', float('nan')):.2f}",
+                   f"{self._bench_err[m]:.4f}",
+                   f"{self._bench_auc.get(m, float('nan')):.4f}"]
+            for g in kgroups:
+                mu, se, nn = e.get("dev_by_k", {}).get(g, (float("nan"), float("nan"), 0))
+                row += [f"{mu:.2f}", f"{se:.2f}", str(nn)]
+            for s in subs:
+                mu, se, nn = e.get("recovery", {}).get(s, (float("nan"), float("nan"), 0))
+                row += [f"{mu:.2f}", f"{se:.2f}", str(nn)]
+            if cut is not None:
+                row.append(f"{e.get('acc_at_cut', float('nan')):.4f}")
+            mrows.append(row)
+        write_csv(os.path.join(d, "benchmark_metrics.csv"), head, mrows)
+        rows_out = []
+        for m, rws in bench.items():
+            for nm, tv, pv in rws:
+                rows_out.append([m, nm] + [f"{v:.4f}" for v in tv]
+                                + [f"{v:.4f}" for v in pv])
+        write_csv(os.path.join(d, "benchmark_predictions.csv"),
+                  ["method", "mixture"] + [f"true_{s}" for s in subs]
+                  + [f"pred_{s}" for s in subs], rows_out)
+        # the ROC panel was the one figure leaving without its numbers — only the pooled
+        # AUC was written, and a curve cannot be redrawn from a single scalar.
+        curve = []
+        for m, rws in bench.items():
+            fpr, tpr, _a = self._roc(rws)
+            if fpr is None:
+                continue
+            curve += [[m, f"{a:.5f}", f"{b:.5f}"] for a, b in zip(fpr, tpr)]
+        if curve:
+            write_csv(os.path.join(d, "benchmark_roc_curves.csv"),
+                      ["method", "fpr", "tpr"], curve)
+
     def _export_eval_only(self):
         """Save a Benchmark / 5-fold result when no model has been trained in this session."""
         import numpy as _np
@@ -1163,61 +1237,7 @@ class ComposePanel(QWidget):
             return
         n = 0
         if bench:
-            # the paper's benchmark table: mean deviation (%p) + per-substance recovery
-            # %±SE always; accuracy only when a cut was DECLARED before the run. Same
-            # numbers as the on-screen table — both come from dl_model.benchmark_summary.
-            summ = getattr(self, "_bench_summary", None)
-            if summ is None and getattr(self, "_bench_raw", None):
-                from dl_model import benchmark_summary
-                summ = benchmark_summary(self._bench_raw, getattr(self, "_bench_cut", None))
-            summ = summ or {}
-            cut = getattr(self, "_bench_cut", None)
-            # which condition groups exist in this run (pure/binary/ternary) — the
-            # numbers behind the Binary/Ternary/Mean bars go out with the figure
-            kgroups = [g for g in ("pure", "binary", "ternary")
-                       if any(g in e.get("dev_by_k", {}) for e in summ.values())]
-            head = ["method", "mean_deviation_pp", "composition_error", "detection_auc"]
-            for g in kgroups:
-                head += [f"deviation_pp_{g}", f"deviation_se_{g}", f"n_{g}"]
-            for s in subs:
-                head += [f"recovery_pct_{s}", f"recovery_se_{s}", f"recovery_n_{s}"]
-            if cut is not None:
-                head.append(f"accuracy_within_{cut:g}pp")
-            mrows = []
-            for m in bench:
-                e = summ.get(m, {})
-                row = [m, f"{e.get('mean_dev_pp', float('nan')):.2f}",
-                       f"{self._bench_err[m]:.4f}",
-                       f"{self._bench_auc.get(m, float('nan')):.4f}"]
-                for g in kgroups:
-                    mu, se, nn = e.get("dev_by_k", {}).get(g, (float("nan"), float("nan"), 0))
-                    row += [f"{mu:.2f}", f"{se:.2f}", str(nn)]
-                for s in subs:
-                    mu, se, nn = e.get("recovery", {}).get(s, (float("nan"), float("nan"), 0))
-                    row += [f"{mu:.2f}", f"{se:.2f}", str(nn)]
-                if cut is not None:
-                    row.append(f"{e.get('acc_at_cut', float('nan')):.4f}")
-                mrows.append(row)
-            write_csv(os.path.join(d, "benchmark_metrics.csv"), head, mrows)
-            rows_out = []
-            for m, rws in bench.items():
-                for nm, tv, pv in rws:
-                    rows_out.append([m, nm] + [f"{v:.4f}" for v in tv]
-                                    + [f"{v:.4f}" for v in pv])
-            write_csv(os.path.join(d, "benchmark_predictions.csv"),
-                      ["method", "mixture"] + [f"true_{s}" for s in subs]
-                      + [f"pred_{s}" for s in subs], rows_out)
-            # the ROC panel was the one figure leaving without its numbers — only the
-            # pooled AUC was written, and a curve cannot be redrawn from a single scalar.
-            curve = []
-            for m, rws in bench.items():
-                fpr, tpr, _a = self._roc(rws)
-                if fpr is None:
-                    continue
-                curve += [[m, f"{a:.5f}", f"{b:.5f}"] for a, b in zip(fpr, tpr)]
-            if curve:
-                write_csv(os.path.join(d, "benchmark_roc_curves.csv"),
-                          ["method", "fpr", "tpr"], curve)
+            self._write_bench_csvs(d, subs)
             n += _save_figs([("benchmark_error", self.c_err),
                              ("benchmark_roc", self.c_roc)], d)
         if kf:
@@ -1260,6 +1280,7 @@ class ComposePanel(QWidget):
             rows.append((f"mix {i + 1}", tv, pv))
         if rows:
             self._rows = rows
+            self._canvas_shows = "model"
             self._plot_triangle(rows); self._plot_parity(rows)
             self._plot_error(rows); self._plot_roc(rows)
             self._plot_loss(model.get("train_eval", {}).get("loss", []))
