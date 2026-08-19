@@ -292,6 +292,7 @@ class RealDataPage(QWidget):
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
         lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(300)
+        self.c_maps.setMaximumHeight(460)
         # one min/max pair PER band panel (rebuilt with the band row) — the card-wide
         # pair could not stretch a weak channel without flattening a strong one
         self.scalerow = QHBoxLayout(); self.scalerow.setSpacing(6)
@@ -309,6 +310,7 @@ class RealDataPage(QWidget):
             "probabilities. ALL panels share ONE scale (0–1 for probabilities, "
             "0–P99 for abundances) so brightness compares across components")
         lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(300)
+        self.c_abund.setMaximumHeight(460)
         lay_ab.addLayout(self._scale_row("abund", 1.0))
         self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=True, key="abund")
         # band | abundance half-and-half on one row — raw evidence beside the
@@ -332,8 +334,10 @@ class RealDataPage(QWidget):
         self.c_pie = Canvas(); self.c_comp = Canvas()
         pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
         play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(380)
+        self.c_pie.setMaximumHeight(500)
         ccard, clay = _card("Composition (overall)")
         clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(300)
+        self.c_comp.setMaximumHeight(360)
         prow = QHBoxLayout(); prow.setSpacing(12)
         prow.addWidget(pcard, 3); prow.addWidget(ccard, 1)
         prow_w = QWidget(); prow_w.setLayout(prow); body.addWidget(prow_w)
@@ -370,6 +374,7 @@ class RealDataPage(QWidget):
         vrow.addStretch(1)
         lay_conc.addLayout(vrow)
         lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(340)
+        self.c_conc.setMaximumHeight(460)
         body.addWidget(self.card_conc)
         self.card_conc.setVisible(False)
 
