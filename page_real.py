@@ -364,24 +364,9 @@ class RealDataPage(QWidget):
         self.true_edit.editingFinished.connect(
             lambda: self._plot_conc(self._res) if self._res is not None else None)
         vrow.addWidget(_tl); vrow.addWidget(self.true_edit)
-        # the VALIDATED quantification window, not the label range: held-out
-        # recovery was demonstrated on the 3-24 uM grid, so µM claims outside the
-        # window the user declares here are OOD no matter what the head says
-        _rl2 = QLabel("report range µM (lo–hi) — 0 = model's"); _rl2.setObjectName("field")
-        self.rep_lo = QDoubleSpinBox(); self.rep_lo.setDecimals(1)
-        self.rep_lo.setRange(0.0, 1e6); self.rep_lo.setValue(0.0)
-        self.rep_lo.setFixedWidth(70)
-        self.rep_hi = QDoubleSpinBox(); self.rep_hi.setDecimals(1)
-        self.rep_hi.setRange(0.0, 1e6); self.rep_hi.setValue(0.0)
-        self.rep_hi.setFixedWidth(70)
-        for _sp in (self.rep_lo, self.rep_hi):
-            _sp.setToolTip("the range where held-out recovery was actually "
-                           "demonstrated (e.g. 3–24 for the grid). Pixels outside "
-                           "leave the medians and are counted as OOD. 0–0 falls "
-                           "back to the model's own training-label range.")
-            _sp.valueChanged.connect(
-                lambda _=0: self._plot_conc(self._res) if self._res is not None else None)
-        vrow.addWidget(_rl2); vrow.addWidget(self.rep_lo); vrow.addWidget(self.rep_hi)
+        # the reportable window is NOT typed here — the model file carries it
+        # (validated_ranges_M: levels recovered within 2-fold on a held-out split),
+        # and the summary shows which window it used
         vrow.addStretch(1)
         lay_conc.addLayout(vrow)
         lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(340)
@@ -1448,11 +1433,9 @@ class RealDataPage(QWidget):
         if rngs is not None:
             _h = np.asarray(rngs, float)[:, 1] * 1e6
             hi_um = np.where(np.isfinite(_h), _h, np.inf)
-        # user-declared VALIDATED window beats the label range
-        _ulo, _uhi = float(self.rep_lo.value()), float(self.rep_hi.value())
-        if _uhi > _ulo > 0 or (_ulo == 0 and _uhi > 0):
-            hi_um = np.full(len(nb), _uhi)
-            lo_um = np.full(len(nb), _ulo) if _ulo > 0 else None
+        if rngs is not None:                    # validated lo bound counts too
+            _l = np.asarray(rngs, float)[:, 0] * 1e6
+            lo_um = np.where(np.isfinite(_l), _l, 0.0)
         vmask = hit[:, None] & np.isfinite(um_all) & (um_all > 0)
         vals = um_all[vmask]
         vmax = float(np.quantile(vals, 0.90)) if vals.size else 1.0
@@ -1539,8 +1522,13 @@ class RealDataPage(QWidget):
                              (xs[i], 0), xytext=(0, 8), textcoords="offset points",
                              ha="center", fontsize=8, color=RED)
         axb.set_xticks(xs); axb.set_xticklabels(nb, fontsize=8)
+        _wtxt = ""
+        if hi_um is not None and np.all(np.isfinite(hi_um)):
+            _lo0 = lo_um if lo_um is not None else np.zeros(len(nb))
+            _wtxt = " · window " + "/".join(
+                f"{_lo0[i]:.3g}–{hi_um[i]:.3g}" for i in range(len(nb)))
         axb.set_ylabel("median µM (in-range hit px, IQR)"
-                       + (f" · {vol:g} µL" if vol > 0 else ""), fontsize=8)
+                       + (f" · {vol:g} µL" if vol > 0 else "") + _wtxt, fontsize=7)
         axb.tick_params(labelsize=8)
         axb.set_ylim(bottom=0)
         self._exp_conc.append(("uM_summary_bars", axb, None))

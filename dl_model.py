@@ -641,6 +641,60 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
               "selection_level": "condition",
               "n_maps": len(dict.fromkeys(gp.tolist())), "n_pixels": len(hv)}
 
+        # ---- the VALIDATED window, derived from the file itself -----------------
+        # One condition-grouped 20% holdout of the µM head (cheap - one extra fit,
+        # not the ~100x LOO): a concentration level counts as validated for a
+        # substance when its held-out maps recover within 2-fold at that level.
+        # Real reports inside this window automatically; nothing is typed by hand.
+        try:
+            v_tr, v_va = _group_validation_indices(gcond, seed=seed + 31)
+            if len(v_va) and len(v_tr) >= 3:
+                if progress:
+                    progress("validating the reportable window (20% held-out)")
+                vtrain = _concentration_context_features(Xabs[hv][v_tr], gp[v_tr], Rabs[v_tr])
+                vmu_ = vtrain.mean(0); vsd_ = vtrain.std(0) + 1e-8
+                vX = torch.tensor(((vtrain - vmu_) / vsd_).astype(np.float32))
+                vY = torch.tensor((np.log10(np.clip(C[hv][v_tr], 1e-8, None)) + 6.0
+                                   ).astype(np.float32))
+                torch.manual_seed(seed + 31); vnet = make_conc_net()
+                vop = torch.optim.Adam(vnet.parameters(), lr=1e-3, weight_decay=3e-3)
+                for _ in range(selected_uM_epochs):
+                    vnet.train(); vop.zero_grad()
+                    vl = pooled_loss(vnet(vX), vY, gp[v_tr]); vl.backward(); vop.step()
+                vnet.eval()
+                vtest = _concentration_context_features(Xabs[hv][v_va], ratios=Rabs[v_va])
+                with torch.no_grad():
+                    vlog = vnet(torch.tensor(((vtest - vmu_) / vsd_
+                                              ).astype(np.float32))).numpy()
+                vgp = gp[v_va]
+                lv_err = {}                       # (subs j, level µM) -> [fold errors]
+                for mp in dict.fromkeys(vgp.tolist()):
+                    sel = np.where(vgp == mp)[0]
+                    pred = 10.0 ** np.clip(np.median(vlog[sel], axis=0), -3.0, 6.0)
+                    true = C[hv][v_va[sel[0]]] * 1e6
+                    for j in range(len(conc_subs)):
+                        if true[j] > 0 and np.isfinite(pred[j]) and pred[j] > 0:
+                            lv_err.setdefault((j, round(float(true[j]), 4)),
+                                              []).append(abs(np.log10(pred[j] / true[j])))
+                vr = np.full((len(conc_subs), 2), np.nan)
+                for j in range(len(conc_subs)):
+                    good = [lvl for (jj, lvl), es in lv_err.items()
+                            if jj == j and 10.0 ** float(np.median(es)) <= 2.0]
+                    if len(good) >= 2:
+                        vr[j] = [min(good) * 1e-6, max(good) * 1e-6]
+                uM["validated_ranges_M"] = vr
+                uM["validated_note"] = ("levels recovered within 2-fold on a 20% "
+                                        "condition-grouped holdout")
+                if progress:
+                    _txt = " · ".join(
+                        f"{conc_subs[j]} {vr[j][0]*1e6:.3g}-{vr[j][1]*1e6:.3g}uM"
+                        if np.isfinite(vr[j]).all() else f"{conc_subs[j]} n/a"
+                        for j in range(len(conc_subs)))
+                    progress("validated window: " + _txt)
+        except Exception as _e:
+            if progress:
+                progress(f"validated-window check skipped ({_e})")
+
         # Concentration validation follows the same leave-one-CONDITION-out boundary as
         # composition. Each held-out map is pooled from its pixel predictions.
         if loo:
@@ -979,9 +1033,15 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
     if u.get("kind") == "map_pooled_pixel_concentration_v1":
         dist = np.sqrt(np.mean(Xe ** 2, axis=1))
         ood = dist > float(u.get("ood_threshold", np.inf))
+        rngs_out = u.get("ranges_M")
+        vr = u.get("validated_ranges_M")
+        if vr is not None and rngs_out is not None:
+            vr = np.asarray(vr, float); rngs_out = np.asarray(rngs_out, float).copy()
+            ok_ = np.isfinite(vr).all(axis=1)
+            rngs_out[ok_] = vr[ok_]              # validated window beats label range
         meta = {"feature_ood": ood,
                 "component_ood": np.repeat(ood[:, None], len(usubs), axis=1) | clamped,
-                "ranges_M": u.get("ranges_M")}
+                "ranges_M": rngs_out}
     return (*result, meta)
 
 
