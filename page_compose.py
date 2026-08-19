@@ -65,6 +65,7 @@ def _train_subprocess(params, q):
         from dl_model import train_model
         model = train_model(items=items, progress=lambda s: q.put(("progress", s)),
                             **_accepted(train_model, params))
+        q.put(("progress", "packaging results — this can take a minute on low RAM"))
         q.put(("done", model))
     except Exception:
         import traceback
@@ -698,16 +699,26 @@ class ComposePanel(QWidget):
         self._model = model
         self._reset_buttons()
         self.save_b.setEnabled(True)
+        MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         self._rows = rows
-        self._plot_triangle(rows)
+        try:
+            self._plot_triangle(rows)
+        except Exception:
+            import traceback as _tb
+            print(_tb.format_exc(), file=sys.stderr)
         self._plot_loss(model.get("train_eval", {}).get("loss", []))
         self._err_title.setText("Per-substance error — mean |predicted − true| fraction "
                                 "(lower = better)")
         self._roc_title.setText("Detection ROC — is each substance present? "
                                 "(threshold the predicted fraction)")
-        self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
+        try:
+            self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
+        except Exception:
+            import traceback as _tb
+            print(_tb.format_exc(), file=sys.stderr)
+            self.status.setText("trained OK — a result plot failed to draw (see console); "
+                                "the model itself is live and can be Saved")
         self.export_b.setEnabled(True)
-        MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
         errtxt = f"{err:.0%}" if err == err else "—"
         kind = ("leave-one-map-out" if model.get("loo_eval")
