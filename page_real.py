@@ -6,13 +6,14 @@ from __future__ import annotations
 import os
 import sys
 import traceback
+import textwrap
 
 import numpy as np
 from matplotlib.colors import to_rgb
 from matplotlib.patches import Wedge, Patch
 from matplotlib.collections import PatchCollection
 
-from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
@@ -81,7 +82,7 @@ class RealDataPage(QWidget):
         self.bg_paths = []          # measured background map(s) → direct bg judgment
         self.rf = {}                # response factors {name: ×} from Validate (correction)
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 20); root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14); root.setSpacing(8)
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Real-data analysis — unmix a test map"); h1.setObjectName("h1")
@@ -96,11 +97,11 @@ class RealDataPage(QWidget):
         root.addLayout(head)
 
         # ── left control rail | right results ─────────────────────────────
-        # Everything you LOAD or SET lives in a fixed 300px rail on the left;
+        # Everything you LOAD or SET lives in a compact fixed rail on the left;
         # the right side is nothing but results. One screen, no hunting.
-        outer = QHBoxLayout(); outer.setSpacing(14)
+        outer = QHBoxLayout(); outer.setSpacing(10)
         root.addLayout(outer, 1)
-        leftw = QWidget(); leftw.setFixedWidth(300)
+        leftw = QWidget(); leftw.setFixedWidth(270)
         left = QVBoxLayout(leftw)
         left.setContentsMargins(0, 0, 0, 0); left.setSpacing(10)
         outer.addWidget(leftw)
@@ -141,10 +142,11 @@ class RealDataPage(QWidget):
         self.cal_x = QPushButton("✕"); self.cal_x.setObjectName("ghost")
         self._compact_x(self.cal_x, "clear calibration")
         self.cal_x.clicked.connect(self._clear_calib); self.cal_x.setVisible(False)
-        self.chk_auto = QCheckBox("auto (BLK)")
-        self.chk_auto.setToolTip("threshold-free: a pixel is a substance when its "
-                                 "strongest component is a substance (not the learned "
-                                 "blank). Unchecked = use the fraction threshold.")
+        self.chk_auto = QCheckBox("auto background gate")
+        self.chk_auto.setChecked(True)
+        self.chk_auto.setToolTip(
+            "Uses the full spectrum: signal only when summed analyte evidence "
+            "exceeds summed BLK + INK evidence. Unchecked = fraction threshold.")
         self.chk_auto.toggled.connect(self._on_auto)
         hitcol = QVBoxLayout(); hitcol.setSpacing(2)
         _hl = QLabel("hit mode"); _hl.setObjectName("field")
@@ -290,7 +292,7 @@ class RealDataPage(QWidget):
         self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
-        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(175)
+        lay_maps.addWidget(self.c_maps); self.c_maps.setFixedHeight(175)
         # one min/max pair PER band panel (rebuilt with the band row) — the card-wide
         # pair could not stretch a weak channel without flattening a strong one
         self.scalerow = QHBoxLayout(); self.scalerow.setSpacing(6)
@@ -303,33 +305,35 @@ class RealDataPage(QWidget):
         #     what the camera saw, abundances = what stage-1 unmixing made of it.
         self.c_abund = Canvas()
         card_ab, lay_ab = _card(
-            "Stage-1 maps — analytes + combined background; shared scale")
-        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(175)
+            "Stage-1 spectral evidence — full-spectrum NNLS + background gate")
+        lay_ab.addWidget(self.c_abund); self.c_abund.setFixedHeight(175)
         lay_ab.addLayout(self._scale_row("abund", 1.0))
         self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=True, key="abund")
-        # Allocate width by panel count: four raw panels vs five stage-1 panels.
-        body.addWidget(card_maps, 0, 0, 1, 5)
-        body.addWidget(card_ab, 0, 5, 1, 7)
+        # Nine equal map slots across the result area. Raw uses four (merge + 3),
+        # stage-1 uses five (merge + 3 + background), so every spatial map has the
+        # same physical width instead of shrinking because its card has more panels.
+        body.addWidget(card_maps, 0, 0, 1, 4)
+        body.addWidget(card_ab, 0, 4, 1, 5)
 
         # 2) the clicked pixel's spectrum — a short readout beside the pie map.
         #    The pixel's own numbers ride along in the panel title.
         self.c_spec = Canvas()
         scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
         slay.addWidget(self.c_spec)
-        self.c_spec.setMinimumHeight(150)
+        self.c_spec.setFixedHeight(175)
 
         # 3) per-pixel composition pie | the same composition summed over the map —
         #    the pie map and the number it adds up to belong on one row
         self.c_pie = Canvas(); self.c_comp = Canvas()
         pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
-        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(150)
+        play.addWidget(self.c_pie); self.c_pie.setFixedHeight(175)
         ccard, clay = _card("Composition (overall)")
-        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(150)
+        clay.addWidget(self.c_comp); self.c_comp.setFixedHeight(175)
 
         # One comparison row, in reading order. All three stay visible.
-        body.addWidget(scard, 1, 0, 1, 4)
-        body.addWidget(pcard, 1, 4, 1, 4)
-        body.addWidget(ccard, 1, 8, 1, 4)
+        body.addWidget(scard, 1, 0, 1, 3)
+        body.addWidget(pcard, 1, 3, 1, 3)
+        body.addWidget(ccard, 1, 6, 1, 3)
 
         # 4) per-substance concentration (µM) maps — its own full-width row
         self.c_conc = Canvas()
@@ -372,12 +376,21 @@ class RealDataPage(QWidget):
         lay_conc.addWidget(self.conc_opt_tgl)
         lay_conc.addWidget(self.conc_optbox)
         lay_conc.addWidget(self.c_conc)
-        self.c_conc.setMinimumHeight(125); self.c_conc.setMaximumHeight(190)
-        body.addWidget(self.card_conc, 2, 0, 1, 12)
+        self.c_conc.setFixedHeight(175)
+        # Long headings used to become hard minimum widths (over 2,100 px for the
+        # whole page). Wrap them inside their cards so a normal laptop window can
+        # show the complete wording without a horizontal scrollbar.
+        for _lay in (lay_maps, lay_ab, slay, play, clay, lay_conc):
+            _title = _lay.itemAt(0).widget()
+            _title.setWordWrap(True)
+            _title.setMinimumWidth(0)
+            _title.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                 QSizePolicy.Policy.Preferred)
+        body.addWidget(self.card_conc, 2, 0, 1, 9)
         self.card_conc.setVisible(False)
 
         self.result_grid = body
-        for col in range(12):
+        for col in range(9):
             body.setColumnStretch(col, 1)
         body.setRowStretch(0, 2)
         body.setRowStretch(1, 2)
@@ -424,6 +437,9 @@ class RealDataPage(QWidget):
         for t, d in items:
             cb.addItem(t, d)
         col.addWidget(lb); col.addWidget(cb); self._last_combo = cb
+        cb.setMinimumWidth(0)
+        cb.setSizePolicy(QSizePolicy.Policy.Ignored,
+                         QSizePolicy.Policy.Fixed)
         return col
 
     def _spin_col(self, label, spin):
@@ -537,6 +553,37 @@ class RealDataPage(QWidget):
         row.addStretch(1)
         return row
 
+    def _common_map_lr(self, fig, n):
+        """Centred left/right bounds giving every spatial map one common width.
+
+        The band-control row makes its card wider than its grid span alone would;
+        derive the target from the two top map cards instead of trusting card width.
+        """
+        # Fixed-height canvases leave slightly different usable horizontal fractions:
+        # the five-panel colour-ramp row and the one-panel pie legend consume a little
+        # more than GridSpec reports. These are layout factors, not data scaling.
+        def _fit(slots):
+            return 0.918 if slots == 5 else (0.977 if slots == 3 else 1.0)
+
+        caps = []
+        for source, slots in ((self.c_maps.fig, 4), (self.c_abund.fig, 5)):
+            fw = float(source.bbox.width)
+            if fw > 1:
+                caps.append(_fit(slots) * (self._GS_R - self._GS_L) * fw /
+                            (slots + (slots - 1) * self._GS_WS))
+        if not caps:
+            return self._GS_L, self._GS_R
+        # Leave a small common gutter: Qt card margins and Matplotlib's colour-ramp
+        # row consume a few pixels that the nominal GridSpec capacity omits. Without
+        # it the five-panel stage card alone becomes ~8% narrower.
+        target = min(caps) * 0.95
+        fw = max(float(fig.bbox.width), 1.0)
+        cap = (self._GS_R - self._GS_L) * fw / (n + (n - 1) * self._GS_WS)
+        requested = target / _fit(n)
+        requested = min(requested, cap)
+        span = requested * (n + (n - 1) * self._GS_WS) / fw
+        return (1.0 - span) / 2.0, (1.0 + span) / 2.0
+
     def _row_gs(self, fig, n, ny, nx):
         """The grid both map cards draw on: images across the top row, their colour
         ramps in a thin row directly under them.
@@ -546,9 +593,10 @@ class RealDataPage(QWidget):
         the height the colour-bars stole from its neighbours. And the pair of rows is
         hugged to the height these maps actually need (a 60x30 map in a narrow column
         is short) and centred, instead of leaving the card two-thirds empty."""
-        bot, top, cb = self._row_span(fig, n, ny, nx)
+        L, R = self._common_map_lr(fig, n)
+        bot, top, cb = self._row_span(fig, n, ny, nx, (L, R))
         gs = fig.add_gridspec(2, n, height_ratios=[1.0, cb], hspace=self._GS_HS,
-                              wspace=self._GS_WS, left=self._GS_L, right=self._GS_R,
+                              wspace=self._GS_WS, left=L, right=R,
                               bottom=bot, top=top)
         # a resized card changes what "hugged" means; re-hug without replotting
         cv = fig.canvas
@@ -557,21 +605,23 @@ class RealDataPage(QWidget):
             cv.mpl_disconnect(old)
 
         def _refit(_e=None, _gs=gs, _n=n, _ny=ny, _nx=nx, _f=fig):
-            b, t, c = self._row_span(_f, _n, _ny, _nx)
+            l, r = self._common_map_lr(_f, _n)
+            b, t, c = self._row_span(_f, _n, _ny, _nx, (l, r))
             _gs.set_height_ratios([1.0, c])
-            _gs.update(bottom=b, top=t)
+            _gs.update(left=l, right=r, bottom=b, top=t)
 
         cv._rowgs_cid = cv.mpl_connect("resize_event", _refit)
         return gs
 
-    def _row_span(self, fig, n, ny, nx):
+    def _row_span(self, fig, n, ny, nx, lr=None):
         """(bottom, top, cb_ratio) for _row_gs — the two rows hugged to the height
         ny/nx maps need at this figure size and centred in what the card gives us.
 
         The ramp row is a FIXED thickness in inches, not a share of the image row:
         tie it to the image and a wide short map squeezes its own colour-bar into a
         hairline."""
-        L, R, WS, HS = self._GS_L, self._GS_R, self._GS_WS, self._GS_HS
+        L, R = lr if lr is not None else (self._GS_L, self._GS_R)
+        WS, HS = self._GS_WS, self._GS_HS
         BOT, TOP, BAR_IN = 0.08, 0.92, 0.11
         figw, figh = fig.get_size_inches()
         figh = max(float(figh), 1e-6)
@@ -619,7 +669,7 @@ class RealDataPage(QWidget):
             if it.widget():
                 it.widget().deleteLater()
         self._chan_scale = {}
-        chk = QCheckBox("manual scale"); chk.setObjectName("field")
+        chk = QCheckBox("manual"); chk.setObjectName("field")
         chk.setToolTip("pin each band panel to its own min-max below; "
                        "unticked = that panel's own P1-P99")
         self.chk_chan = chk
@@ -636,7 +686,7 @@ class RealDataPage(QWidget):
             pair = []
             for what in ("min", "max"):
                 sp = QDoubleSpinBox(); sp.setDecimals(1); sp.setRange(-1e9, 1e9)
-                sp.setFixedWidth(76); sp.setEnabled(False)
+                sp.setFixedWidth(58); sp.setEnabled(False)
                 sp.setToolTip(f"{what} of the colour ramp for the {nm} panel")
                 sp.editingFinished.connect(
                     lambda: self._res is not None and self._plot_maps(self._res))
@@ -706,7 +756,7 @@ class RealDataPage(QWidget):
             self.bandrow.addWidget(self._mk_lbl(nm))
             sp = QDoubleSpinBox(); sp.setDecimals(1); sp.setSingleStep(5.0)
             sp.setRange(lo, hi); sp.setValue(self._band_of(r, nm))
-            sp.setFixedWidth(96)
+            sp.setFixedWidth(72)
             sp.setStyleSheet(f"QDoubleSpinBox{{border:2px solid {cols[i]};"
                              f"border-radius:6px;padding:1px 4px;}}")
             sp.setToolTip(f"wavenumber mapped for {nm} — intensity is averaged over "
@@ -719,7 +769,7 @@ class RealDataPage(QWidget):
         #  substance bands is how you check what that region actually is)
         for ei, wl in enumerate(self._extra_bands):
             esp = QDoubleSpinBox(); esp.setDecimals(1); esp.setSingleStep(5.0)
-            esp.setRange(lo, hi); esp.setValue(float(wl)); esp.setFixedWidth(96)
+            esp.setRange(lo, hi); esp.setValue(float(wl)); esp.setFixedWidth(72)
             esp.setStyleSheet("QDoubleSpinBox{border:2px solid #8a94a3;"
                               "border-radius:6px;padding:1px 4px;}")
 
@@ -844,27 +894,22 @@ class RealDataPage(QWidget):
             return f"  ·  {blank} class ✓"
         return "  ·  no blank class"
 
-    def _dl_judges_bg(self):
-        """True when the loaded composition model carries a blank class AND the per-pixel
-        model method is selected — then the model alone decides background."""
-        m = getattr(self, "dl_model", None)
-        return bool(self._method() == "dlpx" and m and m.get("blank")
-                    and m.get("blank") in (m.get("subs") or []))
-
     def _sync_controls(self):
         """Grey out the gates that no longer get a vote, so the header shows at a glance
         which single rule will decide background."""
         if not hasattr(self, "thr"):        # _adopt_model can fire before the widgets exist
             return
         by_bg = bool(self.bg_paths)                    # a measured background map wins
-        by_dl = self._dl_judges_bg()
-        manual = not (by_bg or by_dl)
+        manual = not by_bg
         self.chk_auto.setEnabled(manual)
         self.thr.itemAt(1).widget().setEnabled(manual and not self.chk_auto.isChecked())
-        why = ("a loaded background map decides background" if by_bg else
-               "the composition model's blank class decides background" if by_dl else "")
-        for w in (self.chk_auto, self.thr.itemAt(1).widget()):
-            w.setToolTip(f"not used — {why}" if why else "")
+        if by_bg:
+            tip = "not used: the loaded measured background map decides background"
+            self.chk_auto.setToolTip(tip)
+            self.thr.itemAt(1).widget().setToolTip(tip)
+        else:
+            self.chk_auto.setToolTip("Full spectrum: summed analytes > summed BLK + INK.")
+            self.thr.itemAt(1).widget().setToolTip("Used only when auto gate is unchecked.")
 
     def _browse_test(self):
         p, _ = QFileDialog.getOpenFileName(self, "Test map", "",
@@ -914,7 +959,7 @@ class RealDataPage(QWidget):
     def _toggle_opts(self, on):
         self.optbox.setVisible(on)
         self.opt_tgl.setText(("▾  " if on else "▸  ")
-                             + "Options  (model · calibration · correction · thresholds)")
+                             + "Options — sources & pixel gate")
 
     def _adopt_model(self):
         """Adopt the composition model trained in the Model tab (Step 2), if any. Just
@@ -1263,6 +1308,10 @@ class RealDataPage(QWidget):
                             f" · baseline removal {'on' if ov else 'off'} — followed the "
                             f"model's own setting, not this folder's")
                             + _conc_note)
+        # The dynamic band/scale controls settle their card widths on the next Qt
+        # layout pass. Refit once then so all four map groups use the same slot width.
+        QTimer.singleShot(0, self._redraw)
+
         self.status.setStyleSheet(f"color:{MUTE};")
         nb = [r.comps[i] for i in r.nonbg]
         mr = self._mean_ratio(r)                          # corrected when toggle on
@@ -1432,24 +1481,33 @@ class RealDataPage(QWidget):
             self.c_abund.draw_idle()
             return
 
-        Aall = np.asarray(r.A, float)
+        Aall = np.asarray(getattr(r, "A_evidence", r.A), float)
         nb_idx = list(r.nonbg)
         nbcols = self._nb_colors(r)
         Anb = Aall[:, nb_idx]
-        mscale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
+        hit = self._hit(r)
+        # Values remain available in the export for every measured pixel, but an
+        # analyte prediction has no meaning after the gate called that pixel
+        # background. Do not paint those nuisance responses as analyte signal.
+        Anb_draw = np.where(hit[:, None], Anb, np.nan)
+        _mass = Anb[hit].sum(axis=1) if hit.any() else np.array([], float)
+        mscale = float(np.quantile(_mass, 0.99)) if _mass.size else 1.0
+        mscale = mscale or 1.0
 
         panels = [("merged", None, None)]
-        panels.extend((r.comps[k], Aall[:, k], nbcols[i])
+        panels.extend((r.comps[k], np.where(hit, Aall[:, k], np.nan), nbcols[i])
                       for i, k in enumerate(nb_idx))
         bg_idx = np.flatnonzero(np.asarray(r.bg_mask, bool))
         if bg_idx.size:
-            panels.append(("background", Aall[:, bg_idx].sum(axis=1), "#6b7280"))
+            # This panel exactly complements the masked analyte maps.
+            panels.append(("background (gate)", (~hit).astype(float), "#6b7280"))
 
-        scale_cols = [values for _title, values, _color in panels if values is not None]
-        scale_values = np.column_stack(scale_cols) if scale_cols else Aall
-        amax = float(np.nanmax(scale_values)) if scale_values.size else 1.0
+        # Scale from analyte hits only; the binary gate panel must not flatten them.
+        scale_values = Anb_draw
+        finite_scale = scale_values[np.isfinite(scale_values)]
+        amax = float(np.max(finite_scale)) if finite_scale.size else 1.0
         vshared = 1.0 if amax <= 1.05 else (
-            float(np.quantile(scale_values, 0.99)) or 1.0)
+            float(np.quantile(finite_scale, 0.99)) or 1.0)
         manual = self._parse_scale("abund")
         vlo = manual[0] if manual is not None else 0.0
         if manual is not None:
@@ -1466,7 +1524,7 @@ class RealDataPage(QWidget):
             self.c_abund.fig.add_subplot(gs[1, idx]).set_axis_off()
             if values is None:
                 cols = np.array([to_rgb(c) for c in nbcols])
-                norm = np.clip(Anb / mscale, 0.0, 1.0)
+                norm = np.nan_to_num(np.clip(Anb_draw / mscale, 0.0, 1.0), nan=0.0)
                 weights = np.maximum(norm.sum(axis=1, keepdims=True), 1.0)
                 img = np.zeros((ny, nx, 3))
                 img[rows, cc] = np.clip((norm / weights) @ cols * np.minimum(
@@ -1475,12 +1533,16 @@ class RealDataPage(QWidget):
                           interpolation="nearest")
                 title = f"merged ({vlo:.3g}–{vshared:.3g})"
             else:
-                grid = np.zeros((ny, nx)); grid[rows, cc] = values
+                grid = np.full((ny, nx), np.nan); grid[rows, cc] = values
                 cmap = LinearSegmentedColormap.from_list(
                     "m", ["#0b0d10", panel_color])
+                cmap.set_bad("#0b0d10")
+                ax.set_facecolor("#0b0d10")
+                is_bg = title.startswith("background")
+                _vmax = 1.0 if is_bg else vshared
                 ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest", cmap=cmap,
-                          vmin=vlo, vmax=vshared)
+                          vmin=0.0 if is_bg else vlo, vmax=_vmax)
             ax.set_title(title, fontsize=8)
             ax.set_xticks([]); ax.set_yticks([])
             self._exp_abund.append((f"abund_{title.split(' ')[0]}", ax, None))
@@ -1501,7 +1563,8 @@ class RealDataPage(QWidget):
         nb = [r.comps[i] for i in r.nonbg]; nbcols = self._nb_colors(r)
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
-        n = (len(nb) or 1) + 1                             # + summary bars at the end
+        # Nine slots match raw (4) + stage-1 (5), fixing every map's physical size.
+        map_slots = 9
         hit = self._hit(r)                                 # exclude saturated/low-R² px
         # SHARED µM colour axis across substances, so the maps are directly comparable
         um_all = r.conc * 1e6
@@ -1528,8 +1591,10 @@ class RealDataPage(QWidget):
             vmax = min(vmax, float(np.nanmax(hi_um[np.isfinite(hi_um)])))
         vmax = vmax or 1.0
         from matplotlib.colors import LinearSegmentedColormap
+        gs = self._row_gs(self.c_conc.fig, map_slots, ny, nx)
         for i, nm in enumerate(nb):
-            ax = self.c_conc.style(self.c_conc.fig.add_subplot(1, n, i + 1))
+            ax = self.c_conc.style(self.c_conc.fig.add_subplot(gs[0, i]))
+            self.c_conc.fig.add_subplot(gs[1, i]).set_axis_off()
             um = np.where(hit & np.isfinite(um_all[:, i]) & (um_all[:, i] > 0),
                           um_all[:, i], np.nan)
             grid = np.full((ny, nx), np.nan); grid[rows, cc] = um
@@ -1543,7 +1608,9 @@ class RealDataPage(QWidget):
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
         # ---- pixel distribution: show the measurements, not only one median bar ----
-        axb = self.c_conc.style(self.c_conc.fig.add_subplot(1, n, n))
+        dist_start = min(len(nb), map_slots - 1)
+        axb = self.c_conc.style(
+            self.c_conc.fig.add_subplot(gs[:, dist_start:map_slots]))
         med = np.full(len(nb), np.nan); q1 = med.copy(); q3 = med.copy()
         bad_frac = np.zeros(len(nb))
         total_n = np.zeros(len(nb), dtype=int)
@@ -1638,7 +1705,6 @@ class RealDataPage(QWidget):
         axb.tick_params(labelsize=8)
         axb.set_ylim(bottom=0)
         self._exp_conc.append(("uM_pixel_distribution", axb, None))
-        self.c_conc.fig.tight_layout(pad=0.5, w_pad=0.5)
         self.c_conc.draw_idle()
 
     # Final pie-map style (settled with the 260812 trio map): pure black ground,
@@ -1651,10 +1717,17 @@ class RealDataPage(QWidget):
 
     def _plot_pies(self, r):
         from matplotlib.collections import LineCollection
-        ax = self.c_pie.new_ax(); self._click_axes.append(ax)
+        self.c_pie.fig.clear()
         cols = self._nb_colors(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux, uy = np.unique(x), np.unique(y)
+        # This card spans three common slots; centre the one spatial map in one slot.
+        gs = self._row_gs(self.c_pie.fig, 3, len(uy), len(ux))
+        for col in (0, 2):
+            self.c_pie.fig.add_subplot(gs[:, col]).set_axis_off()
+        self.c_pie.fig.add_subplot(gs[1, 1]).set_axis_off()
+        ax = self.c_pie.style(self.c_pie.fig.add_subplot(gs[0, 1]))
+        self._click_axes.append(ax)
         sx = float(np.median(np.diff(ux))) if len(ux) > 1 else 1.0
         sy = float(np.median(np.diff(uy))) if len(uy) > 1 else 1.0
         rad = sx * 0.5                                    # pies fill their cell
@@ -1727,7 +1800,7 @@ class RealDataPage(QWidget):
         ax.legend(handles=handles, fontsize=9, framealpha=0.0, labelcolor="black",
                   loc="upper center", bbox_to_anchor=(0.5, -0.02),
                   ncol=len(handles), frameon=False)
-        self.c_pie.fig.tight_layout(); self.c_pie.draw_idle()
+        self.c_pie.draw_idle()
 
     def _update_sel_rings(self, r):
         """One ring on EVERY map (band, abundance, pie) at the clicked pixel — the
@@ -1784,6 +1857,11 @@ class RealDataPage(QWidget):
         mm = meas.max() or 1.0
         ax.plot(axis, meas / mm, lw=1.3, color=INK, label="measured")
         ratio_nb = self._ratio_nb(r)                      # corrected when toggle on
+        evidence = np.asarray(getattr(r, "A_evidence", r.A), float)
+        ev_nb = evidence[:, r.nonbg]
+        ev_sum = ev_nb.sum(axis=1, keepdims=True)
+        ev_ratio = np.divide(ev_nb, ev_sum, out=np.zeros_like(ev_nb), where=ev_sum > 0)
+
         if r.templates is not None:
             # ONE curve per substance — A_k x template_k in the substance's colour —
             # instead of a single summed "reference mix" that matched nothing visibly
@@ -1792,22 +1870,27 @@ class RealDataPage(QWidget):
             # the actual fit under NNLS/MCR; under the composition model A holds
             # probabilities, so it only shows the references the model leaned on,
             # not a goodness-of-fit.
-            recon = r.A[i] @ r.templates
+            recon = evidence[i] @ r.templates
             rmax = float(recon.max()) or 1.0
             cols = self._nb_colors(r)
             for k, j in enumerate(r.nonbg):
-                contrib = r.A[i, j] * r.templates[j]
+                contrib = evidence[i, j] * r.templates[j]
                 if float(contrib.max()) / rmax < 0.02:
                     continue                       # absent substance — no clutter
                 ax.plot(axis, contrib / rmax, lw=1.0, color=cols[k], alpha=0.9,
-                        label=f"{r.comps[j]} {ratio_nb[i, k] * 100:.0f}%")
-            lab = ("references the model picked" if r.method == "dlpx"
-                   else "fit (sum)")
+                        label=(f"{r.comps[j]} model {ratio_nb[i, k] * 100:.0f}% · "
+                               f"spectral {ev_ratio[i, k] * 100:.0f}%"))
+            lab = "full-spectrum spectral fit (sum)"
             ax.plot(axis, recon / rmax, lw=0.9, color=FAINT, ls="--", label=lab)
         xp, yp = r.coords[i]
         rat = "  ·  ".join(f"{r.comps[j]} {ratio_nb[i, k] * 100:.0f}%"
                            for k, j in enumerate(r.nonbg) if ratio_nb[i, k] > 0.02)
         tag = rat if r.hit[i] else "background"
+        weak = [r.comps[j] for k, j in enumerate(r.nonbg)
+                if ratio_nb[i, k] > 0.02
+                and ev_ratio[i, k] < 0.5 * ratio_nb[i, k]]
+        if r.hit[i] and weak:
+            tag += "  |  weak full-spectrum support: " + ", ".join(weak)
         if (not r.hit[i] and getattr(r, "bg_score", None) is not None
                 and r.bg_score[i] >= r.bg_thr):
             tag = f"background (matches measured bg, score {r.bg_score[i]:.2f})"
@@ -1832,13 +1915,18 @@ class RealDataPage(QWidget):
         # the pixel readout goes in the TITLE. The card is short now, and this text
         # was being built and then thrown away — composition, µM, the low-R² warning
         # and the OOD list never reached the screen at all.
-        ax.set_title(f"({xp:g}, {yp:g})  ·  {tag}", fontsize=9, pad=4)
+        readout = f"({xp:g}, {yp:g})  ·  {tag}"
+        title = "\n".join(textwrap.wrap(
+            readout, width=72, break_long_words=False, break_on_hyphens=False))
+        n_title_lines = max(1, title.count("\n") + 1)
+        ax.set_title(title, fontsize=8, pad=3, loc="left")
         ax.set_xlabel("Raman shift (cm$^{-1}$)", labelpad=1); ax.set_yticks([])
         # legend inside the axes — a short card cannot spare a strip under the plot
-        ax.legend(fontsize=8, framealpha=0.0, labelcolor="black",
-                  loc="upper right", ncol=6, frameon=False,
+        ax.legend(fontsize=7, framealpha=0.0, labelcolor="black",
+                  loc="upper right", ncol=2, frameon=False,
                   handlelength=1.4, columnspacing=0.9)
-        self.c_spec.fig.subplots_adjust(left=0.035, right=0.995, top=0.86, bottom=0.20)
+        self.c_spec.fig.subplots_adjust(left=0.055, right=0.99,
+                                        top=max(0.58, 0.88 - 0.07 * n_title_lines), bottom=0.20)
         self.c_spec.draw_idle()
 
     # ---- interaction ----
@@ -1861,14 +1949,21 @@ class RealDataPage(QWidget):
         if not d:
             return
         r = self._res; nb = [r.comps[i] for i in r.nonbg]
+        evidence = np.asarray(getattr(r, "A_evidence", r.A), float)
+        ev_nb = evidence[:, r.nonbg]
+        ev_sum = ev_nb.sum(axis=1, keepdims=True)
+        ev_ratio = np.divide(ev_nb, ev_sum, out=np.zeros_like(ev_nb), where=ev_sum > 0)
+        _eh = self._hit(r)
+        ev_mean = ev_ratio[_eh].mean(axis=0) if _eh.any() else ev_ratio.mean(axis=0)
         # both aggregates, so the pie can be redrawn either way: the plain average
         # and the signal-weighted one the app now displays (see _mean_ratio)
         mr_un = (r.ratio_nb[self._hit(r)].mean(axis=0) if self._hit(r).any()
                  else r.ratio_nb.mean(axis=0))
         mr_w = self._mean_ratio(r)
         write_csv(os.path.join(d, "composition.csv"),
-                  ["substance", "mean_ratio_unweighted", "mean_ratio_signal_weighted"],
-                  [[nm, f"{mr_un[i]:.4f}", f"{mr_w[i]:.4f}"]
+                  ["substance", "mean_ratio_unweighted", "mean_ratio_signal_weighted",
+                   "mean_spectral_evidence_share"],
+                  [[nm, f"{mr_un[i]:.4f}", f"{mr_w[i]:.4f}", f"{ev_mean[i]:.4f}"]
                    for i, nm in enumerate(nb)])
         inten = r.spectra.sum(axis=1)                      # total baseline-removed signal
         cal = getattr(r, "conc", None) is not None
@@ -1876,6 +1971,7 @@ class RealDataPage(QWidget):
         has_sat = getattr(r, "sat_frac", None) is not None
         head = (["x", "y", "hit", "total_intensity"]
                 + [f"ratio_{nm}" for nm in nb] + [f"A_{c}" for c in r.comps]
+                + [f"spectral_A_{c}" for c in r.comps]
                 + ([f"conc_uM_{nm}" for nm in nb] if cal else []) + ["reliability_r2"]
                 + (["clipped_frac"] if has_sat else [])
                 + (["bg_match"] if has_bg else []))
@@ -1883,6 +1979,7 @@ class RealDataPage(QWidget):
                  f"{inten[i]:.4f}"]
                 + [f"{r.ratio_nb[i, k]:.4f}" for k in range(len(nb))]
                 + [f"{r.A[i, k]:.5f}" for k in range(len(r.comps))]
+                + [f"{evidence[i, k]:.5f}" for k in range(len(r.comps))]
                 + ([f"{r.conc[i, k] * 1e6:.4g}" if np.isfinite(r.conc[i, k]) else "OOD"
                     for k in range(len(nb))] if cal else [])
                 + [f"{r.reliab[i]:.4f}"]
@@ -2005,8 +2102,12 @@ class RealDataPage(QWidget):
                                "substance, and those channels read as R/G/B — no "
                                "unmixing, so it shows what a band/RGB readout alone can "
                                "separate."),
-            "real_composition_pies": "mean composition (pie) over the hit pixels.",
-            "real_composition": "per-pixel dominant-substance / composition map.",
+            "real_abundance_maps": ("full-spectrum NNLS spectral evidence for each "
+                                    "analyte plus the combined background gate."),
+            "real_composition_pies": ("per-pixel composition map from the loaded "
+                                      "composition model."),
+            "real_composition": ("signal-weighted mean composition (pie) over the "
+                                 "hit pixels."),
             "real_pixel_spectrum": "measured spectrum of the selected pixel.",
             "real_concentration_maps": "per-pixel apparent SERS-equivalent concentration (µM).",
         }

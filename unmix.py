@@ -35,6 +35,7 @@ class UnmixResult:
     spectra: np.ndarray          # (n_pix, n_feat) baseline-removed measured spectra
     templates: np.ndarray        # (K, n_feat) unit templates used for the fit
     A: np.ndarray                # (n_pix, K) abundance (chosen method)
+    A_evidence: np.ndarray       # (n_pix, K) full-spectrum NNLS/MCR spectral evidence
     ratio_nb: np.ndarray         # (n_pix, Knb) composition among non-bg (rows sum 1)
     hit: np.ndarray              # (n_pix,) True where a substance (not bg) dominates
     reliab: np.ndarray           # (n_pix,) reconstruction R²
@@ -75,6 +76,22 @@ def _baseline_removed(cube, baseline):
 def _l2(X):
     n = np.linalg.norm(X, axis=1, keepdims=True)
     return X / np.where(n > 0, n, 1.0)
+
+
+def _auto_hit_from_abundance(A, bg_mask):
+    """Automatic gate using summed analyte vs summed background evidence.
+
+    BLK and INK are two nuisance references. Comparing only the single largest
+    reference can therefore let one analyte beat each background reference
+    separately even when background explains more of the spectrum in total.
+    """
+    A = np.clip(np.asarray(A, float), 0.0, None)
+    bg = np.asarray(bg_mask, bool)
+    if A.ndim != 2 or A.shape[1] != bg.size:
+        raise ValueError("abundance/background shapes do not match")
+    if not bg.any():
+        return np.ones(A.shape[0], dtype=bool)
+    return A[:, ~bg].sum(axis=1) > A[:, bg].sum(axis=1)
 
 
 def _mcr_als(X, S0, n_iter=6, progress=None):
@@ -355,9 +372,9 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     if bg_score is not None:
         hit = bg_score < bg_thr
         hit_rule = f"measured background map (match < {bg_thr:.2f})"
-    elif hit_mode == "auto":                          # strongest least-squares component
-        hit = ~bg_mask[A_ls.argmax(axis=1)]
-        hit_rule = "strongest reference component is a substance (NNLS, auto)"
+    elif hit_mode == "auto":                          # grouped least-squares evidence
+        hit = _auto_hit_from_abundance(A_ls, bg_mask)
+        hit_rule = "summed analyte signal > summed BLK/INK background (NNLS, auto)"
     else:                                             # substance share above threshold
         hit = ls_frac[:, nonbg].sum(axis=1) >= min_frac
         hit_rule = f"NNLS substance share ≥ {min_frac:.2f}"
@@ -479,7 +496,7 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     return UnmixResult(
         comps=names, bg_mask=bg_mask, nonbg=nonbg, method=method, wn=wn,
         coords=coord, spectra=spectra.astype(np.float32), templates=templates,
-        A=A, ratio_nb=ratio_nb, hit=hit, reliab=reliab, n_pixels=len(X),
+        A=A, A_evidence=A_ls, ratio_nb=ratio_nb, hit=hit, reliab=reliab, n_pixels=len(X),
         hit_frac=hit_frac, mean_ratio=mean_ratio, dominant=dominant,
         mean_r2=float(reliab.mean()), calibrated=calibrated, conc=conc,
         conc_avg=conc_avg, conc_median=conc_median, conc_p10=conc_p10, conc_p90=conc_p90,
