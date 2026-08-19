@@ -25,6 +25,34 @@ from dataset import load_mixture_list, load_mixture_roles
 from validate import simplify_ratio
 
 
+def _yield_the_machine():
+    """Make the training child give way to EVERYTHING else. A separate process frees
+    the GUI's GIL, but torch/BLAS still grab every core at normal priority — on the
+    15.7GB laptop the whole desktop lags, which reads as the app 'freezing' even
+    though the status line is alive. Below-normal priority + one spare core costs
+    minutes on a 30–60 min run and keeps the machine usable. Best-effort: a failure
+    here must never kill the run."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            h = ctypes.windll.kernel32.GetCurrentProcess()
+            ctypes.windll.kernel32.SetPriorityClass(h, 0x00004000)   # BELOW_NORMAL
+        else:
+            os.nice(10)
+    except Exception:
+        pass
+    import sys as _sys
+    n = str(max(1, (os.cpu_count() or 4) - 1))
+    for v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS",
+              "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        os.environ.setdefault(v, n)      # torch/BLAS read these on their (lazy) import
+    if "torch" in _sys.modules:          # don't DRAG torch in just to throttle it —
+        try:                             # PLS/RF/NNLS runs never need it
+            _sys.modules["torch"].set_num_threads(int(n))
+        except Exception:
+            pass
+
+
 def _train_subprocess(params, q):
     """Run the heavy training in a SEPARATE process (own GIL) so the GUI never freezes.
     Progress + result travel back over a multiprocessing Queue. Module-level so it is
@@ -34,6 +62,7 @@ def _train_subprocess(params, q):
         _here = os.path.dirname(os.path.abspath(__file__))
         if _here not in _sys.path:                        # spawn may not inherit sys.path
             _sys.path.insert(0, _here)
+        _yield_the_machine()             # BEFORE the heavy imports below pull in torch
         params = dict(params); items = params.pop("items")
 
         def _accepted(fn, kw):
