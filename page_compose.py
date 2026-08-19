@@ -702,25 +702,20 @@ class ComposePanel(QWidget):
         summ = benchmark_summary(bench, cut)
         self._bench_summary = summ
 
-        # the paper's benchmark figure: Binary / Ternary / Mean bars per method,
-        # SE error bars on the condition groups, grayscale so it exports print-ready.
-        # Pure conditions (single component) still count inside Mean and in the CSV.
+        # the benchmark figure: how well each method recovers the mixture composition —
+        # ONE bar per method, mean deviation over every condition with its standard
+        # error. (The by-component-count split still rides along in the CSV for anyone
+        # who wants it, but the headline is the single recovery number.)
         ax = self.c_err.new_ax()
-        show = [("binary", "Binary", "#c9c9c9"), ("ternary", "Ternary", "#7a7a7a"),
-                ("mean", "Mean", "white")]
-        show = [g for g in show
-                if any(g[0] in summ.get(m, {}).get("dev_by_k", {}) for m in methods)]
-        x = _np.arange(len(methods)); bw = 0.8 / max(len(show), 1)
-        for gi, (key, glab, col) in enumerate(show):
-            vals = [summ.get(m, {}).get("dev_by_k", {}).get(
-                        key, (float("nan"), float("nan"), 0)) for m in methods]
-            ax.bar(x + (gi - (len(show) - 1) / 2) * bw, [v[0] for v in vals],
-                   bw * 0.92, yerr=[v[1] if v[1] == v[1] else 0.0 for v in vals],
-                   capsize=3, color=col, edgecolor=INK, linewidth=0.8,
-                   label=glab, error_kw=dict(lw=0.9))
+        vals = [summ.get(m, {}).get("dev_by_k", {}).get(
+                    "mean", (float("nan"), float("nan"), 0)) for m in methods]
+        x = _np.arange(len(methods))
+        ax.bar(x, [v[0] for v in vals], 0.62,
+               yerr=[v[1] if v[1] == v[1] else 0.0 for v in vals], capsize=4,
+               color=[TEAL if m == "mlp" else MUTE for m in methods],
+               edgecolor="white", alpha=0.9, error_kw=dict(lw=0.9, ecolor=INK))
         ax.set_xticks(x); ax.set_xticklabels([label[m] for m in methods], fontsize=8.5)
         ax.set_ylabel("composition error (%p)  — leave-one-out")
-        ax.legend(fontsize=8, framealpha=0)
         self.c_err.fig.tight_layout(); self.c_err.draw_idle()
         axr = self.c_roc.new_ax()                           # ROC overlay
         axr.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0)
