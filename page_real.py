@@ -1474,8 +1474,8 @@ class RealDataPage(QWidget):
                 bad |= np.asarray(ood, bool)[sel, i]
             if hi_um is not None and np.isfinite(hi_um[i]):
                 bad |= fin & (v > hi_um[i])
-            if lo_um is not None:
-                bad |= fin & (v < lo_um[i])
+            # LOW side stays in the median — cutting it biased minors up 3–9×.
+            # A median that lands below the validated lo is reported as "< lo".
             keep = fin & ~bad
             bad_frac[i] = float(bad[fin].mean()) if fin.any() else 0.0
             vv = v[keep]
@@ -1505,6 +1505,8 @@ class RealDataPage(QWidget):
                      zorder=4)
         for i in np.where(ok)[0]:
             lab = f"{med[i]:.1f}"
+            if lo_um is not None and np.isfinite(med[i]) and med[i] < lo_um[i]:
+                lab = f"< {lo_um[i]:g}"          # below the validated window: censored
             if tv is not None:
                 lab += chr(10) + f"rec {100 * med[i] / tv[i]:.0f}%"
             if vol > 0:                                    # µM × µL = pmol
@@ -1526,7 +1528,7 @@ class RealDataPage(QWidget):
         if hi_um is not None and np.all(np.isfinite(hi_um)):
             _lo0 = lo_um if lo_um is not None else np.zeros(len(nb))
             _wtxt = " · window " + "/".join(
-                f"{_lo0[i]:.3g}–{hi_um[i]:.3g}" for i in range(len(nb)))
+                f"{_lo0[i]:g}–{hi_um[i]:g}" for i in range(len(nb)))
         axb.set_ylabel("median µM (in-range hit px, IQR)"
                        + (f" · {vol:g} µL" if vol > 0 else "") + _wtxt, fontsize=7)
         axb.tick_params(labelsize=8)

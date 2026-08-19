@@ -1017,15 +1017,19 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
     # binder's inversion runs to thousands of µM ("한정된 범위 내에서 답해야지").
     # Predictions are clamped to each substance's training range; a clamped pixel
     # is FLAGGED, so downstream medians can drop it and the export names it.
+    # UPPER side only: the explosion artifact lives above the range, and clipping
+    # the LOW side up (or flagging it out) truncated the low tail — the medians of
+    # every minor component came back inflated 3–9× ("여전히 튀어나가는데"). A
+    # below-range prediction is information ("small"), not an artifact.
     clamped = np.zeros_like(um, bool)
     rngs = u.get("ranges_M")
     if rngs is not None:
         r_um = np.asarray(rngs, float) * 1e6               # (n_subs, 2) in µM
         for k in range(min(len(usubs), len(r_um))):
-            lo_u, hi_u = r_um[k]
-            if np.isfinite(lo_u) and np.isfinite(hi_u) and hi_u > lo_u:
-                clamped[:, k] = (um[:, k] < lo_u) | (um[:, k] > hi_u)
-                um[:, k] = np.clip(um[:, k], lo_u, hi_u)
+            hi_u = r_um[k][1]
+            if np.isfinite(hi_u) and hi_u > 0:
+                clamped[:, k] = um[:, k] > hi_u
+                um[:, k] = np.minimum(um[:, k], hi_u)
     result = (um, list(usubs))
     if not return_meta:
         return result

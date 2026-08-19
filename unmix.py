@@ -538,10 +538,10 @@ def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
                        for k in range(len(nb_names))])
     ood = np.zeros_like(conc, bool)
     for k in range(len(nb_names)):
-        lo_c, hi_c = ranges[k]
+        hi_c = ranges[k][1]
         v = conc[:, k]
-        ood[:, k] = (v > 0) & ((v < lo_c) | (v > hi_c))
-        conc[:, k] = np.where(v > 0, np.clip(v, lo_c, hi_c), v)
+        ood[:, k] = v > hi_c                   # UPPER side only — below-range means
+        conc[:, k] = np.minimum(v, hi_c)       # "small", and cutting it inflated medians
     ood[~hit] = False
     return conc, theta, r2, np.asarray(calib.gA) * np.asarray(calib.K), ood, ranges
 
