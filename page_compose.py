@@ -96,7 +96,37 @@ class TrainComposeWorker(QObject):
                     tag, payload = q.get(timeout=0.5)
                 except _queue.Empty:
                     if not proc.is_alive():               # killed (Cancel) or crashed child
-                        self.fail.emit("training stopped"); return
+                        # Drain first: a child that finished can exit while its result is
+                        # still in flight, and reporting failure then would throw away a
+                        # completed run. Only after the queue is dry is the run really dead.
+                        drained = []
+                        while True:
+                            try:
+                                drained.append(q.get_nowait())
+                            except Exception:
+                                break
+                        for tg, pl in drained:
+                            if tg in ("bench", "kfold"):
+                                self.done.emit((tg, pl)); return
+                            if tg == "error":
+                                self.fail.emit(pl); return
+                            if tg == "done":
+                                model = pl; break
+                        if model is None:
+                            # No message at all: the process was killed rather than raising,
+                            # so there is no traceback to show. The exit code is the only
+                            # evidence, and the usual cause is the OS reclaiming memory.
+                            code = proc.exitcode
+                            self.fail.emit(
+                                f"the worker process was killed (exit code {code}) without "
+                                "reporting an error.\nThis is almost always the operating "
+                                "system reclaiming memory, or Cancel.\nIf you did not press "
+                                "Cancel: close other applications and re-run, and check the "
+                                "status line says 'one mean spectrum per map' — if it does "
+                                "not, the app is still running the older code and needs a "
+                                "restart.")
+                            return
+                        break
                     continue
                 if tag == "progress":
                     self.progress.emit(payload)
@@ -207,9 +237,13 @@ class ComposePanel(QWidget):
         brow = QHBoxLayout(); brow.setSpacing(8)
         blbl = QLabel("1 · compare methods:"); blbl.setObjectName("field")
         self.bench_b = QPushButton("Benchmark (LOO)"); self.bench_b.setObjectName("ghost")
-        self.bench_b.setToolTip("score NNLS / PLS / RF / 1D-CNN / MLP on the same mixtures "
-                                "with leave-one-out — composition error and detection ROC. "
-                                "Tells you which method to train; saves no model.")
+        self.bench_b.setToolTip("score VIP band / NNLS / PLS / RF / 1D-CNN / MLP on the "
+                                "same mixtures with leave-one-out — mean deviation (%p), "
+                                "recovery %±SE per substance, detection ROC, and accuracy "
+                                "at the cut declared in advanced (if any). VIP band = NNLS "
+                                "restricted to each compound's marker windows, the simplest "
+                                "rung of the ladder. Tells you which method to train; "
+                                "saves no model.")
         self.bench_b.clicked.connect(self._benchmark)
         self.kfold_b = QPushButton("5-fold check"); self.kfold_b.setObjectName("ghost")
         self.kfold_b.setToolTip("repeat the held-out test over all 5 one-in-five splits for "
@@ -252,7 +286,10 @@ class ComposePanel(QWidget):
         self.sp_px.setToolTip("individual hit-pixel training rows per map: 0 = one mean spectrum per map "
                               "(one row per map), higher = use that many individual "
                               "individual pixels, all labelled with the map's ratio. More rows "
-                              "fight overfitting; splits stay grouped by map either way.")
+                              "fight overfitting; splits stay grouped by map either way. "
+                              "Affects TRAINING only — Benchmark always scores one mean "
+                              "spectrum per map, since refitting six methods per condition "
+                              "on 400 px/map does not fit in memory.")
         # OFF by default (2026-08-19): defaulting ON cost two accidental all-day
         # runs — LOO refits once per condition (~100×, hours). Tick it exactly once,
         # for the final model whose held-out numbers go in the paper.
@@ -307,6 +344,21 @@ class ComposePanel(QWidget):
                                  "the honest comparison. Lower it only to get a run finished, "
                                  "and say so wherever the numbers are used: the CNN is then "
                                  "scored undertrained against the rest.")
+        # the accuracy cut is DECLARED here, before the run — picking it after seeing the
+        # results is cherry-picking (HANDOFF 2026-08-19 §3). Mean deviation (%p) and
+        # per-substance recovery are always reported regardless; the cut only adds an
+        # accuracy column. 15 %p ≈ reproducibility floor (11.6) + 3; set 0 for no cut.
+        self.sp_cut = QDoubleSpinBox(); self.sp_cut.setObjectName("field")
+        self.sp_cut.setRange(0.0, 50.0); self.sp_cut.setDecimals(1)
+        self.sp_cut.setSingleStep(0.5); self.sp_cut.setValue(15.0)
+        self.sp_cut.setPrefix("declared cut "); self.sp_cut.setSuffix(" %p")
+        self.sp_cut.setSpecialValueText("no accuracy cut")
+        self.sp_cut.setToolTip("Benchmark only: a condition counts as 'correct' when its "
+                               "composition deviation is within this many percentage "
+                               "points. DECLARE it before running — choosing a cut after "
+                               "seeing the results is cherry-picking. 15 %p ≈ the measured "
+                               "repeat-preparation floor (11.6 %p) + 3; set to 0 to report "
+                               "mean deviation and recovery only, with no cut at all.")
 
         # ---- physics pre-training. These were hardcoded off (use_pretrain=False, and
         # calib_path never set), so a model trained here could not be the one the
@@ -351,7 +403,7 @@ class ComposePanel(QWidget):
         _adv2 = QHBoxLayout(); _adv2.setSpacing(8)
         for w in (self.chk_equal_volume, self.chk_blank,
                   self.chk_pretrain, self.cmb_iso, self.chk_nuisance,
-                  self.cmb_rfmf, self.sp_cnnep):
+                  self.cmb_rfmf, self.sp_cnnep, self.sp_cut):
             _adv2.addWidget(w)
         _adv2.addStretch(1)
         adv.addLayout(_adv1); adv.addLayout(_adv2)
@@ -409,6 +461,28 @@ class ComposePanel(QWidget):
         root.addWidget(self.table)
         self._toggle_table(True)
 
+        # the Benchmark table — one row per method: mean deviation (%p), accuracy at the
+        # declared cut (only when one was declared), recovery %±SE per substance,
+        # detection AUC. Hidden until a benchmark has run. Recovery is direction-aware
+        # but over/under CANCEL in its mean, so it is shown next to the deviation, never
+        # alone (HANDOFF 2026-08-19 §3).
+        self.bench_lbl2 = QLabel(
+            "Benchmark table — leave-one-out, same folds for every method. "
+            "Mean dev and RMSE are percentage points of composition; log-ratio distance "
+            "(Aitchison) compares the ratios themselves, so a 2-fold miss costs the same "
+            "on a minor component as on the major one (~0.57 per 2-fold on a ternary). "
+            "Recovery = mean(pred/true)·100 where the substance is present (true=0 excluded).")
+        self.bench_lbl2.setObjectName("sub"); self.bench_lbl2.setWordWrap(True)
+        self.bench_lbl2.setVisible(False)
+        root.addWidget(self.bench_lbl2)
+        self.bench_table = QTableWidget(0, 0)
+        self.bench_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.bench_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.bench_table.setMaximumHeight(220)
+        self.bench_table.setVisible(False)
+        root.addWidget(self.bench_table)
+
         plots = QHBoxLayout(); plots.setSpacing(12)
         lcard, llay = _card("Learning curve — training loss vs epoch (MLP / CNN)")
         self.c_loss = Canvas(); self.c_loss.setMinimumHeight(300)
@@ -418,6 +492,7 @@ class ComposePanel(QWidget):
         self.c_tri = Canvas(); self.c_tri.setMinimumHeight(300)
         self.c_tri.placeholder("Train to see held-out composition recovery")
         tlay.addWidget(self.c_tri); plots.addWidget(tcard, 1)
+        self._tri_title = tlay.itemAt(0).widget()
         root.addLayout(plots, 1)
 
         plots2 = QHBoxLayout(); plots2.setSpacing(12)
@@ -426,6 +501,7 @@ class ComposePanel(QWidget):
         self.c_parity = Canvas(); self.c_parity.setMinimumHeight(300)
         self.c_parity.placeholder("Train to see the per-substance parity")
         play.addWidget(self.c_parity); plots2.addWidget(pcard, 1)
+        self._parity_title = play.itemAt(0).widget()
         ecard, elay = _card("Per-substance error — mean |predicted − true| fraction "
                             "(lower = better)")
         self.c_err = Canvas(); self.c_err.setMinimumHeight(300)
@@ -604,18 +680,39 @@ class ComposePanel(QWidget):
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _benchmark(self):
-        """Leave-one-out comparison of NNLS / PLS / RF / CNN / MLP on the same mixtures."""
+        """Leave-one-out comparison of VIP band / NNLS / PLS / RF / CNN / MLP on the same
+        mixtures."""
         items = self._items_cache
         if len(items) < 3:
             self.status.setText("prepare ≥3 known-ratio mixtures in the Samples tab first")
             self.status.setStyleSheet(f"color:{RED};"); return
         params = self._opts(); params.pop("method", None); params.pop("loo", None)
         params["items"] = items; params["_benchmark"] = True
+        # ONE mean spectrum per map, whatever "pixels/map" says. That spinbox sizes the
+        # TRAINING set, where 400 px/map is affordable because the model is fit once; the
+        # benchmark refits six methods per condition, so the same setting means a
+        # 102x400 = 40,800-row matrix in every one of ~100 folds. Measured on this code:
+        # the 1-D CNN runs full-batch, so its activations alone come to ~18 GB (the
+        # machine has 15.7) and one method would need ~830 h. At map level the whole
+        # six-method run is an overnight job. Said out loud in the status line below,
+        # because it makes the benchmark's MLP column a map-level number that will not
+        # equal the deployed model's pixel-level one.
+        params["px_per_map"] = 0
+        # the accuracy cut is frozen NOW, before any result exists — changing the spinbox
+        # afterwards must not re-score a finished run
+        v = float(self.sp_cut.value())
+        self._bench_cut_pending = v if v > 0 else None
         self.train_b.setEnabled(False); self.bench_b.setEnabled(False)
         self.bench_b.setText("Benchmarking…")
         self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
-        self.status.setText("● leave-one-out benchmark…"); self.status.setStyleSheet(f"color:{MUTE};")
+        # maps, not folds: repeats of one ratio are held out together (that is the point
+        # of grouping), so the fold count is the number of distinct ratios and is only
+        # known once the maps are loaded — the progress line reports it.
+        self.status.setText(f"● leave-one-out benchmark — {len(items)} maps × 9 methods, "
+                            "one mean spectrum per map (pixel-level would need ~18 GB per "
+                            "CNN fold)")
+        self.status.setStyleSheet(f"color:{MUTE};")
         start_worker(self, TrainComposeWorker(params), done=self._done,
                      fail=self._fail,
                      progress=lambda m: self.status.setText("● " + m))
@@ -627,17 +724,23 @@ class ComposePanel(QWidget):
         self.pbar.setVisible(False); self.cancel_b.setVisible(False)
 
     def _done_bench(self, bench):
-        """Plot the LOO comparison: composition error per method + overlaid detection ROC."""
+        """Plot the LOO comparison: composition error per method + overlaid detection ROC,
+        and fill the benchmark table (mean deviation %p · accuracy at the declared cut ·
+        recovery %±SE per substance · detection AUC)."""
         import numpy as _np
         subs = list(bench.get("subs", []))
-        methods = [m for m in ("nnls", "pls", "rf", "cnn", "mlp") if m in bench]
-        label = {"nnls": "NNLS", "pls": "PLS", "rf": "RF", "cnn": "1D-CNN", "mlp": "MLP"}
+        methods = [m for m in ("null", "band", "nnls", "nnls_rf", "mcr", "pls", "rf",
+                               "cnn", "mlp") if m in bench]
+        label = {"null": "null", "band": "VIP band", "nnls": "NNLS",
+                 "nnls_rf": "NNLS+resp", "mcr": "MCR-ALS", "pls": "PLS", "rf": "RF",
+                 "cnn": "1D-CNN", "mlp": "MLP"}
         self._bench = {}
+        self._bench_raw = bench
         self._bench_subs = subs
+        self._canvas_shows = "bench"        # c_err / c_roc now hold the method comparison
         self._err_title.setText("Method comparison — composition error, leave-one-out "
                                 "(lower = better)")
         self._roc_title.setText("Method comparison — detection ROC, leave-one-out")
-        ax = self.c_err.new_ax()                            # error bar chart per method
         errs, aucs = [], {}
         for m in methods:
             T = _np.asarray(bench[m]["true"], float); P = _np.asarray(bench[m]["pred"], float)
@@ -648,12 +751,70 @@ class ComposePanel(QWidget):
                     for i in range(len(T))]
             self._bench[m] = rows
             aucs[m] = self._roc(rows)
+
+        # summary FIRST — the error chart and the table below both read from it
+        from dl_model import benchmark_summary
+        cut = getattr(self, "_bench_cut_pending", None)
+        self._bench_cut = cut
+        summ = benchmark_summary(bench, cut)
+        self._bench_summary = summ
+
+        # the benchmark figure: how well each method recovers the mixture composition —
+        # ONE bar per method, mean deviation over every condition with its standard
+        # error. (The by-component-count split still rides along in the CSV for anyone
+        # who wants it, but the headline is the single recovery number.)
+        ax = self.c_err.new_ax()
+        vals = [summ.get(m, {}).get("dev_by_k", {}).get(
+                    "mean", (float("nan"), float("nan"), 0)) for m in methods]
         x = _np.arange(len(methods))
-        ax.bar(x, [e * 100 for e in errs], color=[TEAL if m == "mlp" else MUTE for m in methods],
-               edgecolor="white", alpha=0.9)
+        ax.bar(x, [v[0] for v in vals], 0.62,
+               yerr=[v[1] if v[1] == v[1] else 0.0 for v in vals], capsize=4,
+               color=[TEAL if m == "mlp" else MUTE for m in methods],
+               edgecolor="white", alpha=0.9, error_kw=dict(lw=0.9, ecolor=INK))
         ax.set_xticks(x); ax.set_xticklabels([label[m] for m in methods], fontsize=8.5)
-        ax.set_ylabel("composition error (%)  — leave-one-out")
+        ax.set_ylabel("composition error (%p)  — leave-one-out")
         self.c_err.fig.tight_layout(); self.c_err.draw_idle()
+
+        # The parity and ternary canvases belong to a TRAINED model and sit idle during a
+        # benchmark, so the two comparisons the table leads with get a figure each rather
+        # than living only in the CSV.
+        self._parity_title.setText(
+            f"Accuracy — conditions recovered within the declared cut (≤{cut:g} %p)"
+            if cut is not None else "Accuracy — no cut was declared for this run")
+        if cut is None:
+            self.c_parity.placeholder("No accuracy cut declared — set one in advanced "
+                                      "BEFORE running, then re-run the benchmark")
+        else:
+            axa = self.c_parity.new_ax()
+            acc = [100 * summ.get(m, {}).get("acc_at_cut", float("nan")) for m in methods]
+            axa.bar(x, acc, 0.62, color=[TEAL if m == "mlp" else MUTE for m in methods],
+                    edgecolor="white", alpha=0.9)
+            for xi, a in zip(x, acc):
+                if a == a:
+                    axa.text(xi, a + 1.5, f"{a:.0f}%", ha="center", fontsize=8, color=INK)
+            axa.set_xticks(x); axa.set_xticklabels([label[m] for m in methods], fontsize=8.5)
+            axa.set_ylim(0, 105); axa.set_ylabel(f"conditions within {cut:g} %p (%)")
+            self.c_parity.fig.tight_layout(); self.c_parity.draw_idle()
+
+        # recovery: mean(pred/true)·100 per substance, ±SE, with 100% marked. Read it
+        # WITH the deviation chart — over- and under-recovery cancel in this mean.
+        self._tri_title.setText("Recovery per substance — mean(predicted / prepared) × 100 "
+                                "± SE (100% = exact; read next to the error chart)")
+        axv = self.c_tri.new_ax()
+        bw = 0.8 / max(len(subs), 1)
+        for si, s in enumerate(subs):
+            vals = [summ.get(m, {}).get("recovery", {}).get(
+                        s, (float("nan"), float("nan"), 0)) for m in methods]
+            axv.bar(x + (si - (len(subs) - 1) / 2) * bw, [v[0] for v in vals], bw * 0.9,
+                    yerr=[v[1] if v[1] == v[1] else 0.0 for v in vals], capsize=3,
+                    color=substance_color(s, si), edgecolor="white", alpha=0.9,
+                    label=s, error_kw=dict(lw=0.9, ecolor=INK))
+        axv.axhline(100, color=INK, ls="--", lw=1.0)
+        axv.set_xticks(x); axv.set_xticklabels([label[m] for m in methods], fontsize=8.5)
+        axv.set_ylabel("recovery (%)")
+        axv.legend(fontsize=8, framealpha=0, ncol=len(subs))
+        self.c_tri.fig.tight_layout(); self.c_tri.draw_idle()
+
         axr = self.c_roc.new_ax()                           # ROC overlay
         axr.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0)
         for j, m in enumerate(methods):
@@ -669,10 +830,46 @@ class ComposePanel(QWidget):
         self.c_roc.fig.tight_layout(); self.c_roc.draw_idle()
         self._bench_err = dict(zip(methods, errs))
         self._bench_auc = {m: aucs[m][2] for m in methods}
+
+        # the benchmark table — same benchmark_summary the chart above and the CSV
+        # export read, so screen and file cannot disagree
+        cols = (["mean dev (%p)", "RMSE (%p)", "log-ratio dist", "vs NNLS (Δ%p, p)"]
+                + ([f"accuracy ≤{cut:g} %p"] if cut is not None else [])
+                + [f"{s} recovery %±SE" for s in subs] + ["detection AUC"])
+        self.bench_table.setColumnCount(len(cols))
+        self.bench_table.setHorizontalHeaderLabels(cols)
+        self.bench_table.setRowCount(len(methods))
+        for i, m in enumerate(methods):
+            e = summ.get(m, {})
+            self.bench_table.setVerticalHeaderItem(i, QTableWidgetItem(label[m]))
+            def _ms(key, dec=1):
+                mu, se, _n = e.get(key, (float("nan"), float("nan"), 0))
+                return f"{mu:.{dec}f} ± {se:.{dec}f}" if se == se else f"{mu:.{dec}f}"
+
+            vr = e.get("vs_ref")
+            vals = [f"{e.get('mean_dev_pp', float('nan')):.1f}", _ms("rmse_pp"),
+                    _ms("logratio", 2),
+                    "reference" if m == "nnls" else
+                    ("—" if not vr else f"{vr[0]:+.1f}, p={vr[1]:.3f}")]
+            if cut is not None:
+                vals.append(f"{e.get('acc_at_cut', float('nan')) * 100:.0f}%")
+            for s in subs:
+                mu, se, n = e.get("recovery", {}).get(s, (float("nan"), float("nan"), 0))
+                vals.append("—" if not n else
+                            (f"{mu:.0f}±{se:.0f}% (n={n})" if se == se
+                             else f"{mu:.0f}% (n={n})"))
+            vals.append(f"{self._bench_auc.get(m, float('nan')):.3f}")
+            for c, v in enumerate(vals):
+                self.bench_table.setItem(i, c, QTableWidgetItem(v))
+        self.bench_lbl2.setVisible(True)
+        self.bench_table.setVisible(True)
+
         self.export_b.setEnabled(True)
         best = methods[int(_np.argmin(errs))]
         self.status.setText("leave-one-out benchmark — " + " · ".join(
-            f"{label[m]} {e:.0%}" for m, e in zip(methods, errs)) + f"   → best: {label[best]}")
+            f"{label[m]} {e:.0%}" for m, e in zip(methods, errs)) + f"   → best: {label[best]}"
+            + (f"   (accuracy cut declared: ≤{cut:g} %p)" if cut is not None
+               else "   (no accuracy cut — deviation only)"))
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _cancel(self):
@@ -701,16 +898,13 @@ class ComposePanel(QWidget):
         self.save_b.setEnabled(True)
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         self._rows = rows
+        self._restore_model_titles()      # the canvases go back to the model's plots
         try:
             self._plot_triangle(rows)
         except Exception:
             import traceback as _tb
             print(_tb.format_exc(), file=sys.stderr)
         self._plot_loss(model.get("train_eval", {}).get("loss", []))
-        self._err_title.setText("Per-substance error — mean |predicted − true| fraction "
-                                "(lower = better)")
-        self._roc_title.setText("Detection ROC — is each substance present? "
-                                "(threshold the predicted fraction)")
         try:
             self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
         except Exception:
@@ -746,7 +940,24 @@ class ComposePanel(QWidget):
         if getattr(self, "_cancelled", False):            # cancel path already reset the UI
             return
         self._reset_buttons()
-        self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
+        # A Python traceback says the most in its LAST line; anything else (a killed
+        # worker, a plain message) says it in the FIRST. Guessing wrong buries the
+        # reason — the old code always took the last line, so a multi-line explanation
+        # showed up as its closing clause. The whole text goes to the tooltip and to a
+        # log file, since the app is usually started without a console to print to.
+        lines = [l for l in tb.strip().splitlines() if l.strip()]
+        msg = (lines[-1] if any(l.startswith("Traceback") for l in lines) else lines[0]) \
+            if lines else "no message"
+        log = os.path.join(self.data_dir, "unmixr_last_error.txt")
+        try:
+            with open(log, "w", encoding="utf-8") as f:
+                f.write(tb)
+        except Exception:
+            log = None
+        self.status.setText("failed — " + msg[:120]
+                            + (f"   (full text: {os.path.basename(log)} in the pure-refs "
+                               "folder, and hover this line)" if log else ""))
+        self.status.setToolTip(tb)
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
 
@@ -914,12 +1125,25 @@ class ComposePanel(QWidget):
                   ["presence_threshold", "0.05", "true fraction > threshold"],
                   ["roc_auc_micro", f"{auc_v:.6f}" if auc_v == auc_v else "",
                    "pooled component presence; not composition accuracy"]])
-        n = _save_figs([("composition_learning_curve", self.c_loss),
-                        ("composition_triangle", self.c_tri),
-                        ("composition_parity", self.c_parity),
-                        ("composition_error", self.c_err),
-                        ("composition_roc", self.c_roc)], d)
+        # c_err / c_roc are SHARED with the benchmark: whichever ran last is on screen.
+        # Name them for what they actually show, or a benchmark chart would leave here
+        # as "composition_error.png" and be read as the model's per-substance error.
+        # A benchmark takes over four of the five canvases (error, ROC, parity, ternary),
+        # so a session that both trained and benchmarked can only export the panels the
+        # LAST run drew. Name them for what they actually show, or the benchmark's charts
+        # would leave as composition_*.png and be read as the model's own results.
+        showing_bench = getattr(self, "_canvas_shows", "model") == "bench"
+        figs = [("composition_learning_curve", self.c_loss)]
+        figs += (self._bench_figs() if showing_bench else
+                 [("composition_triangle", self.c_tri),
+                  ("composition_parity", self.c_parity),
+                  ("composition_error", self.c_err),
+                  ("composition_roc", self.c_roc)])
+        n = _save_figs(figs, d)
         n += self._export_grid_figs(d, rows, subs)
+        # a benchmark run in this session leaves with the model, not silently dropped
+        if getattr(self, "_bench", None):
+            self._write_bench_csvs(d, self._result_subs())
         # ONE ternary only — the on-screen `composition_triangle` above. The extra
         # ternaries this used to write (vs-NNLS side-by-side, accuracy-shaded, RGB)
         # said the same thing three more times and buried the rest of the export.
@@ -1058,6 +1282,99 @@ class ComposePanel(QWidget):
                             f"({len(entries)} maps)")
         self.status.setStyleSheet(f"color:{MUTE};")
 
+    def _restore_model_titles(self):
+        """Hand the four shared panels back to the trained model. A benchmark relabels
+        them (accuracy / recovery / method comparison), so training or loading a model
+        afterwards has to put the captions back or the plots would describe the wrong run."""
+        self._canvas_shows = "model"
+        self._tri_title.setText("Held-out recovery (leave-one-out) — true (○) vs "
+                                "predicted (●, colour = accuracy)")
+        self._parity_title.setText("Parity per substance — predicted vs true fraction "
+                                   "(on the line = exact)")
+        self._err_title.setText("Per-substance error — mean |predicted − true| fraction "
+                                "(lower = better)")
+        self._roc_title.setText("Detection ROC — is each substance present? "
+                                "(threshold the predicted fraction)")
+
+    def _bench_figs(self):
+        """The benchmark's four panels, as (filename, canvas). The accuracy panel is
+        skipped when no cut was declared — it holds a placeholder, not a chart."""
+        figs = [("benchmark_error", self.c_err), ("benchmark_recovery", self.c_tri),
+                ("benchmark_roc", self.c_roc)]
+        if getattr(self, "_bench_cut", None) is not None:
+            figs.insert(1, ("benchmark_accuracy", self.c_parity))
+        return figs
+
+    def _write_bench_csvs(self, d, subs):
+        """The benchmark table + its raw predictions and ROC points, into folder ``d``.
+        Shared by both export paths so a benchmark leaves with its numbers whether or
+        not a model was also trained this session. Metrics come from
+        dl_model.benchmark_summary — the same call the on-screen table reads."""
+        from io_utils import write_csv
+        bench = getattr(self, "_bench", None)
+        if not bench:
+            return
+        # mean deviation (%p) + per-substance recovery %±SE always; accuracy only when a
+        # cut was DECLARED before the run.
+        summ = getattr(self, "_bench_summary", None)
+        if summ is None and getattr(self, "_bench_raw", None):
+            from dl_model import benchmark_summary
+            summ = benchmark_summary(self._bench_raw, getattr(self, "_bench_cut", None))
+        summ = summ or {}
+        cut = getattr(self, "_bench_cut", None)
+        # the by-component-count split is off the chart now, but stays in the file
+        kgroups = [g for g in ("pure", "binary", "ternary")
+                   if any(g in e.get("dev_by_k", {}) for e in summ.values())]
+        head = ["method", "mean_deviation_pp", "rmse_pp", "rmse_se",
+                "logratio_distance", "logratio_se", "median_delta_vs_nnls_pp",
+                "wilcoxon_p_vs_nnls", "composition_error", "detection_auc"]
+        for g in kgroups:
+            head += [f"deviation_pp_{g}", f"deviation_se_{g}", f"n_{g}"]
+        for s in subs:
+            head += [f"recovery_pct_{s}", f"recovery_se_{s}", f"recovery_n_{s}"]
+        if cut is not None:
+            head.append(f"accuracy_within_{cut:g}pp")
+        mrows = []
+        for m in bench:
+            e = summ.get(m, {})
+            rm, rs, _ = e.get("rmse_pp", (float("nan"),) * 3)
+            lm, ls, _ = e.get("logratio", (float("nan"),) * 3)
+            vr = e.get("vs_ref") or (float("nan"), float("nan"), 0)
+            row = [m, f"{e.get('mean_dev_pp', float('nan')):.2f}",
+                   f"{rm:.2f}", f"{rs:.2f}", f"{lm:.4f}", f"{ls:.4f}",
+                   f"{vr[0]:.2f}", f"{vr[1]:.5f}",
+                   f"{self._bench_err[m]:.4f}",
+                   f"{self._bench_auc.get(m, float('nan')):.4f}"]
+            for g in kgroups:
+                mu, se, nn = e.get("dev_by_k", {}).get(g, (float("nan"), float("nan"), 0))
+                row += [f"{mu:.2f}", f"{se:.2f}", str(nn)]
+            for s in subs:
+                mu, se, nn = e.get("recovery", {}).get(s, (float("nan"), float("nan"), 0))
+                row += [f"{mu:.2f}", f"{se:.2f}", str(nn)]
+            if cut is not None:
+                row.append(f"{e.get('acc_at_cut', float('nan')):.4f}")
+            mrows.append(row)
+        write_csv(os.path.join(d, "benchmark_metrics.csv"), head, mrows)
+        rows_out = []
+        for m, rws in bench.items():
+            for nm, tv, pv in rws:
+                rows_out.append([m, nm] + [f"{v:.4f}" for v in tv]
+                                + [f"{v:.4f}" for v in pv])
+        write_csv(os.path.join(d, "benchmark_predictions.csv"),
+                  ["method", "mixture"] + [f"true_{s}" for s in subs]
+                  + [f"pred_{s}" for s in subs], rows_out)
+        # the ROC panel was the one figure leaving without its numbers — only the pooled
+        # AUC was written, and a curve cannot be redrawn from a single scalar.
+        curve = []
+        for m, rws in bench.items():
+            fpr, tpr, _a = self._roc(rws)
+            if fpr is None:
+                continue
+            curve += [[m, f"{a:.5f}", f"{b:.5f}"] for a, b in zip(fpr, tpr)]
+        if curve:
+            write_csv(os.path.join(d, "benchmark_roc_curves.csv"),
+                      ["method", "fpr", "tpr"], curve)
+
     def _export_eval_only(self):
         """Save a Benchmark / 5-fold result when no model has been trained in this session."""
         import numpy as _np
@@ -1072,31 +1389,8 @@ class ComposePanel(QWidget):
             return
         n = 0
         if bench:
-            write_csv(os.path.join(d, "benchmark_metrics.csv"),
-                      ["method", "composition_error", "detection_auc"],
-                      [[m, f"{self._bench_err[m]:.4f}",
-                        f"{self._bench_auc.get(m, float('nan')):.4f}"] for m in bench])
-            rows_out = []
-            for m, rws in bench.items():
-                for nm, tv, pv in rws:
-                    rows_out.append([m, nm] + [f"{v:.4f}" for v in tv]
-                                    + [f"{v:.4f}" for v in pv])
-            write_csv(os.path.join(d, "benchmark_predictions.csv"),
-                      ["method", "mixture"] + [f"true_{s}" for s in subs]
-                      + [f"pred_{s}" for s in subs], rows_out)
-            # the ROC panel was the one figure leaving without its numbers — only the
-            # pooled AUC was written, and a curve cannot be redrawn from a single scalar.
-            curve = []
-            for m, rws in bench.items():
-                fpr, tpr, _a = self._roc(rws)
-                if fpr is None:
-                    continue
-                curve += [[m, f"{a:.5f}", f"{b:.5f}"] for a, b in zip(fpr, tpr)]
-            if curve:
-                write_csv(os.path.join(d, "benchmark_roc_curves.csv"),
-                          ["method", "fpr", "tpr"], curve)
-            n += _save_figs([("benchmark_error", self.c_err),
-                             ("benchmark_roc", self.c_roc)], d)
+            self._write_bench_csvs(d, subs)
+            n += _save_figs(self._bench_figs(), d)
         if kf:
             write_csv(os.path.join(d, "kfold_errors.csv"), ["fold", "composition_error"],
                       [[i + 1, f"{e:.4f}"] for i, e in enumerate(kf.get("errors", []))]
@@ -1137,6 +1431,7 @@ class ComposePanel(QWidget):
             rows.append((f"mix {i + 1}", tv, pv))
         if rows:
             self._rows = rows
+            self._restore_model_titles()
             self._plot_triangle(rows); self._plot_parity(rows)
             self._plot_error(rows); self._plot_roc(rows)
             self._plot_loss(model.get("train_eval", {}).get("loss", []))

@@ -74,7 +74,8 @@ def _cnn(n_feat, n_comp):
 
 
 def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
-                 n_components=8, n_trees=300, P_ref=None, rf_max_features=None):
+                 n_components=8, n_trees=300, P_ref=None, rf_max_features=None,
+                 band_mask=None, mcr_iter=6):
     """Fit ``method`` on (Xtr, Ytr) and return composition predictions for Xte, rows
     summing to 1. Shared by the full-data fit and each leave-one-out fold so both use
     exactly the same estimator."""
@@ -83,6 +84,50 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
         from dl_quantify import surface_composition
         raw = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
         p = surface_composition(_composition_features(raw, "legacy_l2"), P_ref)
+    elif method == "band":                     # VIP-band NNLS: no training either — the
+        # same NNLS, but fit only on each compound's least-cross-talk marker windows
+        # (``band_mask``, computed once by the caller from the pure templates). This is
+        # the Validate tab's VIP-band decomposition, scored on the benchmark's terms.
+        from dl_quantify import surface_composition
+        raw = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        if band_mask is not None and np.asarray(band_mask, bool).any():
+            bm = np.asarray(band_mask, bool)
+            raw = raw[:, bm]
+            Pm = np.asarray(P_ref, float)[:, bm]
+            Pm = Pm / (np.linalg.norm(Pm, axis=1, keepdims=True) + 1e-12)
+        else:                                  # no usable bands → plain NNLS, honestly
+            Pm = P_ref
+        p = surface_composition(_composition_features(raw, "legacy_l2"), Pm)
+    elif method == "null":
+        # The floor: always answer with the mean composition of the TRAINING conditions.
+        # A method that cannot beat this has learned nothing from the spectrum. Honest by
+        # construction here — Ytr already excludes the held-out condition.
+        p = np.repeat(np.asarray(Ytr, float).mean(axis=0, keepdims=True),
+                      len(np.atleast_2d(Xte)), axis=0)
+    elif method == "nnls_rf":
+        # NNLS, then ONE response factor per substance (dl_quantify.fit_response_factors),
+        # fitted on the training conditions only. The control for the paper's claim: if
+        # three numbers close most of the NNLS-to-learned gap, that gap was response
+        # factors, not spectral learning.
+        from dl_quantify import (surface_composition, fit_response_factors,
+                                 apply_response_factors)
+        raw_tr = np.expm1(np.clip(Xtr, 0, None))
+        raw_te = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        s_tr = surface_composition(_composition_features(raw_tr, "legacy_l2"), P_ref)
+        r = fit_response_factors(s_tr, np.asarray(Ytr, float))
+        s_te = surface_composition(_composition_features(raw_te, "legacy_l2"), P_ref)
+        p = apply_response_factors(s_te, r)
+    elif method == "mcr":
+        # MCR-ALS refines the component SPECTRA from the data (seeded by the pure
+        # templates), then decomposes the held-out spectrum on the refined ones — the
+        # answer to "your templates are not the real surface spectra". Uses no labels at
+        # all, and refines on the training rows only, so nothing leaks.
+        from unmix import _mcr_als, _l2
+        from dl_quantify import surface_composition
+        raw_tr = np.expm1(np.clip(Xtr, 0, None))
+        raw_te = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        _C, S = _mcr_als(_l2(raw_tr), np.asarray(P_ref, float), n_iter=int(mcr_iter))
+        p = surface_composition(_l2(raw_te), S)
     elif method == "pls":
         from sklearn.cross_decomposition import PLSRegression
         nc = max(1, min(int(n_components), len(Xtr) - 1, Xtr.shape[1]))
@@ -863,13 +908,26 @@ def kfold_stability(data_dir, items, method="mlp", folds=5, progress=None, seed=
 
 
 def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
-                  methods=("nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
+                  methods=("null", "band", "nnls", "nnls_rf", "mcr", "pls", "rf",
+                           "cnn", "mlp"), epochs=350, seed=0,
                   use_pretrain=True,
                   n_components=8, n_trees=300, px_per_map=0, rf_max_features=None,
-                  cnn_epochs=None):
+                  cnn_epochs=None, band_window=10.0, mcr_iter=6):
     """Leave-one-out comparison of the composition methods on the SAME mixtures — the
     honest counterpart to the train-set numbers. Maps are loaded once, then every method
-    is refit per fold. Returns {method: {"true", "pred"}} plus "subs"."""
+    is refit per fold. Returns {method: {"true", "pred"}} plus "subs".
+
+    The ladder, cheapest rung first — the four training-free ones cost almost nothing and
+    each answers a different objection:
+      null     always the mean training composition — the floor every method must clear
+      band     NNLS on each compound's least-cross-talk marker windows (± ``band_window``
+               cm⁻¹), the Validate tab's decomposition
+      nnls     NNLS on the whole spectrum, the classical baseline
+      nnls_rf  NNLS + one response factor per substance, fitted on the training fold —
+               the control that asks how much of the learned gain is just that
+      mcr      MCR-ALS: refine the component spectra from the data, then decompose —
+               the answer to "your templates are not the real surface spectra"
+    then pls / rf / cnn / mlp, which are refit per fold."""
     from real_data import load_map
     from dl_quantify import simulate_mixtures, _ratio
     subs, wn, mask, P, lo, hi = _refs(data_dir, baseline, trim)
@@ -882,7 +940,13 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
             continue
         ckey = "r:" + ",".join(f"{v:.6f}" for v in vec)
         _w, cube, _m, _c = load_map(it[0])
-        for ya in _map_spectra(cube, mask, px_per_map):
+        # Honour the dataset's baseline flag, as train_model and apply_model do. This
+        # defaulted to True, so with baseline=False — references already corrected
+        # upstream, which is this dataset's setting — every map was ALS-corrected a
+        # second time and then fitted against templates that were not. It is the same
+        # double-correction apply_model was fixed for; measured here on DQ10-TB10-TH10,
+        # it cost NNLS 11.2 -> 14.2 %p and the VIP band 15.6 -> 18.0 %p.
+        for ya in _map_spectra(cube, mask, px_per_map, baseline_correct=baseline):
             X.append(_composition_features(ya)); Y.append(vec)
             gkey.append(ckey)                         # group = the CONDITION, not the map
     X = np.array(X, np.float32); Y = np.array(Y, np.float32)
@@ -908,6 +972,17 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
         except Exception:
             pre = None
 
+    band_mask = None
+    if "band" in methods:
+        # VIP marker windows come from the PURE templates only — identical in every
+        # fold (no leakage), so the mask is computed once, not per condition.
+        from unmix import vip_bands, _vip_fit_mask
+        axis = np.asarray(wn, float)[mask]
+        band_mask = _vip_fit_mask(axis, vip_bands(axis, P, subs),
+                                  float(band_window), len(subs))
+        if progress and band_mask is not None:
+            progress(f"VIP bands — fitting on {int(band_mask.sum())}/{len(axis)} points")
+
     out = {"subs": subs}
     for mi, meth in enumerate(methods):
         uniq = list(dict.fromkeys(gkey.tolist()))
@@ -924,9 +999,101 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
             pred = _fit_predict(meth, X[tr], Y[tr], X[te], pre=pre, epochs=ep,
                                 seed=seed + i, n_components=n_components,
                                 n_trees=n_trees, P_ref=P,
-                                rf_max_features=rf_max_features)
+                                rf_max_features=rf_max_features, band_mask=band_mask,
+                                mcr_iter=mcr_iter)
             tv.append(Y[te[0]].tolist()); pv.append(np.asarray(pred, float).mean(0).tolist())
         out[meth] = {"true": tv, "pred": pv}
+    return out
+
+
+def benchmark_summary(bench, cut_pp=None, ref="nnls"):
+    """The benchmark table's numbers, from a ``benchmark_loo`` result — computed in ONE
+    place so the UI table and the CSV export cannot drift apart. Returns
+    {method: {"n", "mean_dev_pp", "recovery", ["acc_at_cut"]}}.
+
+    mean_dev_pp — mean composition deviation in percentage points (%p):
+        0.5·Σ|pred−true|·100 per condition, averaged. The headline number; report it
+        NEXT TO the measured reproducibility floor rather than through an accuracy cut.
+    recovery — {substance: (mean %, SE %, n)} of pred/true·100 over the conditions where
+        the substance is actually present. true=0 conditions are excluded (recovery is
+        undefined there — detection is the ROC's job). Direction shows (over/under), but
+        over- and under-recovery CANCEL in the mean, so never read it without mean_dev_pp.
+    acc_at_cut — fraction of conditions with deviation ≤ ``cut_pp``. Only computed when a
+        cut is passed, and the cut must be DECLARED before looking at the results —
+        picking it afterwards is cherry-picking (see HANDOFF 2026-08-19 §3).
+    dev_by_k — {"pure"/"binary"/"ternary"/"mean": (mean %p, SE %p, n)} — the deviation
+        split by how many components the condition actually contains. "ternary" is k≥3;
+        groups with no conditions are absent; "mean" is over every condition, identical
+        to mean_dev_pp.
+    rmse_pp — (mean, SE, n) of the per-condition root-mean-square component error, in
+        percentage points. Same units as the deviation but squared-weighted, so one badly
+        missed component costs more than three small slips. Report alongside, not instead:
+        deviation is the number the reproducibility floor is measured in.
+    logratio — (mean, SE, n) of the Aitchison (centred-log-ratio) distance, the standard
+        distance for compositional data — it compares the RATIOS themselves, so being 2x
+        off on a minor component costs exactly what being 2x off on the major one costs.
+        The %p metrics cannot see that: on DQ24-TB12-TH6, predicting THI six times too
+        low is 11.6 %p (inside a 15 %p cut) while halving DQ is 17.1 %p (outside), even
+        though the second is the smaller ratio error. Dimensionless; 0 = exact, and ~0.57
+        is what a single 2-fold miss costs on a ternary mixture.
+    vs_ref — (median Δ %p, p, n) against method ``ref`` (default the classical NNLS
+        baseline), paired condition by condition since every method is scored on the same
+        folds. Negative Δ = better than the reference; p is a two-sided Wilcoxon
+        signed-rank. The pairing is what makes ~100 conditions enough to separate methods:
+        unpaired, the per-condition spread (sd ≈ 10 %p on this grid) swamps a few-%p
+        difference, while paired it resolves ~2 %p. Fix ``ref`` before the run — choosing
+        the comparator afterwards is the cherry-picking the declared cut avoids.
+    """
+    subs = list(bench.get("subs", []))
+    devs = {}                    # per-method, per-condition deviation — for the pairing
+    for m, r in bench.items():
+        if isinstance(r, dict) and "true" in r:
+            T_ = np.asarray(r["true"], float); P_ = np.asarray(r["pred"], float)
+            devs[m] = 0.5 * np.abs(P_ - T_).sum(1) * 100.0
+    out = {}
+    for m, r in bench.items():
+        if not isinstance(r, dict) or "true" not in r:
+            continue
+        T = np.asarray(r["true"], float); Pd = np.asarray(r["pred"], float)
+        dev = 0.5 * np.abs(Pd - T).sum(1) * 100.0
+        rec = {}
+        for j, s in enumerate(subs):
+            pres = T[:, j] > 0
+            n = int(pres.sum())
+            if n:
+                q = Pd[pres, j] / T[pres, j] * 100.0
+                se = float(q.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
+                rec[s] = (float(q.mean()), se, n)
+            else:
+                rec[s] = (float("nan"), float("nan"), 0)
+
+        def _stat(d):
+            n = int(len(d))
+            se = float(d.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
+            return (float(d.mean()), se, n) if n else (float("nan"), float("nan"), 0)
+
+        k = (T > 0).sum(axis=1)
+        by = {lab: _stat(dev[sel]) for lab, sel in
+              (("pure", k == 1), ("binary", k == 2), ("ternary", k >= 3))
+              if sel.any()}
+        by["mean"] = _stat(dev)
+        rmse = np.sqrt(((Pd - T) ** 2).mean(axis=1)) * 100.0
+        from composition import aitchison_distance
+        lr = np.array([aitchison_distance(T[i], Pd[i]) for i in range(len(T))])
+        entry = {"n": int(len(T)), "mean_dev_pp": float(dev.mean()), "recovery": rec,
+                 "dev_by_k": by, "rmse_pp": _stat(rmse), "logratio": _stat(lr)}
+        dref = devs.get(ref)
+        if dref is not None and m != ref and len(dref) == len(dev):
+            d = dev - dref
+            try:
+                from scipy.stats import wilcoxon
+                p = float(wilcoxon(d).pvalue) if np.any(d != 0) else 1.0
+            except Exception:
+                p = float("nan")
+            entry["vs_ref"] = (float(np.median(d)), p, int(len(d)))
+        if cut_pp is not None:
+            entry["acc_at_cut"] = float((dev <= float(cut_pp)).mean()) if len(dev) else float("nan")
+        out[m] = entry
     return out
 
 
