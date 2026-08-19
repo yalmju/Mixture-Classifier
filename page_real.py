@@ -960,9 +960,17 @@ class RealDataPage(QWidget):
 
     def _effective_calib(self):
         """(path, origin): a CSV browsed here wins; else the calibration embedded in
-        the model; else the one Quantify published. None when there is none at all."""
+        the model; else the one Quantify published. None when there is none at all.
+
+        EXCEPT: in unmix_map a calib_path beats the model's µM head, so the AUTO
+        sources must stand down when a composition model with a µM head is driving —
+        otherwise loading a .dlm would silently swap its trained µM for the Langmuir
+        inversion. Browsing a CSV here stays an explicit override, as before."""
         if self.calib_path:
             return self.calib_path, "loaded"
+        m = self.dl_model if isinstance(self.dl_model, dict) else None
+        if self._method() == "dlpx" and m and m.get("uM"):
+            return None, None                  # the model's own µM head reports
         p = self._model_calib_path()
         if p:
             return p, "from model"
