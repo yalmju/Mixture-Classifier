@@ -975,9 +975,10 @@ class QuantifyPage(QWidget):
             rows = []
             for nm, (C, specs) in zip(names, dils):
                 C = np.asarray(C, float); specs = np.asarray(specs, float)
-                for c in np.unique(C):
-                    mean_sp = specs[C == c].mean(axis=0)
-                    rows.append([nm, f"{c:.4e}"] + [f"{v:.4f}" for v in mean_sp])
+                # every replicate, not a mean per level — downstream fits keep
+                # their SE/LOD statistics ("점이 너무 적다"는 그 손실)
+                for c, sp in zip(C, specs):
+                    rows.append([nm, f"{c:.4e}"] + [f"{v:.4f}" for v in sp])
             p = os.path.join(tempfile.gettempdir(), "unmixr_calibration_spectra.csv")
             write_csv(p, head, rows)
             CALIB_BUS.set(p, "Quantify (" + " · ".join(names) + ")")
