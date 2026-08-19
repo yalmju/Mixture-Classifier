@@ -420,6 +420,31 @@ def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
                             if model != "linear" else None)}
 
 
+class _CalFolderWorker(QObject):
+    done = pyqtSignal(object)
+    fail = pyqtSignal(str)
+    progress = pyqtSignal(str)
+
+    def __init__(self, folders):
+        super().__init__()
+        self.folders = list(folders)
+
+    def run(self):
+        try:
+            loaded, errors = [], []
+            for i, f in enumerate(self.folders):
+                self.progress.emit(f"loading {os.path.basename(f) or f} "
+                                   f"({i + 1}/{len(self.folders)})")
+                try:
+                    axis, name, concs, specs = load_calibration_folder(f)
+                    loaded.append((axis, name, concs, specs))
+                except Exception as exc:
+                    errors.append(str(exc))
+            self.done.emit({"loaded": loaded, "errors": errors})
+        except Exception:
+            self.fail.emit(traceback.format_exc())
+
+
 class QuantWorker(QObject):
     done = pyqtSignal(object)
     fail = pyqtSignal(str)
@@ -652,22 +677,35 @@ class QuantifyPage(QWidget):
         """Load a dilution series from either ONE compound's concentration folder,
         or a PARENT folder that holds a per-compound subfolder each (conc_tbz/,
         conc_dq/, …) — every subfolder becomes a compound. Concentration is parsed
-        from each filename (1nM/10uM/1_mM…). Loads accumulate across calls."""
+        from each filename (1nM/10uM/1_mM…). Loads accumulate across calls.
+
+        The file reading runs in a WORKER: on Drive-synced folders each CSV can
+        block for seconds while it streams, and reading them on the GUI thread is
+        what froze this tab ("먹통")."""
+        if worker_busy(self):
+            return
         d = QFileDialog.getExistingDirectory(
             self, "Concentration folder (one compound), or a parent of per-compound folders")
         if not d:
             return
         subdirs = [os.path.join(d, x) for x in sorted(os.listdir(d))
                    if os.path.isdir(os.path.join(d, x))]
+        self.src.setText("● loading folders…"); self.src.setStyleSheet("")
+        start_worker(self, _CalFolderWorker([d] + subdirs),
+                     done=self._folder_done, fail=self._folder_fail,
+                     progress=lambda m: self.src.setText("● " + m))
+
+    def _folder_fail(self, tb):
+        self.src.setText("folder load failed"); self.src.setStyleSheet(f"color:{RED};")
+        print(tb, file=sys.stderr)
+
+    def _folder_done(self, res):
         added, errs = [], []
-        for f in [d] + subdirs:                            # the folder itself, then children
-            try:
-                axis, name, concs, specs = load_calibration_folder(f)
-            except Exception as exc:
-                errs.append(str(exc)); continue
+        for axis, name, concs, specs in res["loaded"]:
             if self._axis is not None and len(axis) != len(self._axis):
                 errs.append(f"{name}: axis {len(axis)} ≠ {len(self._axis)}"); continue
             self._axis = axis; self._acc[name] = (concs, specs); added.append(name)
+        errs += res["errors"]
         if added:
             self._rebuild_cal()
             pts = "  ·  ".join(f"{n} ({len(c)})" for n, (c, _s) in self._acc.items())

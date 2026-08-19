@@ -252,6 +252,13 @@ class ComposePanel(QWidget):
                               "(one row per map), higher = use that many individual "
                               "individual pixels, all labelled with the map's ratio. More rows "
                               "fight overfitting; splits stay grouped by map either way.")
+        self.chk_loo = QCheckBox("held-out scoring (LOO)")
+        self.chk_loo.setChecked(True); self.chk_loo.setObjectName("field")
+        self.chk_loo.setToolTip(
+            "score every condition held-out (leave-one-condition-out) after training. "
+            "HONEST but SLOW — it refits the model once per condition (~100×, hours). "
+            "Untick for a fast retrain when only the model itself is needed; the "
+            "saved .dlm then carries train-set numbers only.")
         self.chk_screen = QCheckBox("NNLS-screen ink first")
         self.chk_screen.setChecked(True); self.chk_screen.setObjectName("field")
         self.chk_screen.setToolTip("Use the same NNLS hit/background gate as Real data, then train "
@@ -334,7 +341,7 @@ class ComposePanel(QWidget):
         adv.setContentsMargins(0, 0, 0, 0); adv.setSpacing(6)
         _adv1 = QHBoxLayout(); _adv1.setSpacing(8)
         for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px,
-                  self.chk_screen, self.sp_hit):
+                  self.chk_screen, self.sp_hit, self.chk_loo):
             _adv1.addWidget(w)
         _adv1.addStretch(1)
         _adv2 = QHBoxLayout(); _adv2.setSpacing(8)
@@ -548,7 +555,7 @@ class ComposePanel(QWidget):
         params = self._opts(); params["items"] = items
         if self._test_items:
             params["test_items"] = self._test_items
-        params["loo"] = True   # always score held-out: train-set numbers are meaningless here
+        params["loo"] = self.chk_loo.isChecked()   # the honest-but-slow switch, in the open
         self.train_b.setEnabled(False); self.train_b.setText("Training…")
         self.save_b.setEnabled(False); self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
