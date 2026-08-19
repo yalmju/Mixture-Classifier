@@ -280,7 +280,7 @@ class RealDataPage(QWidget):
         left.addStretch(1)
 
         # ---------- stacked result sections (scrollable) ----------
-        body = QVBoxLayout(); body.setSpacing(12)
+        body = QVBoxLayout(); body.setSpacing(8)
 
         # 1) band maps: raw intensity at one marker band per substance + their RGB merge
         self.c_maps = Canvas()
@@ -291,7 +291,7 @@ class RealDataPage(QWidget):
         self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
-        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(360)
+        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(300)
         # one min/max pair PER band panel (rebuilt with the band row) — the card-wide
         # pair could not stretch a weak channel without flattening a strong one
         self.scalerow = QHBoxLayout(); self.scalerow.setSpacing(6)
@@ -308,7 +308,7 @@ class RealDataPage(QWidget):
             "NNLS/MCR runs show abundances; a composition model shows its per-pixel "
             "probabilities. ALL panels share ONE scale (0–1 for probabilities, "
             "0–P99 for abundances) so brightness compares across components")
-        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(360)
+        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(300)
         lay_ab.addLayout(self._scale_row("abund", 1.0))
         self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=True, key="abund")
         # band | abundance half-and-half on one row — raw evidence beside the
@@ -324,18 +324,18 @@ class RealDataPage(QWidget):
         self.c_spec = Canvas()
         scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
         slay.addWidget(self.c_spec)
-        self.c_spec.setMinimumHeight(220); self.c_spec.setMaximumHeight(260)
+        self.c_spec.setMinimumHeight(190); self.c_spec.setMaximumHeight(220)
         body.addWidget(scard)
 
         # 3) per-pixel composition pie | the same composition summed over the map —
         #    the pie map and the number it adds up to belong on one row
         self.c_pie = Canvas(); self.c_comp = Canvas()
         pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
-        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(460)
+        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(380)
         ccard, clay = _card("Composition (overall)")
-        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(460)
+        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(300)
         prow = QHBoxLayout(); prow.setSpacing(12)
-        prow.addWidget(pcard, 3); prow.addWidget(ccard, 2)
+        prow.addWidget(pcard, 3); prow.addWidget(ccard, 1)
         prow_w = QWidget(); prow_w.setLayout(prow); body.addWidget(prow_w)
 
         # 4) per-substance concentration (µM) maps — its own full-width row
@@ -365,7 +365,7 @@ class RealDataPage(QWidget):
             lambda: self._plot_conc(self._res) if self._res is not None else None)
         vrow.addWidget(_tl); vrow.addWidget(self.true_edit); vrow.addStretch(1)
         lay_conc.addLayout(vrow)
-        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(460)
+        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(340)
         body.addWidget(self.card_conc)
         self.card_conc.setVisible(False)
 
@@ -1418,9 +1418,23 @@ class RealDataPage(QWidget):
         hit = self._hit(r)                                 # exclude saturated/low-R² px
         # SHARED µM colour axis across substances, so the maps are directly comparable
         um_all = r.conc * 1e6
+        # the model's own out-of-range judgment: per-pixel OOD flags plus the stored
+        # reportable range. A weak binder (DQ) has a nearly flat response, so its
+        # inversion EXPLODES on spurious signal — thousands of µM on a 3–500 µM
+        # training range. Those pixels may not silently drive the medians.
+        ood = getattr(r, "conc_ood", None)
+        rngs = getattr(r, "conc_ranges", None)
+        hi_um = None
+        if rngs is not None:
+            _h = np.asarray(rngs, float)[:, 1] * 1e6
+            hi_um = np.where(np.isfinite(_h), _h, np.inf)
         vmask = hit[:, None] & np.isfinite(um_all) & (um_all > 0)
         vals = um_all[vmask]
         vmax = float(np.quantile(vals, 0.90)) if vals.size else 1.0
+        if hi_um is not None and np.isfinite(hi_um).any():
+            # never stretch the shared ramp past the calibrated range — one exploding
+            # substance was blanking every other panel
+            vmax = min(vmax, float(np.nanmax(hi_um[np.isfinite(hi_um)])))
         vmax = vmax or 1.0
         from matplotlib.colors import LinearSegmentedColormap
         for i, nm in enumerate(nb):
@@ -1442,13 +1456,23 @@ class RealDataPage(QWidget):
         # ---- summary bars: the maps show WHERE, this shows HOW MUCH ----
         axb = self.c_conc.style(self.c_conc.fig.add_subplot(1, n, n))
         med = np.full(len(nb), np.nan); q1 = med.copy(); q3 = med.copy()
+        bad_frac = np.zeros(len(nb))
         for i in range(len(nb)):
-            v = um_all[hit, i] if hit.any() else um_all[:, i]
-            v = v[np.isfinite(v) & (v > 0)]
-            if v.size:
-                med[i], q1[i], q3[i] = (float(np.median(v)),
-                                        float(np.quantile(v, 0.25)),
-                                        float(np.quantile(v, 0.75)))
+            sel = hit if hit.any() else np.ones(r.n_pixels, bool)
+            v = um_all[sel, i]
+            fin = np.isfinite(v) & (v > 0)
+            bad = np.zeros(len(v), bool)
+            if ood is not None:
+                bad |= np.asarray(ood, bool)[sel, i]
+            if hi_um is not None and np.isfinite(hi_um[i]):
+                bad |= fin & (v > hi_um[i])
+            keep = fin & ~bad
+            bad_frac[i] = float(bad[fin].mean()) if fin.any() else 0.0
+            vv = v[keep]
+            if vv.size:
+                med[i], q1[i], q3[i] = (float(np.median(vv)),
+                                        float(np.quantile(vv, 0.25)),
+                                        float(np.quantile(vv, 0.75)))
         xs = np.arange(len(nb))
         ok = np.isfinite(med)
         axb.bar(xs[ok], med[ok], width=0.6, color=[nbcols[i] for i in np.where(ok)[0]],
@@ -1475,11 +1499,20 @@ class RealDataPage(QWidget):
                 lab += chr(10) + f"rec {100 * med[i] / tv[i]:.0f}%"
             if vol > 0:                                    # µM × µL = pmol
                 lab += chr(10) + f"≈{med[i] * vol:.0f} pmol"
+            if bad_frac[i] >= 0.05:                        # the hole must be visible
+                lab += chr(10) + f"({bad_frac[i] * 100:.0f}% OOD excl.)"
             axb.annotate(lab, (xs[i], q3[i]), xytext=(0, 4),
                          textcoords="offset points", ha="center", fontsize=8,
                          color=INK)
+        # a substance whose hit pixels are ALL out of range gets a verdict, not a bar
+        for i in np.where(~ok)[0]:
+            if bad_frac[i] > 0:
+                axb.annotate("not reportable" + chr(10)
+                             + f"({bad_frac[i] * 100:.0f}% OOD)",
+                             (xs[i], 0), xytext=(0, 8), textcoords="offset points",
+                             ha="center", fontsize=8, color=RED)
         axb.set_xticks(xs); axb.set_xticklabels(nb, fontsize=8)
-        axb.set_ylabel("median µM (hit px, IQR)"
+        axb.set_ylabel("median µM (in-range hit px, IQR)"
                        + (f" · {vol:g} µL" if vol > 0 else ""), fontsize=8)
         axb.tick_params(labelsize=8)
         axb.set_ylim(bottom=0)
