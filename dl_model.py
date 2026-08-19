@@ -49,13 +49,49 @@ def _nuisance_refs(data_dir, baseline, mask):
 
 
 def _composition_features(x, mode="log1p_raw"):
-    """Composition features that preserve between-pixel intensity; no row-wise L2."""
+    """Spectrum -> the features a learned composition head sees.
+
+    ``log1p_raw`` (the adopted default) keeps the overall intensity, because on this
+    system concentration lives in the magnitude. The alternatives exist to be BENCHMARKED
+    against it, not assumed better — each throws information away on purpose:
+
+    legacy_l2   row-wise L2: shape only, magnitude discarded.
+    snv         standard normal variate, (x - mean) / sd per spectrum. The chemometrics
+                standard for multiplicative scatter — here, substrate gain (CV 37-50%).
+    deriv1      Savitzky-Golay first derivative: kills additive baseline offset and slope,
+                keeps peak structure. Sharpens overlapping bands.
+    snv_deriv1  SNV then the derivative — removes both scatter and baseline.
+
+    The unmixing methods (NNLS and friends) never read these: they need absolute,
+    non-negative spectra, so ``benchmark_loo`` hands them the raw ones separately.
+    """
     x = np.clip(np.asarray(x, float), 0, None)
+    one_d = x.ndim == 1
+    X = np.atleast_2d(x)
+
+    def _snv(A):
+        m = A.mean(axis=1, keepdims=True)
+        s = A.std(axis=1, keepdims=True)
+        return (A - m) / np.where(s > 0, s, 1.0)
+
+    def _d1(A):
+        from scipy.signal import savgol_filter
+        w = min(11, A.shape[1] if A.shape[1] % 2 else A.shape[1] - 1)
+        if w < 5:
+            return np.gradient(A, axis=1)
+        return savgol_filter(A, w, 3, deriv=1, axis=1)
+
     if mode == "legacy_l2":
-        if x.ndim == 1:
-            return x / (np.linalg.norm(x) + 1e-12)
-        return x / (np.linalg.norm(x, axis=1, keepdims=True) + 1e-12)
-    return np.log1p(x)
+        out = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
+    elif mode == "snv":
+        out = _snv(X)
+    elif mode == "deriv1":
+        out = _d1(X)
+    elif mode == "snv_deriv1":
+        out = _d1(_snv(X))
+    else:                                   # log1p_raw
+        out = np.log1p(X)
+    return out[0] if one_d else out
 
 
 def _cnn(n_feat, n_comp):
@@ -75,21 +111,31 @@ def _cnn(n_feat, n_comp):
 
 def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
                  n_components=8, n_trees=300, P_ref=None, rf_max_features=None,
-                 band_mask=None, mcr_iter=6):
+                 band_mask=None, mcr_iter=6, raw_tr=None, raw_te=None):
     """Fit ``method`` on (Xtr, Ytr) and return composition predictions for Xte, rows
     summing to 1. Shared by the full-data fit and each leave-one-out fold so both use
     exactly the same estimator."""
     n_comp = Ytr.shape[1]
+
+    def _raw(X, given):
+        """Absolute, non-negative spectra for the unmixing methods. They cannot read
+        transformed features (SNV or a derivative are signed and scatter-free by design),
+        so the caller passes the untouched spectra; falling back to inverting log1p only
+        works while the features ARE log1p."""
+        if given is not None:
+            return np.clip(np.atleast_2d(np.asarray(given, float)), 0, None)
+        return np.expm1(np.clip(np.atleast_2d(X), 0, None))
+
     if method == "nnls":                       # classical baseline: no training at all
         from dl_quantify import surface_composition
-        raw = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        raw = _raw(Xte, raw_te)
         p = surface_composition(_composition_features(raw, "legacy_l2"), P_ref)
     elif method == "band":                     # VIP-band NNLS: no training either — the
         # same NNLS, but fit only on each compound's least-cross-talk marker windows
         # (``band_mask``, computed once by the caller from the pure templates). This is
         # the Validate tab's VIP-band decomposition, scored on the benchmark's terms.
         from dl_quantify import surface_composition
-        raw = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        raw = _raw(Xte, raw_te)
         if band_mask is not None and np.asarray(band_mask, bool).any():
             bm = np.asarray(band_mask, bool)
             raw = raw[:, bm]
@@ -111,11 +157,10 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
         # factors, not spectral learning.
         from dl_quantify import (surface_composition, fit_response_factors,
                                  apply_response_factors)
-        raw_tr = np.expm1(np.clip(Xtr, 0, None))
-        raw_te = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
-        s_tr = surface_composition(_composition_features(raw_tr, "legacy_l2"), P_ref)
+        rtr, rte = _raw(Xtr, raw_tr), _raw(Xte, raw_te)
+        s_tr = surface_composition(_composition_features(rtr, "legacy_l2"), P_ref)
         r = fit_response_factors(s_tr, np.asarray(Ytr, float))
-        s_te = surface_composition(_composition_features(raw_te, "legacy_l2"), P_ref)
+        s_te = surface_composition(_composition_features(rte, "legacy_l2"), P_ref)
         p = apply_response_factors(s_te, r)
     elif method == "mcr":
         # MCR-ALS refines the component SPECTRA from the data (seeded by the pure
@@ -124,10 +169,9 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
         # all, and refines on the training rows only, so nothing leaks.
         from unmix import _mcr_als, _l2
         from dl_quantify import surface_composition
-        raw_tr = np.expm1(np.clip(Xtr, 0, None))
-        raw_te = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
-        _C, S = _mcr_als(_l2(raw_tr), np.asarray(P_ref, float), n_iter=int(mcr_iter))
-        p = surface_composition(_l2(raw_te), S)
+        rtr, rte = _raw(Xtr, raw_tr), _raw(Xte, raw_te)
+        _C, S = _mcr_als(_l2(rtr), np.asarray(P_ref, float), n_iter=int(mcr_iter))
+        p = surface_composition(_l2(rte), S)
     elif method == "pls":
         from sklearn.cross_decomposition import PLSRegression
         nc = max(1, min(int(n_components), len(Xtr) - 1, Xtr.shape[1]))
@@ -427,7 +471,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                                            iso_m=iso_m,
                                            nuisance=(_nuisance_refs(data_dir, baseline, mask)
                                                      if sim_nuisance else None))
-                Xs = _composition_features(Xs).astype(np.float32)
+                Xs = _composition_features(Xs, feature_mode).astype(np.float32)
                 Yp = np.array([_ratio(c) for c in Cs]).astype(np.float32)
                 if blank_name:                     # simulated mixtures always hold analytes
                     Yp = np.hstack([Yp, np.zeros((len(Yp), 1), np.float32)])
@@ -912,7 +956,8 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
                            "cnn", "mlp"), epochs=350, seed=0,
                   use_pretrain=True,
                   n_components=8, n_trees=300, px_per_map=0, rf_max_features=None,
-                  cnn_epochs=None, band_window=10.0, mcr_iter=6):
+                  cnn_epochs=None, band_window=10.0, mcr_iter=6,
+                  feature_mode="log1p_raw"):
     """Leave-one-out comparison of the composition methods on the SAME mixtures — the
     honest counterpart to the train-set numbers. Maps are loaded once, then every method
     is refit per fold. Returns {method: {"true", "pred"}} plus "subs".
@@ -931,7 +976,7 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
     from real_data import load_map
     from dl_quantify import simulate_mixtures, _ratio
     subs, wn, mask, P, lo, hi = _refs(data_dir, baseline, trim)
-    X, Y, gkey = [], [], []
+    X, Xraw, Y, gkey = [], [], [], []
     for k, it in enumerate(items):
         if progress:
             progress(f"loading maps {k + 1}/{len(items)}")
@@ -947,9 +992,13 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
         # double-correction apply_model was fixed for; measured here on DQ10-TB10-TH10,
         # it cost NNLS 11.2 -> 14.2 %p and the VIP band 15.6 -> 18.0 %p.
         for ya in _map_spectra(cube, mask, px_per_map, baseline_correct=baseline):
-            X.append(_composition_features(ya)); Y.append(vec)
+            # BOTH: the features the learned heads read (feature_mode may transform them)
+            # and the untouched spectrum the unmixing methods need.
+            X.append(_composition_features(ya, feature_mode)); Xraw.append(ya)
+            Y.append(vec)
             gkey.append(ckey)                         # group = the CONDITION, not the map
     X = np.array(X, np.float32); Y = np.array(Y, np.float32)
+    Xraw = np.array(Xraw, np.float32)
     gkey = np.array(gkey, object)
     if len(X) < 3:
         raise ValueError("need ≥3 mixtures for a leave-one-out benchmark.")
@@ -967,7 +1016,7 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
                 Xs, Cs = simulate_mixtures(P, cal.K, cal.gA, 5000, rng, noise=0.015,
                                            baseline=0.03, gain_lo=0.8, gain_hi=1.25,
                                            nuisance=_nuisance_refs(data_dir, baseline, mask))
-                Xs = _composition_features(Xs).astype(np.float32)
+                Xs = _composition_features(Xs, feature_mode).astype(np.float32)
                 pre = (Xs, np.array([_ratio(c) for c in Cs]).astype(np.float32))
         except Exception:
             pre = None
@@ -1000,7 +1049,7 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
                                 seed=seed + i, n_components=n_components,
                                 n_trees=n_trees, P_ref=P,
                                 rf_max_features=rf_max_features, band_mask=band_mask,
-                                mcr_iter=mcr_iter)
+                                mcr_iter=mcr_iter, raw_tr=Xraw[tr], raw_te=Xraw[te])
             tv.append(Y[te[0]].tolist()); pv.append(np.asarray(pred, float).mean(0).tolist())
         out[meth] = {"true": tv, "pred": pv}
     return out
