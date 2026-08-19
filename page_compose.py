@@ -207,8 +207,9 @@ class ComposePanel(QWidget):
         brow = QHBoxLayout(); brow.setSpacing(8)
         blbl = QLabel("1 · compare methods:"); blbl.setObjectName("field")
         self.bench_b = QPushButton("Benchmark (LOO)"); self.bench_b.setObjectName("ghost")
-        self.bench_b.setToolTip("score NNLS / PLS / RF / 1D-CNN / MLP on the same mixtures "
-                                "with leave-one-out — composition error and detection ROC. "
+        self.bench_b.setToolTip("score VIP band / NNLS / PLS / RF / 1D-CNN / MLP on the same "
+                                "mixtures with leave-one-out — composition deviation (%p), "
+                                "per-substance recovery and detection ROC. "
                                 "Tells you which method to train; saves no model.")
         self.bench_b.clicked.connect(self._benchmark)
         self.kfold_b = QPushButton("5-fold check"); self.kfold_b.setObjectName("ghost")
@@ -604,7 +605,8 @@ class ComposePanel(QWidget):
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _benchmark(self):
-        """Leave-one-out comparison of NNLS / PLS / RF / CNN / MLP on the same mixtures."""
+        """Leave-one-out comparison of VIP band / NNLS / PLS / RF / CNN / MLP on the
+        same mixtures."""
         items = self._items_cache
         if len(items) < 3:
             self.status.setText("prepare ≥3 known-ratio mixtures in the Samples tab first")
@@ -630,8 +632,10 @@ class ComposePanel(QWidget):
         """Plot the LOO comparison: composition error per method + overlaid detection ROC."""
         import numpy as _np
         subs = list(bench.get("subs", []))
-        methods = [m for m in ("nnls", "pls", "rf", "cnn", "mlp") if m in bench]
-        label = {"nnls": "NNLS", "pls": "PLS", "rf": "RF", "cnn": "1D-CNN", "mlp": "MLP"}
+        methods = [m for m in ("band", "nnls", "pls", "rf", "cnn", "mlp") if m in bench]
+        label = {"band": "VIP band", "nnls": "NNLS", "pls": "PLS", "rf": "RF",
+                 "cnn": "1D-CNN", "mlp": "MLP"}
+        self._bench_vip = bench.get("vip_bands")   # the marker windows, for the export
         self._bench = {}
         self._bench_subs = subs
         self._err_title.setText("Method comparison — composition error, leave-one-out "
@@ -671,8 +675,11 @@ class ComposePanel(QWidget):
         self._bench_auc = {m: aucs[m][2] for m in methods}
         self.export_b.setEnabled(True)
         best = methods[int(_np.argmin(errs))]
+        # %p, not % — the deviation is a difference of composition percentages
+        # (percentage points), and 'pp'/'%' both get misread (HANDOFF 2026-08-19 §2)
         self.status.setText("leave-one-out benchmark — " + " · ".join(
-            f"{label[m]} {e:.0%}" for m, e in zip(methods, errs)) + f"   → best: {label[best]}")
+            f"{label[m]} {100 * e:.1f}%p" for m, e in zip(methods, errs))
+            + f"   → best: {label[best]}")
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _cancel(self):
@@ -1072,18 +1079,35 @@ class ComposePanel(QWidget):
             return
         n = 0
         if bench:
+            # the benchmark TABLE (HANDOFF 2026-08-19 §3): mean deviation in %p and the
+            # per-substance recovery %±SE side by side. No accuracy column here — a cut
+            # has to be DECLARED before the run, and the UI declares none.
+            from dl_model import benchmark_metrics
+            bm = {m: benchmark_metrics([r[1] for r in rws], [r[2] for r in rws])
+                  for m, rws in bench.items()}
             write_csv(os.path.join(d, "benchmark_metrics.csv"),
-                      ["method", "composition_error", "detection_auc"],
-                      [[m, f"{self._bench_err[m]:.4f}",
-                        f"{self._bench_auc.get(m, float('nan')):.4f}"] for m in bench])
+                      ["method", "mean_deviation_pp", "detection_auc", "n_conditions"]
+                      + sum([[f"recovery_{s}_pct", f"recovery_{s}_se", f"recovery_{s}_n"]
+                             for s in subs], []),
+                      [[m, f"{bm[m]['mean_dev_pp']:.3f}",
+                        f"{self._bench_auc.get(m, float('nan')):.4f}",
+                        str(len(bench[m]))]
+                       + sum([[f"{mu:.1f}", f"{se:.1f}", str(nn)]
+                              for mu, se, nn in bm[m]["recovery"]], []) for m in bench])
             rows_out = []
             for m, rws in bench.items():
-                for nm, tv, pv in rws:
+                for i, (nm, tv, pv) in enumerate(rws):
                     rows_out.append([m, nm] + [f"{v:.4f}" for v in tv]
-                                    + [f"{v:.4f}" for v in pv])
+                                    + [f"{v:.4f}" for v in pv]
+                                    + [f"{bm[m]['dev_pp'][i]:.2f}"])
             write_csv(os.path.join(d, "benchmark_predictions.csv"),
                       ["method", "mixture"] + [f"true_{s}" for s in subs]
-                      + [f"pred_{s}" for s in subs], rows_out)
+                      + [f"pred_{s}" for s in subs] + ["deviation_pp"], rows_out)
+            vip = getattr(self, "_bench_vip", None)
+            if vip:                                    # which windows the VIP band method fit
+                write_csv(os.path.join(d, "benchmark_vip_bands.csv"),
+                          ["substance", "band_wavenumbers_cm1"],
+                          [[s, "; ".join(f"{b:.0f}" for b in bs)] for s, bs in vip.items()])
             # the ROC panel was the one figure leaving without its numbers — only the
             # pooled AUC was written, and a curve cannot be redrawn from a single scalar.
             curve = []

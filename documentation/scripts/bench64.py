@@ -10,7 +10,20 @@
   다만 `benchmark_loo` 는 방법 비교용이라 `include_blank` · `sim_iso` 를 받지 않는다 —
   **채택 구성이 아니라 base 구성에서의 방법 비교**다. 표에 그렇게 적을 것.
 
-  실행:  python3 -u bench64.py [epochs=120] [px_per_map=20] [n_trees=100] [cnn_epochs=40]
+  실행:  python3 -u bench64.py [epochs=120] [px_per_map=20] [n_trees=100] [cnn_epochs=40] [cut_pp=]
+
+  다섯 번째 인자 cut_pp 는 "정답률" 컷(%p)이다 — **결과를 보기 전에 선언한 컷만** 넣을 것
+  (예: 재현성 바닥 11.6). 안 주면 정답률 열은 아예 안 쓴다. 결과 보고 컷을 고르면
+  체리피킹이다 (HANDOFF 2026-08-19 §3). 컷 없이도 per-condition deviation_pp 가
+  predictions CSV 에 있으므로 독자가 아무 컷이나 대입해 읽을 수 있다.
+
+  표 열 (HANDOFF 2026-08-19 §3): mean deviation(%p) · 물질별 recovery %±SE ·
+  (컷 선언 시) 정답률. recovery 는 mean(pred/true)×100, true=0 조건 제외 — over/under
+  가 상쇄되는 착시가 있으니 deviation 없이 단독 인용 금지.
+
+  'VIP band' 는 Validate 탭의 VIP-band NNLS 와 같은 발상 — 물질별 최소-중첩 마커 밴드
+  (±10 cm⁻¹, 물질당 최대 2개)만으로 NNLS 분해. 학습 없음. 밴드 목록은
+  panel_d_vip_bands.csv 로 남는다.
 
   ⚠ CNN 은 길이 2001 입력을 full-batch 로 돌아 40 epoch 에 fold 당 5분, 120 epoch 이면
     16분이다(68 fold ≈ 19시간). 기본값 40 으로 돌리면 **CNN 이 덜 학습된 상태로 채점**되므로
@@ -46,6 +59,7 @@ EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 120
 PXPM = int(sys.argv[2]) if len(sys.argv) > 2 else 20
 TREES = int(sys.argv[3]) if len(sys.argv) > 3 else 100
 CNN_EP = int(sys.argv[4]) if len(sys.argv) > 4 else 40
+CUT_PP = float(sys.argv[5]) if len(sys.argv) > 5 else None   # 사전 선언한 컷만 (%p)
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -53,7 +67,7 @@ os.makedirs(OUT, exist_ok=True)
 # 넣지 않기로 한 세트다 (TODO.md §6). 예전 수집과 같은 구성이다.
 items = MX.items(("high", "grid"), replicates=True)
 
-METHODS = [("nnls", "NNLS"), ("pls", "PLS"), ("rf", "Random Forest"),
+METHODS = [("band", "VIP band"), ("nnls", "NNLS"), ("pls", "PLS"), ("rf", "Random Forest"),
            ("cnn", "1D-CNN"), ("mlp", "MLP")]
 THR = 0.05                                   # 존재 판정: 참 분율 5% 초과
 
@@ -71,6 +85,8 @@ for _meth in [m for m, _l in METHODS]:
         _z = np.load(_f, allow_pickle=True)
         res[_meth] = {"true": _z["true"], "pred": _z["pred"]}
         res.setdefault("subs", list(_z["subs"]))
+        if "vip" in _z:                      # band 체크포인트에 실려 온 마커 밴드 목록
+            res.setdefault("vip_bands", json.loads(str(_z["vip"])))
         print(f"   [건너뜀] {_meth} — 이미 {_f} 에 있다", flush=True)
         continue
     _r = dl_model.benchmark_loo(PURE, items, calib_path=CALIB, baseline=True, trim=None,
@@ -80,8 +96,13 @@ for _meth in [m for m, _l in METHODS]:
                                 progress=lambda s: print("   ", s, flush=True))
     res[_meth] = _r[_meth]
     res.setdefault("subs", _r["subs"])
+    _extra = {}
+    if _r.get("vip_bands"):
+        res.setdefault("vip_bands", _r["vip_bands"])
+        _extra["vip"] = json.dumps(_r["vip_bands"])
     np.savez(_f, true=np.asarray(_r[_meth]["true"], float),
-             pred=np.asarray(_r[_meth]["pred"], float), subs=np.array(_r["subs"], object))
+             pred=np.asarray(_r[_meth]["pred"], float), subs=np.array(_r["subs"], object),
+             **_extra)
     print(f"   [저장] {_f}", flush=True)
 subs = list(res["subs"])
 nb = [s for s in subs if s in SUB]
@@ -105,16 +126,29 @@ for key, label in METHODS:
     if key not in res:
         continue
     T = np.asarray(res[key]["true"], float); P = np.asarray(res[key]["pred"], float)
-    err = float(np.mean([0.5 * np.abs(P[i][idx] - T[i][idx]).sum() for i in range(len(T))]))
+    # 표 지표는 dl_model.benchmark_metrics 한 곳 — 앱 export 와 같은 정의.
+    # deviation 은 %p (predicted−prepared 조성 차, 퍼센트포인트; 상대오차 아님),
+    # recovery 는 mean(pred/true)×100 ± SE (true=0 제외, deviation 과 반드시 병기).
+    bm = dl_model.benchmark_metrics(T[:, idx], P[:, idx], cut_pp=CUT_PP)
     f, t, auc = roc(T, P)
-    metrics.append([label, key, f"{100 * err:.3f}", f"{auc:.4f}", str(len(T))])
+    row = [label, key, f"{bm['mean_dev_pp']:.3f}", f"{auc:.4f}", str(len(T))]
+    for mu, se, n_ in bm["recovery"]:
+        row += [f"{mu:.1f}", f"{se:.1f}", str(n_)]
+    if CUT_PP is not None:
+        row.append(f"{100 * bm['accuracy']:.1f}")
+    metrics.append(row)
     if f is not None:
         for a, b in zip(f, t):
             rocrows.append([label, f"{a:.5f}", f"{b:.5f}"])
     for i in range(len(T)):
         predrows.append([label, str(i + 1)] + [f"{100 * T[i][j]:.3f}" for j in idx]
-                        + [f"{100 * P[i][j]:.3f}" for j in idx])
-    print(f"  {label:<14} 조성오차 {100 * err:5.1f}%   AUC {auc:.3f}", flush=True)
+                        + [f"{100 * P[i][j]:.3f}" for j in idx]
+                        + [f"{bm['dev_pp'][i]:.2f}"])
+    rec_txt = " ".join(f"{s} {mu:.0f}±{se:.0f}%"
+                       for s, (mu, se, _n) in zip(nb, bm["recovery"]))
+    print(f"  {label:<14} 편차 {bm['mean_dev_pp']:5.1f}%p   AUC {auc:.3f}   rec {rec_txt}"
+          + (f"   ≤{CUT_PP:g}%p {100 * bm['accuracy']:.0f}%" if CUT_PP is not None else ""),
+          flush=True)
 
 
 def write(name, head, body):
@@ -123,12 +157,18 @@ def write(name, head, body):
     print(f"  ✓ {name}  {len(body)}행", flush=True)
 
 
-write("panel_d_method_comparison.csv",
-      ["method", "key", "composition_error_pct", "detection_auc", "n_conditions"], metrics)
+_head = (["method", "key", "mean_deviation_pp", "detection_auc", "n_conditions"]
+         + sum([[f"recovery_{s}_pct", f"recovery_{s}_se", f"recovery_{s}_n"] for s in nb], [])
+         + ([f"accuracy_le_{CUT_PP:g}pp_pct"] if CUT_PP is not None else []))
+write("panel_d_method_comparison.csv", _head, metrics)
 write("panel_e_detection_roc.csv", ["method", "fpr", "tpr"], rocrows)
 write("panel_de_predictions.csv",
-      ["method", "condition"] + [f"true_{s}_pct" for s in nb] + [f"pred_{s}_pct" for s in nb],
+      ["method", "condition"] + [f"true_{s}_pct" for s in nb] + [f"pred_{s}_pct" for s in nb]
+      + ["deviation_pp"],
       predrows)
+if res.get("vip_bands"):
+    write("panel_d_vip_bands.csv", ["substance", "band_wavenumbers_cm1"],
+          [[s, "; ".join(f"{b:.0f}" for b in bs)] for s, bs in res["vip_bands"].items()])
 import shutil
 # 다 끝났으니 부분 저장은 치운다. `ignore_errors=True` 로 삼키면 안 된다 — 이 저장소는
 # Google Drive 위에 있어서 동기화가 파일을 잡고 있으면 rmtree 가 조용히 실패하고,
@@ -146,3 +186,9 @@ _cnn_note = (f"**CNN 은 {CNN_EP} epoch 으로 줄여 돌렸다** (다른 방법
 print(f"표에 적을 것: leave-one-condition-out · base 구성(blank/sips 없음, "
       f"benchmark_loo 가 그 인자를 받지 않는다) · RF {TREES} trees, max_features=sqrt · "
       f"{_cnn_note} 캡션에 반드시 적을 것.")
+print("추가 캡션: deviation 은 %p (predicted−prepared 조성 차, 퍼센트포인트; 상대오차 아님) · "
+      "recovery 는 mean(pred/true)×100%±SE, true=0 조건 제외 — deviation 과 병기해야 함 · "
+      "VIP band 는 물질별 최소-중첩 마커 밴드 ±10 cm⁻¹ 만으로 NNLS (panel_d_vip_bands.csv), "
+      "학습 없음"
+      + (f" · 정답률 컷 ≤{CUT_PP:g}%p 는 실행 전에 선언한 값" if CUT_PP is not None else
+         " · 정답률 컷은 선언 안 함 — deviation_pp 열로 독자가 아무 컷이나 대입 가능"))

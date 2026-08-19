@@ -74,12 +74,25 @@ def _cnn(n_feat, n_comp):
 
 
 def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
-                 n_components=8, n_trees=300, P_ref=None, rf_max_features=None):
+                 n_components=8, n_trees=300, P_ref=None, rf_max_features=None,
+                 band_mask=None):
     """Fit ``method`` on (Xtr, Ytr) and return composition predictions for Xte, rows
     summing to 1. Shared by the full-data fit and each leave-one-out fold so both use
     exactly the same estimator."""
     n_comp = Ytr.shape[1]
-    if method == "nnls":                       # classical baseline: no training at all
+    if method == "band":                       # VIP-band NNLS: decompose ONLY on each
+        # compound's least-cross-talk marker windows (same idea as Validate's VIP-band
+        # NNLS, and the band-selection recipe of the sweat paper). Training-free.
+        # ``band_mask`` comes from the caller (vip_bands ± window over the fit axis);
+        # without one this degenerates to full-spectrum NNLS.
+        from dl_quantify import surface_composition
+        raw = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        Pb = np.asarray(P_ref, float)
+        if band_mask is not None:
+            raw = raw[:, band_mask]; Pb = Pb[:, band_mask]
+        Pb = Pb / (np.linalg.norm(Pb, axis=1, keepdims=True) + 1e-12)
+        p = surface_composition(_composition_features(raw, "legacy_l2"), Pb)
+    elif method == "nnls":                     # classical baseline: no training at all
         from dl_quantify import surface_composition
         raw = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
         p = surface_composition(_composition_features(raw, "legacy_l2"), P_ref)
@@ -863,13 +876,14 @@ def kfold_stability(data_dir, items, method="mlp", folds=5, progress=None, seed=
 
 
 def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
-                  methods=("nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
+                  methods=("band", "nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
                   use_pretrain=True,
                   n_components=8, n_trees=300, px_per_map=0, rf_max_features=None,
                   cnn_epochs=None):
     """Leave-one-out comparison of the composition methods on the SAME mixtures — the
     honest counterpart to the train-set numbers. Maps are loaded once, then every method
-    is refit per fold. Returns {method: {"true", "pred"}} plus "subs"."""
+    is refit per fold. Returns {method: {"true", "pred"}} plus "subs" (and "vip_bands"
+    when the VIP-band method ran, so a table caption can name the windows)."""
     from real_data import load_map
     from dl_quantify import simulate_mixtures, _ratio
     subs, wn, mask, P, lo, hi = _refs(data_dir, baseline, trim)
@@ -909,6 +923,16 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
             pre = None
 
     out = {"subs": subs}
+    band_mask_fit = None
+    if "band" in methods:
+        # the same marker-band selection the Validate tab shows/edits (vip_bands), on the
+        # SAME fit axis the features use (wn restricted by mask), ± the unmix default
+        # window. Falls back to full-spectrum NNLS when the windows are degenerate.
+        from unmix import vip_bands, _vip_fit_mask
+        wn_fit = np.asarray(wn, float)[mask]
+        peak_map = vip_bands(wn_fit, P, subs)
+        band_mask_fit = _vip_fit_mask(wn_fit, peak_map, 10.0, len(subs))
+        out["vip_bands"] = peak_map
     for mi, meth in enumerate(methods):
         uniq = list(dict.fromkeys(gkey.tolist()))
         tv, pv = [], []
@@ -924,10 +948,42 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
             pred = _fit_predict(meth, X[tr], Y[tr], X[te], pre=pre, epochs=ep,
                                 seed=seed + i, n_components=n_components,
                                 n_trees=n_trees, P_ref=P,
-                                rf_max_features=rf_max_features)
+                                rf_max_features=rf_max_features,
+                                band_mask=band_mask_fit)
             tv.append(Y[te[0]].tolist()); pv.append(np.asarray(pred, float).mean(0).tolist())
         out[meth] = {"true": tv, "pred": pv}
     return out
+
+
+def benchmark_metrics(true, pred, cut_pp=None):
+    """The benchmark-table scoring for ONE method's (true, pred) composition pairs.
+
+    Returns a dict with:
+      dev_pp       per-condition deviation in PERCENTAGE POINTS: 100·½·Σ|pred − true|.
+                   Report as %p (difference of predicted and prepared composition in
+                   percentage points, NOT a relative error), with the reproducibility
+                   floor alongside, so no cut has to be chosen at all.
+      mean_dev_pp  its mean — the headline number.
+      recovery     per substance column: (mean(pred/true)·100, SE, n) over conditions
+                   where true > 0. true = 0 cannot divide — detection is ROC/AUC's job.
+                   Shows over/under direction, but over and under CANCEL in the mean:
+                   never report recovery without the deviation next to it.
+      accuracy     fraction of conditions with dev_pp ≤ cut_pp, or None when no cut is
+                   given. Only pass a cut that was DECLARED BEFORE seeing the results —
+                   choosing it afterwards is cherry-picking.
+    """
+    T = np.asarray(true, float); P = np.asarray(pred, float)
+    dev = 100.0 * 0.5 * np.abs(P - T).sum(axis=1)
+    rec = []
+    for j in range(T.shape[1]):
+        ok = T[:, j] > 0
+        n = int(ok.sum())
+        r = 100.0 * P[ok, j] / T[ok, j]
+        se = float(np.std(r, ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
+        rec.append((float(r.mean()) if n else float("nan"), se, n))
+    acc = float(np.mean(dev <= float(cut_pp))) if cut_pp is not None else None
+    return {"dev_pp": dev.tolist(), "mean_dev_pp": float(dev.mean()),
+            "recovery": rec, "accuracy": acc}
 
 
 def apply_model_pixels(model, wn, spectra):
