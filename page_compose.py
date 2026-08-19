@@ -798,7 +798,7 @@ class ComposePanel(QWidget):
 
         # the benchmark table — same benchmark_summary the chart above and the CSV
         # export read, so screen and file cannot disagree
-        cols = (["mean dev (%p)", "RMSE (%p)", "log-ratio dist"]
+        cols = (["mean dev (%p)", "RMSE (%p)", "log-ratio dist", "vs NNLS (Δ%p, p)"]
                 + ([f"accuracy ≤{cut:g} %p"] if cut is not None else [])
                 + [f"{s} recovery %±SE" for s in subs] + ["detection AUC"])
         self.bench_table.setColumnCount(len(cols))
@@ -811,8 +811,11 @@ class ComposePanel(QWidget):
                 mu, se, _n = e.get(key, (float("nan"), float("nan"), 0))
                 return f"{mu:.{dec}f} ± {se:.{dec}f}" if se == se else f"{mu:.{dec}f}"
 
+            vr = e.get("vs_ref")
             vals = [f"{e.get('mean_dev_pp', float('nan')):.1f}", _ms("rmse_pp"),
-                    _ms("logratio", 2)]
+                    _ms("logratio", 2),
+                    "reference" if m == "nnls" else
+                    ("—" if not vr else f"{vr[0]:+.1f}, p={vr[1]:.3f}")]
             if cut is not None:
                 vals.append(f"{e.get('acc_at_cut', float('nan')) * 100:.0f}%")
             for s in subs:
@@ -1271,7 +1274,8 @@ class ComposePanel(QWidget):
         kgroups = [g for g in ("pure", "binary", "ternary")
                    if any(g in e.get("dev_by_k", {}) for e in summ.values())]
         head = ["method", "mean_deviation_pp", "rmse_pp", "rmse_se",
-                "logratio_distance", "logratio_se", "composition_error", "detection_auc"]
+                "logratio_distance", "logratio_se", "median_delta_vs_nnls_pp",
+                "wilcoxon_p_vs_nnls", "composition_error", "detection_auc"]
         for g in kgroups:
             head += [f"deviation_pp_{g}", f"deviation_se_{g}", f"n_{g}"]
         for s in subs:
@@ -1283,8 +1287,10 @@ class ComposePanel(QWidget):
             e = summ.get(m, {})
             rm, rs, _ = e.get("rmse_pp", (float("nan"),) * 3)
             lm, ls, _ = e.get("logratio", (float("nan"),) * 3)
+            vr = e.get("vs_ref") or (float("nan"), float("nan"), 0)
             row = [m, f"{e.get('mean_dev_pp', float('nan')):.2f}",
                    f"{rm:.2f}", f"{rs:.2f}", f"{lm:.4f}", f"{ls:.4f}",
+                   f"{vr[0]:.2f}", f"{vr[1]:.5f}",
                    f"{self._bench_err[m]:.4f}",
                    f"{self._bench_auc.get(m, float('nan')):.4f}"]
             for g in kgroups:

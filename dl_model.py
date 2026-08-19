@@ -966,7 +966,7 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
     return out
 
 
-def benchmark_summary(bench, cut_pp=None):
+def benchmark_summary(bench, cut_pp=None, ref="nnls"):
     """The benchmark table's numbers, from a ``benchmark_loo`` result — computed in ONE
     place so the UI table and the CSV export cannot drift apart. Returns
     {method: {"n", "mean_dev_pp", "recovery", ["acc_at_cut"]}}.
@@ -996,8 +996,20 @@ def benchmark_summary(bench, cut_pp=None):
         low is 11.6 %p (inside a 15 %p cut) while halving DQ is 17.1 %p (outside), even
         though the second is the smaller ratio error. Dimensionless; 0 = exact, and ~0.57
         is what a single 2-fold miss costs on a ternary mixture.
+    vs_ref — (median Δ %p, p, n) against method ``ref`` (default the classical NNLS
+        baseline), paired condition by condition since every method is scored on the same
+        folds. Negative Δ = better than the reference; p is a two-sided Wilcoxon
+        signed-rank. The pairing is what makes ~100 conditions enough to separate methods:
+        unpaired, the per-condition spread (sd ≈ 10 %p on this grid) swamps a few-%p
+        difference, while paired it resolves ~2 %p. Fix ``ref`` before the run — choosing
+        the comparator afterwards is the cherry-picking the declared cut avoids.
     """
     subs = list(bench.get("subs", []))
+    devs = {}                    # per-method, per-condition deviation — for the pairing
+    for m, r in bench.items():
+        if isinstance(r, dict) and "true" in r:
+            T_ = np.asarray(r["true"], float); P_ = np.asarray(r["pred"], float)
+            devs[m] = 0.5 * np.abs(P_ - T_).sum(1) * 100.0
     out = {}
     for m, r in bench.items():
         if not isinstance(r, dict) or "true" not in r:
@@ -1030,6 +1042,15 @@ def benchmark_summary(bench, cut_pp=None):
         lr = np.array([aitchison_distance(T[i], Pd[i]) for i in range(len(T))])
         entry = {"n": int(len(T)), "mean_dev_pp": float(dev.mean()), "recovery": rec,
                  "dev_by_k": by, "rmse_pp": _stat(rmse), "logratio": _stat(lr)}
+        dref = devs.get(ref)
+        if dref is not None and m != ref and len(dref) == len(dev):
+            d = dev - dref
+            try:
+                from scipy.stats import wilcoxon
+                p = float(wilcoxon(d).pvalue) if np.any(d != 0) else 1.0
+            except Exception:
+                p = float("nan")
+            entry["vs_ref"] = (float(np.median(d)), p, int(len(d)))
         if cut_pp is not None:
             entry["acc_at_cut"] = float((dev <= float(cut_pp)).mean()) if len(dev) else float("nan")
         out[m] = entry
