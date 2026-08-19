@@ -252,13 +252,16 @@ class ComposePanel(QWidget):
                               "(one row per map), higher = use that many individual "
                               "individual pixels, all labelled with the map's ratio. More rows "
                               "fight overfitting; splits stay grouped by map either way.")
+        # OFF by default (2026-08-19): defaulting ON cost two accidental all-day
+        # runs — LOO refits once per condition (~100×, hours). Tick it exactly once,
+        # for the final model whose held-out numbers go in the paper.
         self.chk_loo = QCheckBox("held-out scoring (LOO)")
-        self.chk_loo.setChecked(True); self.chk_loo.setObjectName("field")
+        self.chk_loo.setChecked(False); self.chk_loo.setObjectName("field")
         self.chk_loo.setToolTip(
             "score every condition held-out (leave-one-condition-out) after training. "
             "HONEST but SLOW — it refits the model once per condition (~100×, hours). "
-            "Untick for a fast retrain when only the model itself is needed; the "
-            "saved .dlm then carries train-set numbers only.")
+            "Tick for the FINAL model only; everyday retrains leave it off "
+            "(the saved .dlm then carries train-set numbers only).")
         self.chk_screen = QCheckBox("NNLS-screen ink first")
         self.chk_screen.setChecked(True); self.chk_screen.setObjectName("field")
         self.chk_screen.setToolTip("Use the same NNLS hit/background gate as Real data, then train "
