@@ -355,9 +355,13 @@ class SamplingPage(QWidget):
             return
         cols = {nm: substance_color(nm, i) for i, nm in enumerate(subs)}
         is_uM = self.chk_mix_uM.isChecked()
+        # NESTED sort — first substance's level is held fixed while the next one
+        # sweeps, and so on ("하나는 고정하고 나머지 변경"): within a family block
+        # the bars form the design grid's staircase, so balanced sampling (or a
+        # hole in it) is visible at a glance
         order = sorted(range(n), key=lambda r: (
             tuple(amounts[r].get(nm, 0) > 0 for nm in subs),
-            sum(amounts[r].values()),
+            tuple(amounts[r].get(nm, 0.0) for nm in subs),
             self.mix_table.item(r, 0).text() if self.mix_table.item(r, 0) else ""))
         c.fig.clear()
         gs = c.fig.add_gridspec(1, 2 if is_uM else 1,
@@ -378,6 +382,12 @@ class SamplingPage(QWidget):
         if te:
             ax.scatter(np.array(te), np.full(len(te), 1.03), s=8, marker="v",
                        color=INK, clip_on=False)
+        # white seams where the OUTER level changes — the "fixed" variable's blocks
+        keyf = lambda r: (tuple(amounts[r].get(nm, 0) > 0 for nm in subs),
+                          amounts[r].get(subs[0], 0.0))
+        for i in range(1, len(order)):
+            if keyf(order[i]) != keyf(order[i - 1]):
+                ax.axvline(i - 0.5, color="white", lw=1.2, zorder=4)
         ax.set_xlim(-0.5, len(order) - 0.5); ax.set_ylim(0, 1)
         ax.set_yticks([]); ax.set_xticks([])
         ax.set_xlabel(f"{len(order)} maps — one bar each · marks above = test",
