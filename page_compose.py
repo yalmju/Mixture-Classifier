@@ -96,7 +96,37 @@ class TrainComposeWorker(QObject):
                     tag, payload = q.get(timeout=0.5)
                 except _queue.Empty:
                     if not proc.is_alive():               # killed (Cancel) or crashed child
-                        self.fail.emit("training stopped"); return
+                        # Drain first: a child that finished can exit while its result is
+                        # still in flight, and reporting failure then would throw away a
+                        # completed run. Only after the queue is dry is the run really dead.
+                        drained = []
+                        while True:
+                            try:
+                                drained.append(q.get_nowait())
+                            except Exception:
+                                break
+                        for tg, pl in drained:
+                            if tg in ("bench", "kfold"):
+                                self.done.emit((tg, pl)); return
+                            if tg == "error":
+                                self.fail.emit(pl); return
+                            if tg == "done":
+                                model = pl; break
+                        if model is None:
+                            # No message at all: the process was killed rather than raising,
+                            # so there is no traceback to show. The exit code is the only
+                            # evidence, and the usual cause is the OS reclaiming memory.
+                            code = proc.exitcode
+                            self.fail.emit(
+                                f"the worker process was killed (exit code {code}) without "
+                                "reporting an error.\nThis is almost always the operating "
+                                "system reclaiming memory, or Cancel.\nIf you did not press "
+                                "Cancel: close other applications and re-run, and check the "
+                                "status line says 'one mean spectrum per map' — if it does "
+                                "not, the app is still running the older code and needs a "
+                                "restart.")
+                            return
+                        break
                     continue
                 if tag == "progress":
                     self.progress.emit(payload)
@@ -908,7 +938,24 @@ class ComposePanel(QWidget):
         if getattr(self, "_cancelled", False):            # cancel path already reset the UI
             return
         self._reset_buttons()
-        self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
+        # A Python traceback says the most in its LAST line; anything else (a killed
+        # worker, a plain message) says it in the FIRST. Guessing wrong buries the
+        # reason — the old code always took the last line, so a multi-line explanation
+        # showed up as its closing clause. The whole text goes to the tooltip and to a
+        # log file, since the app is usually started without a console to print to.
+        lines = [l for l in tb.strip().splitlines() if l.strip()]
+        msg = (lines[-1] if any(l.startswith("Traceback") for l in lines) else lines[0]) \
+            if lines else "no message"
+        log = os.path.join(self.data_dir, "unmixr_last_error.txt")
+        try:
+            with open(log, "w", encoding="utf-8") as f:
+                f.write(tb)
+        except Exception:
+            log = None
+        self.status.setText("failed — " + msg[:120]
+                            + (f"   (full text: {os.path.basename(log)} in the pure-refs "
+                               "folder, and hover this line)" if log else ""))
+        self.status.setToolTip(tb)
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
 
