@@ -336,8 +336,13 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
         # inside the window (DQ@1572) cancels only that way
         B = sum(_band_height(bl, m, local_base) for m in masks)
         if blk is not None:
-            B = B - float(np.mean(sum(_band_height(blk, m, local_base)
-                                      for m in masks)))
+            # subtract the band height of the MEAN blank spectrum — noise cancels
+            # in the average. Taking each blank's own max−min measured the NOISE
+            # AMPLITUDE (hundreds of counts) and its subtraction flattened genuine
+            # 1 µM signal to zero, which is exactly the LOD explosion this fixes.
+            blk_mean = blk.mean(axis=0, keepdims=True)
+            B = B - float(sum(_band_height(blk_mean, m, local_base)
+                              for m in masks)[0])
             B = np.clip(B, 0.0, None)
         dense = np.geomspace(C.min(), C.max(), 200)
         if model == "linear":
