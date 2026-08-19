@@ -6,7 +6,7 @@ shared UI foundation (palette, stylesheet, Canvas, KPI tile) in ui_common.py:
     Samples    group raw maps into substance classes (batches / train-test role)
     Model      train a classifier on the reference maps (learning curve, F1, …)
     Recovery   known-ratio mixtures -> response factors + composition recovery
-    Quantify   ratio -> M calibration + Langmuir competition
+    Isotherm   dilution series -> Langmuir calibration (feeds Model + Real)
     Real data  map analysis: composition / mixtures / per-pixel µM / calibration
 
     python unmixr.py
@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
     # (physics pre-training + the µM head), so the tabs read as the pipeline runs
     PAGES = [
         ("Samples",   "samples", "Group your maps into substance classes (batches)"),
-        ("Quantify",  "quant", "Dilution series → Langmuir calibration (feeds Model + Real)"),
+        ("Isotherm",  "quant", "Dilution series → Langmuir calibration (feeds Model + Real)"),
         ("Model",     "model", "Train the composition model (adopts the calibration)"),
         ("Recovery",  "valid", "Known-ratio mixtures → response factors + composition "
                                "recovery (predicted vs real · colour blend · drift)"),
