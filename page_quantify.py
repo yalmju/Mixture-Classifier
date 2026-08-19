@@ -289,11 +289,22 @@ def _empirical_lod(C, B, blank_vals=None):
     return float(uc[above[0]]) if len(above) else float("nan")
 
 
-def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=None):
-    """Calibration from a marker band: B = baseline-removed PEAK HEIGHT (max within
-    peak ± window), Langmuir- or linear-fit per compound. ``peak`` is one wavenumber
-    (same band for every compound) or a {compound: wavenumber} map (each compound at
-    its own band). Curve only (no competition)."""
+def _band_height(bl, m, local_base=True):
+    """Peak height of each spectrum inside window mask ``m`` — above the window's own
+    shoulders when ``local_base`` (max − min inside the window), else the raw max.
+    The local base is what kills a constant background riding on the band: DQ@1572
+    sat ~3000 counts high at 0.1 µM and its LOD came out 596 µM until the offset
+    was subtracted."""
+    seg = bl[:, m]
+    return seg.max(axis=1) - (seg.min(axis=1) if local_base else 0.0)
+
+
+def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=None,
+                local_base=True):
+    """Calibration from a marker band: B = PEAK HEIGHT within peak ± window — above
+    the window's local base by default — Langmuir- or linear-fit per compound.
+    ``peak`` is one wavenumber (same band for every compound) or a {compound:
+    wavenumber} map (each compound at its own band). Curve only (no competition)."""
     from calibration import _langmuir_B
     axis, names, dilutions = cal
     blk = (_prep_specs(blank[1], baseline)                  # aligned BLK spectra, or None
@@ -319,8 +330,15 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
         C = np.asarray(C, float)
         bl = _prep_specs(specs, baseline)
         # signal = SUM of peak HEIGHTS over the compound's bands (THI 1 band; a
-        # compound with overlap-prone bands can use two, e.g. DQ 1177+1566)
-        B = sum(bl[:, m].max(axis=1) for m in masks)
+        # compound with overlap-prone bands can use two, e.g. DQ 1177+1566),
+        # measured RELATIVE TO BLANK when a BLK class is loaded — the original
+        # analysis was blank-relative ("blk 대비"), and a substrate band sitting
+        # inside the window (DQ@1572) cancels only that way
+        B = sum(_band_height(bl, m, local_base) for m in masks)
+        if blk is not None:
+            B = B - float(np.mean(sum(_band_height(blk, m, local_base)
+                                      for m in masks)))
+            B = np.clip(B, 0.0, None)
         dense = np.geomspace(C.min(), C.max(), 200)
         if model == "linear":
             slope, b0 = _linear_fit(C, B)
@@ -332,7 +350,8 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
             iso.append((C, B, dense, _langmuir_B(dense, gA, K)))
             r2.append(_r2_on_means(C, B, gA, K))
             K_fit.append(K); gA_fit.append(gA)
-        bv = sum(blk[:, m].max(axis=1) for m in masks) if blk is not None else None
+        bv = (sum(_band_height(blk, m, local_base) for m in masks)
+              if blk is not None else None)
         if bv is not None:                             # blank-based on the same band(s)
             lod, loq = _lod_from_blank(C, B, bv)
         else:
@@ -363,18 +382,20 @@ def _competition(names, K, gA):
 
 
 def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
-               model="langmuir", baseline=True, blank=None):
+               model="langmuir", baseline=True, blank=None, local_base=True):
     from calibration import _langmuir_B
     if cal is None:
         raise ValueError("load a calibration (a dilution-series folder or CSV) first.")
     bench = _single_bench(cal, peak_map=peak_map if isinstance(peak_map, dict) else None,
                           baseline=baseline)
     if peak_map:
-        r = _peak_quant(cal, peak_map, model=model, baseline=baseline, blank=blank)
+        r = _peak_quant(cal, peak_map, model=model, baseline=baseline, blank=blank,
+                        local_base=local_base)
         r["single_bench"] = bench
         return r
     if peak_wn and peak_wn > 0:
-        r = _peak_quant(cal, peak_wn, model=model, baseline=baseline, blank=blank)
+        r = _peak_quant(cal, peak_wn, model=model, baseline=baseline, blank=blank,
+                        local_base=local_base)
         r["single_bench"] = bench
         return r
     lab = _real_lab(cal, baseline=baseline)
@@ -575,6 +596,16 @@ class QuantifyPage(QWidget):
                                    "Langmuir isotherm (LOD/LOQ use a linear low-range "
                                    "fit either way)")
         lcol.addWidget(self.chk_linear); ctl.addLayout(lcol)
+        lbcol = QVBoxLayout(); lbcol.setSpacing(2)
+        _lb = QLabel("peak height"); _lb.setObjectName("field"); lbcol.addWidget(_lb)
+        self.chk_localbase = QCheckBox("above local base")
+        self.chk_localbase.setChecked(True)
+        self.chk_localbase.setToolTip(
+            "measure each band as max − min INSIDE its ±10 cm⁻¹ window, so a "
+            "constant background riding on the band (DQ@1572 sat ~3000 counts high "
+            "at 0.1 µM) does not bury the low-concentration slope. Untick for the "
+            "raw window maximum.")
+        lbcol.addWidget(self.chk_localbase); ctl.addLayout(lbcol)
         bcol = QVBoxLayout(); bcol.setSpacing(2)
         _bl = QLabel("baseline"); _bl.setObjectName("field"); bcol.addWidget(_bl)
         self.chk_baselined = QCheckBox("already corrected")
@@ -1068,6 +1099,7 @@ class QuantifyPage(QWidget):
                       peak_map=peak_map,
                       model="linear" if self.chk_linear.isChecked() else "langmuir",
                       baseline=not self.chk_baselined.isChecked(),
+                      local_base=self.chk_localbase.isChecked(),
                       blank=self._load_blank())     # Samples BLK → blank-based LOD
         self.btn.setEnabled(False); self.btn.setText("Working…")
         start_worker(self, QuantWorker(params), done=self._apply, fail=self._error)
