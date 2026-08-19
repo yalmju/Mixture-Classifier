@@ -280,24 +280,17 @@ class RealDataPage(QWidget):
         left.addLayout(self.swatches)
         left.addStretch(1)
 
-        # ---------- result dashboard (one viewport, scroll only as a fallback) ----------
-        # Do not stack every result as a full-width, tall report page. That made the
-        # Real tab depend heavily on monitor height: on a laptop the composition and
-        # concentration lived several screens below the maps. The dashboard keeps
-        # related evidence side-by-side and uses modest minimum heights; the outer
-        # scroll area remains only for genuinely small windows / large font scaling.
-        body = QGridLayout(); body.setSpacing(8)
+        # ---------- result dashboard: compact hierarchy, no page scroll ----------
+        body = QGridLayout(); body.setSpacing(5)
 
         # 1) band maps: raw intensity at one marker band per substance + their RGB merge
         self.c_maps = Canvas()
-        card_maps, lay_maps = _card(
-            "Band maps — raw intensity at one band per substance, and the three "
-            "read as R/G/B (click a pixel)")
+        card_maps, lay_maps = _card("Raw band maps — marker intensity + RGB merge")
         self.bandrow = QHBoxLayout(); self.bandrow.setSpacing(6)
         self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
-        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(210)
+        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(175)
         # one min/max pair PER band panel (rebuilt with the band row) — the card-wide
         # pair could not stretch a weak channel without flattening a strong one
         self.scalerow = QHBoxLayout(); self.scalerow.setSpacing(6)
@@ -310,17 +303,13 @@ class RealDataPage(QWidget):
         #     what the camera saw, abundances = what stage-1 unmixing made of it.
         self.c_abund = Canvas()
         card_ab, lay_ab = _card(
-            "Unmixed maps — how stage-1 splits each pixel among the references. "
-            "NNLS/MCR runs show abundances; a composition model shows its per-pixel "
-            "probabilities. ALL panels share ONE scale (0–1 for probabilities, "
-            "0–P99 for abundances) so brightness compares across components")
-        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(210)
+            "Stage-1 maps — analytes + combined background; shared scale")
+        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(175)
         lay_ab.addLayout(self._scale_row("abund", 1.0))
         self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=True, key="abund")
-        # Six logical columns let this row split 1/2 + 1/2 and the next one
-        # split 1/3 + 1/3 + 1/3 without nested layouts forcing a wide size hint.
-        body.addWidget(card_maps, 0, 0, 1, 3)
-        body.addWidget(card_ab, 0, 3, 1, 3)
+        # Allocate width by panel count: four raw panels vs five stage-1 panels.
+        body.addWidget(card_maps, 0, 0, 1, 5)
+        body.addWidget(card_ab, 0, 5, 1, 7)
 
         # 2) the clicked pixel's spectrum — a short readout beside the pie map.
         #    The pixel's own numbers ride along in the panel title.
@@ -338,22 +327,21 @@ class RealDataPage(QWidget):
         clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(150)
 
         # One comparison row, in reading order. All three stay visible.
-        body.addWidget(scard, 1, 0, 1, 2)
-        body.addWidget(pcard, 1, 2, 1, 2)
-        body.addWidget(ccard, 1, 4, 1, 2)
+        body.addWidget(scard, 1, 0, 1, 4)
+        body.addWidget(pcard, 1, 4, 1, 4)
+        body.addWidget(ccard, 1, 8, 1, 4)
 
         # 4) per-substance concentration (µM) maps — its own full-width row
         self.c_conc = Canvas()
         self.card_conc, lay_conc = _card(
-            "Apparent SERS-equivalent concentration (µM) — from the composition model, "
-            "or from a loaded calibration when one is given")
+            "Apparent concentration (µM) — spatial maps + pixel distribution")
         vrow = QHBoxLayout(); vrow.setSpacing(6)
         _vl = QLabel("dispensed volume (µL) — 0 = off"); _vl.setObjectName("field")
         self.vol_spin = QDoubleSpinBox(); self.vol_spin.setDecimals(1)
         self.vol_spin.setRange(0.0, 100.0); self.vol_spin.setSingleStep(0.5)
         self.vol_spin.setValue(0.0); self.vol_spin.setFixedWidth(84)
         self.vol_spin.setToolTip(
-            "volume of the droplet/ink you dispensed. When set, the summary bars "
+            "volume of the droplet/ink you dispensed. When set, the distribution label "
             "also show the apparent amount = median µM × volume (pmol). APPARENT — "
             "it reads the SERS-equivalent concentration, not a mass balance.")
         self.vol_spin.valueChanged.connect(
@@ -364,7 +352,7 @@ class RealDataPage(QWidget):
         self.true_edit.setPlaceholderText("12,12,12")
         self.true_edit.setToolTip("dispensed truth per substance, comma-separated in "
                                   "the panel order. Adds a red tick at each true value "
-                                  "and a recovery % under the bars.")
+                                  "and a red truth tick beneath each substance.")
         self.true_edit.editingFinished.connect(
             lambda: self._plot_conc(self._res) if self._res is not None else None)
         vrow.addWidget(_tl); vrow.addWidget(self.true_edit)
@@ -372,15 +360,26 @@ class RealDataPage(QWidget):
         # (validated_ranges_M: levels recovered within 2-fold on a held-out split),
         # and the summary shows which window it used
         vrow.addStretch(1)
-        lay_conc.addLayout(vrow)
-        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(210)
-        body.addWidget(self.card_conc, 2, 0, 1, 6)
+        self.conc_optbox = QWidget(); self.conc_optbox.setLayout(vrow)
+        self.conc_optbox.setVisible(False)
+        self.conc_opt_tgl = QPushButton("▸ concentration options")
+        self.conc_opt_tgl.setObjectName("ghost"); self.conc_opt_tgl.setCheckable(True)
+        self.conc_opt_tgl.setStyleSheet("text-align:left; padding:2px 6px;")
+        def _toggle_conc_opts(on):
+            self.conc_optbox.setVisible(on)
+            self.conc_opt_tgl.setText(("▾ " if on else "▸ ") + "concentration options")
+        self.conc_opt_tgl.toggled.connect(_toggle_conc_opts)
+        lay_conc.addWidget(self.conc_opt_tgl)
+        lay_conc.addWidget(self.conc_optbox)
+        lay_conc.addWidget(self.c_conc)
+        self.c_conc.setMinimumHeight(125); self.c_conc.setMaximumHeight(190)
+        body.addWidget(self.card_conc, 2, 0, 1, 12)
         self.card_conc.setVisible(False)
 
         self.result_grid = body
-        for col in range(6):
+        for col in range(12):
             body.setColumnStretch(col, 1)
-        body.setRowStretch(0, 3)
+        body.setRowStretch(0, 2)
         body.setRowStretch(1, 2)
         body.setRowStretch(2, 0)  # enabled only while concentration is visible
 
@@ -1414,77 +1413,79 @@ class RealDataPage(QWidget):
         self.c_maps.draw_idle()          # gridspec already carries explicit margins
 
     def _plot_abund(self, r):
-        """Merged false-colour composite PLUS one panel per component (background
-        included), one row. This is the OLD band-card view, kept because stage-1
-        unmixing runs in every path: the merge paints every substance's abundance
-        in its colour; each single panel is that component on black→colour with a
-        colour-bar. BLK/INK panels show where the gate sees non-analyte."""
+        """Stage-1 analyte maps plus one combined background map.
+
+        BLK and INK are both nuisance/background classes for interpretation. Showing
+        them as separate full panels repeated the same answer and squeezed the analyte
+        maps, so they are summed into one background probability/abundance panel.
+        Every single-component panel uses the same scale; the numeric arrays remain in
+        the per-pixel export.
+        """
         from matplotlib.colors import LinearSegmentedColormap
-        if not self.c_abund.isVisible():          # folded — skip the work entirely
+        if not self.c_abund.isVisible():
             self._fold_dirty["abund"] = True
             return
         self._fold_dirty["abund"] = False
         self.c_abund.fig.clear()
         self._exp_abund = []
-        if getattr(r, "A", None) is None:                  # some result types carry no A
-            self.c_abund.draw_idle(); return
-        nbcols = self._nb_colors(r)
-        allcols = self._all_colors(r)
-        Anb = r.A[:, r.nonbg]
-        mscale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
-        # ONE scale for every panel, background included — per-panel scales made the
-        # row unreadable (INK 0–0.08 next to BLK 0–0.8 looked equally bright).
-        # Probabilities get the natural fixed 0–1; abundances share a global P99.
+        if getattr(r, "A", None) is None:
+            self.c_abund.draw_idle()
+            return
+
         Aall = np.asarray(r.A, float)
-        amax = float(np.nanmax(Aall)) if Aall.size else 1.0
-        vshared = 1.0 if amax <= 1.05 else (float(np.quantile(Aall, 0.99)) or 1.0)
-        _man = self._parse_scale("abund")
-        vlo = _man[0] if _man is not None else 0.0
-        if _man is not None:
-            vshared = _man[1]
+        nb_idx = list(r.nonbg)
+        nbcols = self._nb_colors(r)
+        Anb = Aall[:, nb_idx]
+        mscale = float(np.quantile(Anb.sum(axis=1), 0.99)) or 1.0
+
+        panels = [("merged", None, None)]
+        panels.extend((r.comps[k], Aall[:, k], nbcols[i])
+                      for i, k in enumerate(nb_idx))
+        bg_idx = np.flatnonzero(np.asarray(r.bg_mask, bool))
+        if bg_idx.size:
+            panels.append(("background", Aall[:, bg_idx].sum(axis=1), "#6b7280"))
+
+        scale_cols = [values for _title, values, _color in panels if values is not None]
+        scale_values = np.column_stack(scale_cols) if scale_cols else Aall
+        amax = float(np.nanmax(scale_values)) if scale_values.size else 1.0
+        vshared = 1.0 if amax <= 1.05 else (
+            float(np.quantile(scale_values, 0.99)) or 1.0)
+        manual = self._parse_scale("abund")
+        vlo = manual[0] if manual is not None else 0.0
+        if manual is not None:
+            vshared = manual[1]
+
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
-        panels = [("merged", None)] + [(r.comps[k], k) for k in range(len(r.comps))]
-        n = len(panels)
-        gs = self._row_gs(self.c_abund.fig, n, ny, nx)
-        for idx, (title, k) in enumerate(panels):
+        gs = self._row_gs(self.c_abund.fig, len(panels), ny, nx)
+        for idx, (title, values, panel_color) in enumerate(panels):
             ax = self.c_abund.style(self.c_abund.fig.add_subplot(gs[0, idx]))
             ax.set_anchor("S")
-            cb = None
-            if k is None:
+            # The shared scale is stated once in the card/manual-scale row. Repeating
+            # five identical ramps consumed height without adding information.
+            self.c_abund.fig.add_subplot(gs[1, idx]).set_axis_off()
+            if values is None:
                 cols = np.array([to_rgb(c) for c in nbcols])
-                _nrm = np.clip(Anb / mscale, 0.0, 1.0)
-                _ws = np.maximum(_nrm.sum(axis=1, keepdims=True), 1.0)
+                norm = np.clip(Anb / mscale, 0.0, 1.0)
+                weights = np.maximum(norm.sum(axis=1, keepdims=True), 1.0)
                 img = np.zeros((ny, nx, 3))
-                img[rows, cc] = np.clip((_nrm / _ws) @ cols * np.minimum(
-                    _nrm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
+                img[rows, cc] = np.clip((norm / weights) @ cols * np.minimum(
+                    norm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
                 ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest")
-                # empty ramp cell — it holds the merge's image box the same size
-                self.c_abund.fig.add_subplot(gs[1, idx]).set_axis_off()
-                # short — a long title runs into the neighbouring panel
                 title = f"merged ({vlo:.3g}–{vshared:.3g})"
             else:
-                sc = vshared
-                grid = np.zeros((ny, nx)); grid[rows, cc] = r.A[:, k]
-                cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", allcols[k]])
-                # no colour-bars — they size off the full axes box and shrink the
-                # map beside the merge (same reason the band card dropped them);
-                # the numbers live in per_pixel.csv (A_ columns)
-                _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                                interpolation="nearest", cmap=cmap, vmin=vlo, vmax=sc)
-                cb = self.c_abund.fig.colorbar(
-                    _im, cax=self.c_abund.fig.add_subplot(gs[1, idx]),
-                    orientation="horizontal")
-                cb.ax.tick_params(labelsize=7, colors="black")
-                cb.outline.set_linewidth(0.5)
-                title = title + (" (bkg)" if r.bg_mask[k] else "")
-            ax.set_title(title, fontsize=9)
+                grid = np.zeros((ny, nx)); grid[rows, cc] = values
+                cmap = LinearSegmentedColormap.from_list(
+                    "m", ["#0b0d10", panel_color])
+                ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                          interpolation="nearest", cmap=cmap,
+                          vmin=vlo, vmax=vshared)
+            ax.set_title(title, fontsize=8)
             ax.set_xticks([]); ax.set_yticks([])
-            self._exp_abund.append((f"abund_{title.split(' ')[0]}", ax,
-                                    cb.ax if cb is not None else None))
+            self._exp_abund.append((f"abund_{title.split(' ')[0]}", ax, None))
             self._click_axes.append(ax)
-        self.c_abund.draw_idle()         # gridspec already carries explicit margins
+        self.c_abund.draw_idle()
 
     def _plot_conc(self, r):
         """Per-substance apparent SERS-equivalent concentration (µM) heat-maps — only when a
@@ -1494,7 +1495,7 @@ class RealDataPage(QWidget):
             self.result_grid.setRowStretch(2, 0)
             return
         self.card_conc.setVisible(True)
-        self.result_grid.setRowStretch(2, 3)
+        self.result_grid.setRowStretch(2, 1)
         self.c_conc.fig.clear()
         self._exp_conc = []
         nb = [r.comps[i] for i in r.nonbg]; nbcols = self._nb_colors(r)
@@ -1535,12 +1536,10 @@ class RealDataPage(QWidget):
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", nbcols[i]])
             cmap.set_bad("#0b0d10")
             ax.set_facecolor("#0b0d10")
-            im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                           interpolation="nearest", cmap=cmap, vmin=0.0, vmax=vmax)
-            cb = self.c_conc.fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, shrink=0.48, aspect=14)
-            cb.ax.tick_params(labelsize=8, colors="black")       # same 0..vmax on every panel
-            self._exp_conc.append((f"uM_{nm}", ax, cb.ax))
-            ax.set_title(f"{nm} (µM; scale capped at hit-pixel P90)", fontsize=9)
+            ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                      interpolation="nearest", cmap=cmap, vmin=0.0, vmax=vmax)
+            self._exp_conc.append((f"uM_{nm}", ax, None))
+            ax.set_title(nm, fontsize=8)
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
         # ---- pixel distribution: show the measurements, not only one median bar ----
@@ -1610,8 +1609,6 @@ class RealDataPage(QWidget):
             lab = f"{med[i]:.1f} µM\nn={valid_n[i]}/{total_n[i]}"
             if lo_um is not None and np.isfinite(med[i]) and med[i] < lo_um[i]:
                 lab = f"< {lo_um[i]:g} µM\nn={valid_n[i]}/{total_n[i]}"
-            if tv is not None:
-                lab += f"\nrecovery {100 * med[i] / tv[i]:.0f}%"
             if vol > 0:                                    # µM × µL = pmol
                 lab += f"\n≈{med[i] * vol:.0f} pmol"
             n_above = total_n[i] - valid_n[i]
@@ -1619,8 +1616,8 @@ class RealDataPage(QWidget):
                 # Plain language: OOD is implementation jargon and looked like
                 # "weak/no signal", while it usually means the opposite here.
                 lab += f"\n{n_above}/{total_n[i]} above valid range"
-            axb.annotate(lab, (xs[i], q3[i]), xytext=(0, 4),
-                         textcoords="offset points", ha="center", fontsize=8,
+            axb.annotate(lab, (xs[i], q3[i]), xytext=(0, 3),
+                         textcoords="offset points", ha="center", fontsize=7,
                          color=INK)
         # If no reportable point remains, state exactly how many exceeded the range.
         for i in np.where(~ok)[0]:
@@ -1630,22 +1627,19 @@ class RealDataPage(QWidget):
                              + f"{total_n[i]}/{total_n[i]} above range",
                              (xs[i], 0), xytext=(0, 8), textcoords="offset points",
                              ha="center", fontsize=8, color=RED)
-        axb.set_xticks(xs); axb.set_xticklabels(nb, fontsize=8)
-        _wtxt = ""
-        if hi_um is not None and np.all(np.isfinite(hi_um)):
-            _lo0 = lo_um if lo_um is not None else np.zeros(len(nb))
-            _wtxt = "\nvalidated µM range: " + " / ".join(
-                f"{_lo0[i]:g}–{hi_um[i]:g}" for i in range(len(nb)))
-        axb.set_title("Pixel concentration distribution"
-                      + (" · red tick = filename truth" if tv is not None else "")
-                      + _wtxt, fontsize=8)
-        axb.set_ylabel("apparent µM per pixel\n"
-                       "dots = usable pixels; black = median/IQR"
-                       + (f" · {vol:g} µL" if vol > 0 else ""), fontsize=7)
+        axb.set_xticks(xs)
+        xt = ([f"{nm}\ntruth {tv[i]:g}" for i, nm in enumerate(nb)]
+              if tv is not None else nb)
+        axb.set_xticklabels(xt, fontsize=7)
+        axb.set_title(f"Pixel µM distribution · maps share 0–{vmax:.1f} µM"
+                      + (" · red = filename truth" if tv is not None else ""),
+                      fontsize=7)
+        axb.set_ylabel("µM per pixel", fontsize=7)
         axb.tick_params(labelsize=8)
         axb.set_ylim(bottom=0)
         self._exp_conc.append(("uM_pixel_distribution", axb, None))
-        self.c_conc.fig.tight_layout(); self.c_conc.draw_idle()
+        self.c_conc.fig.tight_layout(pad=0.5, w_pad=0.5)
+        self.c_conc.draw_idle()
 
     # Final pie-map style (settled with the 260812 trio map): pure black ground,
     # the full measurement grid in white so the map reads as MAP DATA, cell-filling
