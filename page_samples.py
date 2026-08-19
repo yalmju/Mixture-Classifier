@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import sys
 
+import numpy as np
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QFileDialog,
@@ -127,9 +129,14 @@ class SamplingPage(QWidget):
         mh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         mh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.mix_table.verticalHeader().setVisible(False)
-        self.mix_table.setMaximumHeight(150)
+        self.mix_table.setMinimumHeight(220)              # 102 maps deserve more than 4 rows
         self.mix_table.itemChanged.connect(self._on_mix_edit)
-        root.addWidget(self.mix_table)
+        # what's actually IN the mixture set, at a glance: one composition bar per
+        # map (left) and, when the labels are µM, where every substance's
+        # concentrations sit on a log axis (right)
+        self.c_mix = Canvas(); self.c_mix.setFixedHeight(200)
+        root.addWidget(self.c_mix)
+        root.addWidget(self.mix_table, 3)
         self._toggle_mix(True)
 
         root.addStretch(1)                                # absorb slack so collapsing stays tidy
@@ -165,6 +172,8 @@ class SamplingPage(QWidget):
 
     def _toggle_mix(self, on):
         self.mix_table.setVisible(on)
+        if hasattr(self, "c_mix"):
+            self.c_mix.setVisible(on)
         n = self.mix_table.rowCount()
         ntest = sum(1 for r in range(n)
                     if (self.mix_table.item(r, 2) or QTableWidgetItem("")).text().strip() == "test")
@@ -285,6 +294,7 @@ class SamplingPage(QWidget):
         try:
             save_mixture_list(self.data_dir, self._mix_items(), self._mix_roles())
             MIXTURE_BUS.changed.emit()
+            self._plot_mix_overview()
             n = self.mix_table.rowCount()
             self.summary.setText(self.summary.text().split("  ·  mixtures")[0] +
                                  (f"  ·  mixtures: {n}" if n else ""))
@@ -316,6 +326,85 @@ class SamplingPage(QWidget):
                 ", ".join(f"{k}:{v:.3g}" for k, v in simplify_ratio(it[1]).items())))
             self.mix_table.setItem(row, 2, QTableWidgetItem(roles.get(it[0], "train")))
         self._loading = False
+        self._plot_mix_overview()
+
+    def _plot_mix_overview(self):
+        """Two panels over the mixture list. LEFT: one thin stacked bar per map —
+        its composition in the substance colours — sorted by which substances are
+        present, then by total amount, so the grid/binary/equimolar families come
+        out as visible blocks; a dot above a bar marks a held-out test map.
+        RIGHT (µM labels only): each substance's concentrations on a log axis,
+        one dot per map — the coverage the concentration head will be trained on."""
+        c = getattr(self, "c_mix", None)
+        if c is None:
+            return
+        n = self.mix_table.rowCount()
+        if n == 0:
+            c.placeholder("Add known-ratio mixtures to see what the set covers")
+            return
+        roles = self._mix_roles()
+        amounts = [dict(self.mix_amounts[r]) if r < len(self.mix_amounts) else {}
+                   for r in range(n)]
+        subs = []
+        for a in amounts:                                  # order of first appearance
+            for k in a:
+                if k not in subs:
+                    subs.append(k)
+        if not subs:
+            c.placeholder("no parseable ratios yet")
+            return
+        cols = {nm: substance_color(nm, i) for i, nm in enumerate(subs)}
+        is_uM = self.chk_mix_uM.isChecked()
+        order = sorted(range(n), key=lambda r: (
+            tuple(amounts[r].get(nm, 0) > 0 for nm in subs),
+            sum(amounts[r].values()),
+            self.mix_table.item(r, 0).text() if self.mix_table.item(r, 0) else ""))
+        c.fig.clear()
+        gs = c.fig.add_gridspec(1, 2 if is_uM else 1,
+                                width_ratios=([3, 2] if is_uM else [1]),
+                                left=0.035, right=0.99, top=0.80, bottom=0.14,
+                                wspace=0.15)
+        ax = c.style(c.fig.add_subplot(gs[0, 0]))
+        bottoms = np.zeros(len(order))
+        xs = np.arange(len(order))
+        for nm in subs:
+            fr = np.array([amounts[r].get(nm, 0.0) for r in order], float)
+            tot = np.array([sum(amounts[r].values()) or 1.0 for r in order], float)
+            fr = fr / tot
+            ax.bar(xs, fr, bottom=bottoms, width=1.0, color=cols[nm],
+                   edgecolor="none", label=nm)
+            bottoms += fr
+        te = [i for i, r in enumerate(order) if roles.get(self.mix_files[r]) == "test"]
+        if te:
+            ax.scatter(np.array(te), np.full(len(te), 1.03), s=8, marker="v",
+                       color=INK, clip_on=False)
+        ax.set_xlim(-0.5, len(order) - 0.5); ax.set_ylim(0, 1)
+        ax.set_yticks([]); ax.set_xticks([])
+        ax.set_xlabel(f"{len(order)} maps — one bar each · marks above = test",
+                      fontsize=8)
+        npres = [sum(v > 0 for v in a.values()) for a in amounts]
+        fam = {k: npres.count(k) for k in sorted(set(npres))}
+        ttl = (f"{n} maps · " + " · ".join(f"{v}×{k}-comp" for k, v in fam.items())
+               + f" · {sum(1 for p in roles.values() if p == 'test')} test")
+        ax.set_title(ttl, fontsize=9, loc="left", pad=12)
+        ax.legend(fontsize=8, ncol=len(subs), frameon=False, framealpha=0.0,
+                  labelcolor="black", loc="lower right", bbox_to_anchor=(1.0, 1.10))
+        if is_uM:
+            ax2 = c.style(c.fig.add_subplot(gs[0, 1]))
+            rng = np.random.default_rng(0)                 # stable jitter
+            for i, nm in enumerate(subs):
+                v = np.array([a.get(nm, 0.0) for a in amounts], float)
+                v = v[v > 0]
+                if not len(v):
+                    continue
+                ax2.scatter(v, np.full(len(v), i) + rng.uniform(-0.18, 0.18, len(v)),
+                            s=12, color=cols[nm], alpha=0.6, edgecolors="none")
+            ax2.set_xscale("log")
+            ax2.set_yticks(range(len(subs))); ax2.set_yticklabels(subs, fontsize=8)
+            ax2.set_ylim(-0.6, len(subs) - 0.4)
+            ax2.set_xlabel("µM per map (log)", fontsize=8)
+            ax2.set_title("concentration coverage", fontsize=9, loc="left")
+        c.draw_idle()
 
     def _load_prep(self):
         """Set the preprocessing widgets from the folder's saved config."""
