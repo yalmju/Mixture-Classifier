@@ -123,8 +123,12 @@ def _map_spectra(cube, mask, n_px=0, spread=False, baseline_correct=True):
     individual pixels, brightest first unless ``spread`` is requested. Pixels from the
     same map must remain in the same validation split because they share one map label.
     """
-    from sers_mixture import als_baseline
+    from sers_mixture import als_baseline, desaturate
     cube = np.asarray(cube, float)[:, mask]
+    cube, _sat = desaturate(cube)      # bridge clipped plateaus before any ALS
+    ok = _sat <= 0.01                  # quarantine: clipped pixels don't train
+    if ok.any() and not ok.all():
+        cube = cube[ok]
     w = cube.sum(1); wn_ = w / (w.sum() + 1e-12)
     mean = wn_ @ cube
     out = ([] if n_px else
@@ -144,8 +148,12 @@ def _map_spectra(cube, mask, n_px=0, spread=False, baseline_correct=True):
 
 def _mean_spectrum(cube, mask, baseline_correct=True):
     cube = np.asarray(cube, float)[:, mask]
+    from sers_mixture import als_baseline, desaturate
+    cube, _sat = desaturate(cube)      # bridge clipped plateaus before any ALS
+    ok = _sat <= 0.01                  # quarantine: clipped pixels don't train
+    if ok.any() and not ok.all():
+        cube = cube[ok]
     w = cube.sum(1); w = w / (w.sum() + 1e-12)
-    from sers_mixture import als_baseline
     mean = w @ cube
     return (np.clip(mean - als_baseline(mean), 0, None) if baseline_correct
             else np.clip(mean, 0, None))
@@ -665,8 +673,20 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             uM["loo_eval"] = {"true_uM": loo_true, "pred_uM": loo_pred,
                               "paths": loo_paths, "level": "condition"}
 
+    # carry the calibration INSIDE the model: Real then quantifies µM from the
+    # .dlm alone — no separate CSV to re-browse (and no way to pair the wrong one)
+    calib_csv_text = calib_csv_name = None
+    if calib_path:
+        try:
+            with open(calib_path, "r", encoding="utf-8", errors="replace") as fh:
+                calib_csv_text = fh.read()
+            calib_csv_name = os.path.basename(str(calib_path))
+        except OSError:
+            pass
+
     return {"subs": subs, "lo": lo, "hi": hi, "n_feat": int(mask.sum()), "P": P,
             "feature_mode": "log1p_raw",
+            "calib_csv_text": calib_csv_text, "calib_csv_name": calib_csv_name,
             "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None,
             "n_maps": int(len(set(paths.tolist()))),
             "px_per_map": int(px_per_map),

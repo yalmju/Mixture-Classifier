@@ -50,6 +50,8 @@ class RealWorker(QObject):
 
 
 class RealDataPage(QWidget):
+    EX_COLS = ["#d7dde6", "#a06bff", "#ff9f40", "#4dd2c0"]   # user-added band hues
+    _GS_L, _GS_R, _GS_WS, _GS_HS = 0.015, 0.985, 0.06, 0.06
     METHODS = [("Composition model (per pixel)", "dlpx"), ("NNLS (fixed refs)", "nnls"),
                ("MCR-ALS (refine)", "mcr"), ("ResNet1D (DL)", "dl"),
                ("Trained model", "model")]
@@ -67,7 +69,10 @@ class RealDataPage(QWidget):
         self._band_spins = {}
         self._extra_bands = []      # user-added band panels (cm⁻¹); + adds, − removes
         self._scale_ui = {}         # key -> (manual chk, min spin, max spin)
+        self._chan_scale = {}       # band panel key -> (min spin, max spin)
+        self.chk_chan = None        # 'manual scale' for the band card
         COLOR_BUS.changed.connect(self._on_colors_changed)   # top-bar picker sync
+        CALIB_BUS.changed.connect(lambda: self._refresh_calib_label())
         self.data_dir = PEST_DEFAULT
         self.test = None
         self.model_path = None      # trained model (unmixr_model.joblib) for classify
@@ -172,6 +177,20 @@ class RealDataPage(QWidget):
         relrow = QHBoxLayout(); relrow.setSpacing(4)
         relrow.addWidget(self.chk_rel); relrow.addWidget(self.rel_thr)
         relcol.addWidget(_rl); relcol.addLayout(relrow)
+        # saturation is quarantined AS saturation — its own category, not a repair
+        # you have to trust: clipped pixels leave every statistic and are painted
+        # amber in the pie map so the hole is visible, never silent
+        self.chk_sat = QCheckBox("quarantine saturated"); self.chk_sat.setChecked(True)
+        self.chk_sat.setObjectName("field")
+        self.chk_sat.setToolTip(
+            "pixels with detector-clipped channels (>1% of the spectrum, flat-top "
+            "or the jagged post-ALS residue) are not classified at all — they show "
+            "as background in every map and leave composition and µM. The run "
+            "status counts them. Untick to classify them anyway.")
+        self.chk_sat.toggled.connect(lambda _=False: self._on_corr())
+        satcol = QVBoxLayout(); satcol.setSpacing(2)
+        _sl = QLabel("saturation"); _sl.setObjectName("field")
+        satcol.addWidget(_sl); satcol.addWidget(self.chk_sat)
         corr_b = QPushButton("Load correction…"); corr_b.setObjectName("ghost")
         corr_b.setToolTip("response_factors.csv from the Validate tab → convert the "
                           "surface ratio to the solution ratio")
@@ -235,7 +254,7 @@ class RealDataPage(QWidget):
         obl.addWidget(corr_b); obl.addLayout(corrcol)
         obl.addWidget(_group("pixel gate & view"))
         obl.addLayout(hitcol); obl.addLayout(self.thr); obl.addLayout(relcol)
-        obl.addLayout(flipcol)
+        obl.addLayout(satcol); obl.addLayout(flipcol)
         left.addWidget(self.optbox)
         self._toggle_opts(False)
         self.cmb_method.itemAt(1).widget().currentIndexChanged.connect(
@@ -272,8 +291,12 @@ class RealDataPage(QWidget):
         self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
-        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(460)
-        lay_maps.addLayout(self._scale_row("maps", 1500.0))
+        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(360)
+        # one min/max pair PER band panel (rebuilt with the band row) — the card-wide
+        # pair could not stretch a weak channel without flattening a strong one
+        self.scalerow = QHBoxLayout(); self.scalerow.setSpacing(6)
+        self.scalerow.addWidget(self._mk_lbl("scale:")); self.scalerow.addStretch(1)
+        lay_maps.addLayout(self.scalerow)
         self._add_fold(lay_maps, self.c_maps, "band maps", opened=True, key="maps")
 
         # 1b) unmixed abundance maps — NNLS runs FIRST in every path (the gate), so
@@ -285,7 +308,7 @@ class RealDataPage(QWidget):
             "NNLS/MCR runs show abundances; a composition model shows its per-pixel "
             "probabilities. ALL panels share ONE scale (0–1 for probabilities, "
             "0–P99 for abundances) so brightness compares across components")
-        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(460)
+        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(360)
         lay_ab.addLayout(self._scale_row("abund", 1.0))
         self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=True, key="abund")
         # band | abundance half-and-half on one row — raw evidence beside the
@@ -294,19 +317,29 @@ class RealDataPage(QWidget):
         mrow.addWidget(card_maps, 1); mrow.addWidget(card_ab, 1)
         mrow_w = QWidget(); mrow_w.setLayout(mrow); body.addWidget(mrow_w)
 
-        # 2) per-pixel composition pie | selected-pixel spectrum, side by side — right
-        #    under the maps so a clicked pixel's spectrum shows without scrolling down
-        self.c_pie = Canvas(); self.c_spec = Canvas()
+        # 2) the clicked pixel's spectrum — full width but SHORT. It sits directly
+        #    under the maps (a click lands there, the trace it produces should be the
+        #    very next thing on screen) and a trace needs width, not half a screen of
+        #    height; the pixel's own numbers ride along in the panel title.
+        self.c_spec = Canvas()
+        scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
+        slay.addWidget(self.c_spec)
+        self.c_spec.setMinimumHeight(220); self.c_spec.setMaximumHeight(260)
+        body.addWidget(scard)
+
+        # 3) per-pixel composition pie | the same composition summed over the map —
+        #    the pie map and the number it adds up to belong on one row
+        self.c_pie = Canvas(); self.c_comp = Canvas()
         pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
         play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(460)
-        scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
-        slay.addWidget(self.c_spec); self.c_spec.setMinimumHeight(460)
-        srow = QHBoxLayout(); srow.setSpacing(12)
-        srow.addWidget(pcard, 1); srow.addWidget(scard, 1)
-        srow_w = QWidget(); srow_w.setLayout(srow); body.addWidget(srow_w)
+        ccard, clay = _card("Composition (overall)")
+        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(460)
+        prow = QHBoxLayout(); prow.setSpacing(12)
+        prow.addWidget(pcard, 3); prow.addWidget(ccard, 2)
+        prow_w = QWidget(); prow_w.setLayout(prow); body.addWidget(prow_w)
 
-        # 3) per-substance concentration (µM) maps + overall composition, side by side
-        self.c_conc = Canvas(); self.c_comp = Canvas()
+        # 4) per-substance concentration (µM) maps — its own full-width row
+        self.c_conc = Canvas()
         self.card_conc, lay_conc = _card(
             "Apparent SERS-equivalent concentration (µM) — from the composition model, "
             "or from a loaded calibration when one is given")
@@ -333,11 +366,7 @@ class RealDataPage(QWidget):
         vrow.addWidget(_tl); vrow.addWidget(self.true_edit); vrow.addStretch(1)
         lay_conc.addLayout(vrow)
         lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(460)
-        ccard, clay = _card("Composition (overall)")
-        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(460)
-        crow = QHBoxLayout(); crow.setSpacing(12)
-        crow.addWidget(self.card_conc, 3); crow.addWidget(ccard, 2)
-        crow_w = QWidget(); crow_w.setLayout(crow); body.addWidget(crow_w)
+        body.addWidget(self.card_conc)
         self.card_conc.setVisible(False)
 
         bodyw = QWidget(); bodyw.setLayout(body)
@@ -484,6 +513,122 @@ class RealDataPage(QWidget):
         row.addStretch(1)
         return row
 
+    def _row_gs(self, fig, n, ny, nx):
+        """The grid both map cards draw on: images across the top row, their colour
+        ramps in a thin row directly under them.
+
+        Two things this fixes. Every image cell is the SAME box, so the merged panel
+        lines up with the components instead of floating above them — it used to keep
+        the height the colour-bars stole from its neighbours. And the pair of rows is
+        hugged to the height these maps actually need (a 60x30 map in a narrow column
+        is short) and centred, instead of leaving the card two-thirds empty."""
+        bot, top, cb = self._row_span(fig, n, ny, nx)
+        gs = fig.add_gridspec(2, n, height_ratios=[1.0, cb], hspace=self._GS_HS,
+                              wspace=self._GS_WS, left=self._GS_L, right=self._GS_R,
+                              bottom=bot, top=top)
+        # a resized card changes what "hugged" means; re-hug without replotting
+        cv = fig.canvas
+        old = getattr(cv, "_rowgs_cid", None)
+        if old is not None:
+            cv.mpl_disconnect(old)
+
+        def _refit(_e=None, _gs=gs, _n=n, _ny=ny, _nx=nx, _f=fig):
+            b, t, c = self._row_span(_f, _n, _ny, _nx)
+            _gs.set_height_ratios([1.0, c])
+            _gs.update(bottom=b, top=t)
+
+        cv._rowgs_cid = cv.mpl_connect("resize_event", _refit)
+        return gs
+
+    def _row_span(self, fig, n, ny, nx):
+        """(bottom, top, cb_ratio) for _row_gs — the two rows hugged to the height
+        ny/nx maps need at this figure size and centred in what the card gives us.
+
+        The ramp row is a FIXED thickness in inches, not a share of the image row:
+        tie it to the image and a wide short map squeezes its own colour-bar into a
+        hairline."""
+        L, R, WS, HS = self._GS_L, self._GS_R, self._GS_WS, self._GS_HS
+        BOT, TOP, BAR_IN = 0.08, 0.92, 0.11
+        figw, figh = fig.get_size_inches()
+        figh = max(float(figh), 1e-6)
+        cell_w = (R - L) / (n + (n - 1) * WS) * float(figw)          # inches
+        need = cell_w * (ny / max(nx, 1)) / figh                     # image row, frac
+        need = min(max(need, 0.05), TOP - BOT)
+        bar = BAR_IN / figh                                          # ramp row, frac
+        # hspace is a fraction of the MEAN row height
+        span = need + bar + HS * (need + bar) / 2.0
+        if span > TOP - BOT:                       # too tall for the card — scale both
+            k = (TOP - BOT) / span
+            need *= k; bar *= k; span = TOP - BOT
+        mid = (TOP + BOT) / 2.0
+        return mid - span / 2.0, mid + span / 2.0, bar / need
+
+    def _chan_lims(self, key, auto):
+        """(lo, hi) for ONE band panel: its own manual pair when the band card's
+        'manual scale' is ticked, else the auto P1-P99 handed in. Per panel, because
+        one card-wide pair cannot stretch a weak channel without flattening a strong
+        one -- and comparing channels is the whole point of these maps."""
+        if not (self.chk_chan is not None and self.chk_chan.isChecked()):
+            return auto
+        ui = self._chan_scale.get(key)
+        if not ui:
+            return auto
+        lo, hi = float(ui[0].value()), float(ui[1].value())
+        return (lo, hi) if hi > lo else auto
+
+    def _sync_chan_spins(self, keys, lims):
+        """While manual is off the spins mirror what is drawn, so ticking the box
+        starts from the picture already on screen instead of from an arbitrary 0-1500."""
+        if self.chk_chan is None or self.chk_chan.isChecked():
+            return
+        for k, (lo, hi) in zip(keys, lims):
+            ui = self._chan_scale.get(k)
+            if not ui:
+                continue
+            for sp, v in zip(ui, (lo, hi)):
+                sp.blockSignals(True); sp.setValue(float(v)); sp.blockSignals(False)
+
+    def _rebuild_scalerow(self, r):
+        """A min/max pair per band panel, coloured like the panel it drives."""
+        while self.scalerow.count():
+            it = self.scalerow.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        self._chan_scale = {}
+        chk = QCheckBox("manual scale"); chk.setObjectName("field")
+        chk.setToolTip("pin each band panel to its own min-max below; "
+                       "unticked = that panel's own P1-P99")
+        self.chk_chan = chk
+        self.scalerow.addWidget(chk)
+        cols = self._nb_colors(r)
+        items = [(r.comps[j], cols[i]) for i, j in enumerate(r.nonbg)]
+        items += [(f"@{wl:.0f}", self.EX_COLS[i % len(self.EX_COLS)])
+                  for i, wl in enumerate(self._extra_bands)]
+        keys = ([r.comps[j] for j in r.nonbg]
+                + [f"extra{i}" for i in range(len(self._extra_bands))])
+        for (nm, col), key in zip(items, keys):
+            lb = self._mk_lbl(nm); lb.setStyleSheet(f"color:{col};font-weight:600;")
+            self.scalerow.addWidget(lb)
+            pair = []
+            for what in ("min", "max"):
+                sp = QDoubleSpinBox(); sp.setDecimals(1); sp.setRange(-1e9, 1e9)
+                sp.setFixedWidth(76); sp.setEnabled(False)
+                sp.setToolTip(f"{what} of the colour ramp for the {nm} panel")
+                sp.editingFinished.connect(
+                    lambda: self._res is not None and self._plot_maps(self._res))
+                self.scalerow.addWidget(sp)
+                pair.append(sp)
+            self._chan_scale[key] = tuple(pair)
+
+        def _tgl(on):
+            for a, b in self._chan_scale.values():
+                a.setEnabled(on); b.setEnabled(on)
+            if self._res is not None:
+                self._plot_maps(self._res)
+
+        chk.toggled.connect(_tgl)
+        self.scalerow.addStretch(1)
+
     def _add_fold(self, lay, canvas, name, opened, key):
         """Fold a heavy card: the button sits under the title, the canvas hides, and
         while hidden the card is NOT rendered at all — scrolling gets shorter and a
@@ -594,6 +739,7 @@ class RealDataPage(QWidget):
         minus.clicked.connect(lambda _=False: _minus())
         self.bandrow.addWidget(plus); self.bandrow.addWidget(minus)
         self.bandrow.addStretch(1)
+        self._rebuild_scalerow(r)          # one min/max pair per panel, extras included
 
     def _on_band(self, name, value):
         self._bands[name] = float(value)
@@ -713,6 +859,7 @@ class RealDataPage(QWidget):
         self.dlm_lbl.setText("DL: " + (MODEL_BUS.origin or "trained model")
                              + self._blank_tag())
         self.dlm_lbl.setStyleSheet(""); self._sync_controls()
+        self._refresh_calib_label()          # the model may carry its own calibration
 
     def _browse_dl(self):
         p, _ = QFileDialog.getOpenFileName(self, "DL model (.dlm from Recovery)", "",
@@ -728,6 +875,7 @@ class RealDataPage(QWidget):
                 self.dl_model = load_model(p)
             self.dlm_lbl.setText("DL: " + os.path.basename(p) + self._blank_tag())
             self.dlm_lbl.setStyleSheet(""); self._sync_controls()
+            self._refresh_calib_label()      # the model may carry its own calibration
             if self._res is not None:
                 self._apply(self._res)                    # redraw with the DL model in play
         except Exception as e:
@@ -792,7 +940,47 @@ class RealDataPage(QWidget):
         return None
 
     def _clear_calib(self):
-        self.calib_path = None; self.cal_lbl.setText(""); self.cal_x.setVisible(False)
+        self.calib_path = None; self.cal_x.setVisible(False)
+        self._refresh_calib_label()
+
+    def _model_calib_path(self):
+        """The calibration the loaded .dlm carries (train_model embeds the CSV), as a
+        real file path — written to temp once per model so unmix can just read it."""
+        m = self.dl_model if isinstance(self.dl_model, dict) else None
+        txt = (m or {}).get("calib_csv_text")
+        if not txt:
+            return None
+        import tempfile, hashlib
+        h = hashlib.sha1(txt.encode("utf-8", "replace")).hexdigest()[:12]
+        p = os.path.join(tempfile.gettempdir(), f"unmixr_model_calib_{h}.csv")
+        if not os.path.exists(p):
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(txt)
+        return p
+
+    def _effective_calib(self):
+        """(path, origin): a CSV browsed here wins; else the calibration embedded in
+        the model; else the one Quantify published. None when there is none at all."""
+        if self.calib_path:
+            return self.calib_path, "loaded"
+        p = self._model_calib_path()
+        if p:
+            return p, "from model"
+        if CALIB_BUS.path and os.path.exists(CALIB_BUS.path):
+            return CALIB_BUS.path, "from Quantify"
+        return None, None
+
+    def _refresh_calib_label(self):
+        p, org = self._effective_calib()
+        if p is None:
+            self.cal_lbl.setText("")
+        elif org == "loaded":
+            self.cal_lbl.setText("calib: " + os.path.basename(p))
+        else:
+            m = self.dl_model if isinstance(self.dl_model, dict) else {}
+            nm = m.get("calib_csv_name") if org == "from model" else CALIB_BUS.origin
+            self.cal_lbl.setText(f"calib: {org}" + (f" ({nm})" if nm else ""))
+        self.cal_lbl.setStyleSheet("")
 
     def _browse_corr(self):
         """Load response_factors.csv (from Validate) → enable the solution-ratio toggle."""
@@ -844,7 +1032,8 @@ class RealDataPage(QWidget):
         return np.divide(rn, s, out=np.zeros_like(rn), where=s > 0)
 
     def _saturated(self, r):
-        """Detect ADC-like flat tops (three adjacent channels at the spectrum maximum)."""
+        """Detect ADC-like flat tops (three adjacent channels at the spectrum maximum).
+        Fallback only — results carry sat_frac from the load-time detector now."""
         y = np.asarray(r.spectra, float)
         if y.ndim != 2 or y.shape[1] < 3:
             return np.zeros(r.n_pixels, bool)
@@ -853,6 +1042,16 @@ class RealDataPage(QWidget):
         top = y >= (mx[:, None] - tol[:, None])
         return np.any(top[:, :-2] & top[:, 1:-1] & top[:, 2:], axis=1)
 
+    def _clipped(self, r):
+        """Saturated pixels — the load-time detector's verdict (>1% of channels
+        clipped: a flat-top run, or the jagged block an outside ALS pass leaves).
+        The 1% floor keeps a 3-channel apex of a genuinely wide band out of
+        quarantine. Falls back to the flat-top heuristic on old results."""
+        sf = getattr(r, "sat_frac", None)
+        if sf is not None:
+            return np.asarray(sf, float) > 0.01
+        return self._saturated(r)
+
     def _flagged(self, r):
         """Pixels whose reconstruction R² is below the threshold — ALWAYS computed and
         always drawn/counted. A low R² means the pure references fit this pixel badly
@@ -860,7 +1059,7 @@ class RealDataPage(QWidget):
         about the pixel, not a verdict on its composition."""
         low_r2 = (np.zeros(r.n_pixels, bool) if getattr(r, "reliab", None) is None
                   else r.reliab < float(self.rel_thr.value()))
-        return low_r2 | self._saturated(r)
+        return low_r2
 
     def _reliable(self, r):
         """Pixels kept in the composition. Low-R² pixels are dropped ONLY when the user
@@ -871,8 +1070,11 @@ class RealDataPage(QWidget):
 
     def _hit(self, r):
         """Effective hit = a substance pixel (one rule decided that, see r.hit_rule)
-        minus any low-R² pixels the user chose to drop."""
-        return r.hit & self._reliable(r)
+        minus low-R² pixels the user chose to drop, minus quarantined saturation."""
+        keep = r.hit & self._reliable(r)
+        if self.chk_sat.isChecked():
+            keep = keep & ~self._clipped(r)
+        return keep
 
     def _mean_ratio(self, r):
         """SIGNAL-WEIGHTED mean composition over the hit pixels: each pixel's ratio
@@ -924,7 +1126,7 @@ class RealDataPage(QWidget):
                           method=self._method(), baseline=bl,
                           trim=cfg["trim"], min_frac=self.thr_value(),
                           hit_mode="auto" if self.chk_auto.isChecked() else "threshold",
-                          calib_path=self.calib_path, dl_model=self.dl_model,
+                          calib_path=self._effective_calib()[0], dl_model=self.dl_model,
                           bg_map=self.bg_paths or None)
             if params["method"] == "dlpx" and self.dl_model is None:
                 self.status.setText("no composition model — train one in the Model tab "
@@ -964,7 +1166,10 @@ class RealDataPage(QWidget):
         self.pbar.hide()
         self.btn.setEnabled(True); self.btn.setText("Unmix")
         ov = getattr(self, "_bl_override", None)
-        self.status.setText(f"done — {r.method.upper()}" + ("" if ov is None else
+        _ns = int((self._clipped(r) & r.hit).sum())
+        self.status.setText(f"done — {r.method.upper()}"
+                            + (f" · {_ns} saturated px quarantined" if _ns else "")
+                            + ("" if ov is None else
                             f" · baseline removal {'on' if ov else 'off'} — followed the "
                             f"model's own setting, not this folder's"))
         self.status.setStyleSheet(f"color:{MUTE};")
@@ -1030,25 +1235,27 @@ class RealDataPage(QWidget):
 
         bands = [self._band_of(r, nm) for nm in nb]
         chans = [self._band_image(r, wl) for wl in bands]
-        lims = [(float(np.quantile(v, 0.01)), float(np.quantile(v, 0.99)))
-                for v in chans]
-        lims = [(a, b if b > a else a + 1.0) for a, b in lims]   # never a zero span
-        _man = self._parse_scale("maps")
-        if _man is not None:
-            lims = [_man] * len(lims)
-
         extras = list(self._extra_bands)                  # user-added bands
-        n = len(nb) + 1 + len(extras)                     # merge + substances + extras
-        EX_COLS = ["#d7dde6", "#a06bff", "#ff9f40", "#4dd2c0"]   # extra hues, cycled
-        ex_cols = [EX_COLS[i % len(EX_COLS)] for i in range(len(extras))]
         ex_chans = [self._band_image(r, wl) for wl in extras]
-        ex_lims = [(float(np.quantile(v, 0.01)), float(np.quantile(v, 0.99)))
-                   for v in ex_chans]
-        ex_lims = [(va, vb if vb > va else va + 1.0) for va, vb in ex_lims]
-        if _man is not None:
-            ex_lims = [_man] * len(ex_lims)
+        n = len(nb) + 1 + len(extras)                     # merge + substances + extras
+        ex_cols = [self.EX_COLS[i % len(self.EX_COLS)] for i in range(len(extras))]
+        # auto = each channel over its OWN P1..P99; the scale row can override any
+        # single panel without touching its neighbours
+        _auto = [(float(np.quantile(v, 0.01)), float(np.quantile(v, 0.99)))
+                 for v in chans + ex_chans]
+        _auto = [(a, b if b > a else a + 1.0) for a, b in _auto]   # never a zero span
+        _keys = ([r.comps[j] for j in r.nonbg]
+                 + [f"extra{i}" for i in range(len(extras))])
+        _all_lims = [self._chan_lims(k, a) for k, a in zip(_keys, _auto)]
+        self._sync_chan_spins(_keys, _all_lims)
+        lims = _all_lims[:len(nb)]
+        ex_lims = _all_lims[len(nb):]
+        gs = self._row_gs(self.c_maps.fig, n, ny, nx)
+
         # ---- merged R/G/B: each channel stretched over its own P1..P99 ----
-        ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, n, 1))
+        ax = self.c_maps.style(self.c_maps.fig.add_subplot(gs[0, 0]))
+        ax.set_anchor("S")                       # sit on the ramp line, like the rest
+        self.c_maps.fig.add_subplot(gs[1, 0]).set_axis_off()   # holds the merge's box
         cols = np.array([to_rgb(c) for c in (nbcols + ex_cols)])
         norm = np.stack([np.clip((v - va) / (vb - va), 0.0, 1.0)
                          for v, (va, vb) in zip(chans + ex_chans, lims + ex_lims)], 1)
@@ -1073,7 +1280,8 @@ class RealDataPage(QWidget):
         # taller than the map beside it. These panels are a picture of where a band
         # is strong; the numbers behind them are in the CSV export.
         for i, nm in enumerate(nb):
-            ax = self.c_maps.style(self.c_maps.fig.add_subplot(1, n, i + 2))
+            ax = self.c_maps.style(self.c_maps.fig.add_subplot(gs[0, i + 1]))
+            ax.set_anchor("S")
             grid = np.zeros((ny, nx)); grid[rows, cc] = chans[i]
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", nbcols[i]])
             _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
@@ -1085,28 +1293,33 @@ class RealDataPage(QWidget):
             ax.set_xticks([]); ax.set_yticks([])
             # ramp UNDER the panel — horizontal bars share the panel's width, so
             # (unlike the old vertical ones) they cannot outgrow the map
-            cb = self.c_maps.fig.colorbar(_im, ax=ax, orientation="horizontal",
-                                          fraction=0.05, pad=0.05)
+            cb = self.c_maps.fig.colorbar(
+                _im, cax=self.c_maps.fig.add_subplot(gs[1, i + 1]),
+                orientation="horizontal")
             cb.ax.tick_params(labelsize=7, colors="black")
+            cb.outline.set_linewidth(0.5)
             self._exp_maps.append((f"band_{nm}", ax, cb.ax))
             self._click_axes.append(ax)
         for ei, wl in enumerate(extras):                   # user-added bands, own hue
             v = ex_chans[ei]
             va, vb = ex_lims[ei]
             ax = self.c_maps.style(
-                self.c_maps.fig.add_subplot(1, n, len(nb) + 2 + ei))
+                self.c_maps.fig.add_subplot(gs[0, len(nb) + 1 + ei]))
+            ax.set_anchor("S")
             grid = np.zeros((ny, nx)); grid[rows, cc] = v
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", ex_cols[ei]])
             _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                             interpolation="nearest", cmap=cmap, vmin=va, vmax=vb)
             ax.set_title(f"@ {wl:.0f} cm$^{{-1}}$", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
-            cb = self.c_maps.fig.colorbar(_im, ax=ax, orientation="horizontal",
-                                          fraction=0.05, pad=0.05)
+            cb = self.c_maps.fig.colorbar(
+                _im, cax=self.c_maps.fig.add_subplot(gs[1, len(nb) + 1 + ei]),
+                orientation="horizontal")
             cb.ax.tick_params(labelsize=7, colors="black")
+            cb.outline.set_linewidth(0.5)
             self._exp_maps.append((f"band_extra_{wl:.0f}", ax, cb.ax))
             self._click_axes.append(ax)
-        self.c_maps.fig.tight_layout(); self.c_maps.draw_idle()
+        self.c_maps.draw_idle()          # gridspec already carries explicit margins
 
     def _plot_abund(self, r):
         """Merged false-colour composite PLUS one panel per component (background
@@ -1141,8 +1354,10 @@ class RealDataPage(QWidget):
         origin, extent = self._extent_origin(ux, uy)
         panels = [("merged", None)] + [(r.comps[k], k) for k in range(len(r.comps))]
         n = len(panels)
+        gs = self._row_gs(self.c_abund.fig, n, ny, nx)
         for idx, (title, k) in enumerate(panels):
-            ax = self.c_abund.style(self.c_abund.fig.add_subplot(1, n, idx + 1))
+            ax = self.c_abund.style(self.c_abund.fig.add_subplot(gs[0, idx]))
+            ax.set_anchor("S")
             cb = None
             if k is None:
                 cols = np.array([to_rgb(c) for c in nbcols])
@@ -1153,7 +1368,10 @@ class RealDataPage(QWidget):
                     _nrm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
                 ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest")
-                title = f"merged · panel scale {vlo:g}–{vshared:g}"
+                # empty ramp cell — it holds the merge's image box the same size
+                self.c_abund.fig.add_subplot(gs[1, idx]).set_axis_off()
+                # short — a long title runs into the neighbouring panel
+                title = f"merged ({vlo:.3g}–{vshared:.3g})"
             else:
                 sc = vshared
                 grid = np.zeros((ny, nx)); grid[rows, cc] = r.A[:, k]
@@ -1163,16 +1381,18 @@ class RealDataPage(QWidget):
                 # the numbers live in per_pixel.csv (A_ columns)
                 _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                                 interpolation="nearest", cmap=cmap, vmin=vlo, vmax=sc)
-                cb = self.c_abund.fig.colorbar(_im, ax=ax, orientation="horizontal",
-                                               fraction=0.05, pad=0.05)
+                cb = self.c_abund.fig.colorbar(
+                    _im, cax=self.c_abund.fig.add_subplot(gs[1, idx]),
+                    orientation="horizontal")
                 cb.ax.tick_params(labelsize=7, colors="black")
+                cb.outline.set_linewidth(0.5)
                 title = title + (" (bkg)" if r.bg_mask[k] else "")
             ax.set_title(title, fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
             self._exp_abund.append((f"abund_{title.split(' ')[0]}", ax,
                                     cb.ax if cb is not None else None))
             self._click_axes.append(ax)
-        self.c_abund.fig.tight_layout(); self.c_abund.draw_idle()
+        self.c_abund.draw_idle()         # gridspec already carries explicit margins
 
     def _plot_conc(self, r):
         """Per-substance apparent SERS-equivalent concentration (µM) heat-maps — only when a
@@ -1286,6 +1506,9 @@ class RealDataPage(QWidget):
                   for i in range(len(uy) + 1)]
         ax.add_collection(LineCollection(gsegs, colors=self.PIE_GRID,
                                          linewidths=0.5, zorder=1))
+        # saturated pixels are simply NOT classified — they render as empty cells
+        # like background ("분류하지 말고 넘기는게 낫지 않나"); the run status and
+        # per_pixel.csv carry the count, so the hole is documented, just not loud
         if r.method == "model":                           # classifier → one class/pixel
             dom = r.ratio_nb.argmax(axis=1)
             if hit.any():
@@ -1397,41 +1620,63 @@ class RealDataPage(QWidget):
         meas = np.asarray(r.spectra[i], float)
         mm = meas.max() or 1.0
         ax.plot(axis, meas / mm, lw=1.3, color=INK, label="measured")
-        if r.templates is not None:
-            # A@templates rebuilt from the abundances. Under NNLS/MCR those ARE the fit
-            # coefficients, so this is the fit; under the composition model A holds
-            # probabilities, so the curve only shows which references the model picked —
-            # say so rather than letting it be read as a goodness-of-fit.
-            recon = r.A[i] @ r.templates
-            lab = ("model's reference mix" if r.method == "dlpx" else "reconstructed")
-            ax.plot(axis, recon / (recon.max() or 1.0), lw=1.1, color=TEAL,
-                    ls="--", label=lab)
-        xp, yp = r.coords[i]
         ratio_nb = self._ratio_nb(r)                      # corrected when toggle on
+        if r.templates is not None:
+            # ONE curve per substance — A_k x template_k in the substance's colour —
+            # instead of a single summed "reference mix" that matched nothing visibly
+            # ("green이 뭘 의미하는지 모르겠음"). Which peak belongs to whom, and how
+            # much, is what this panel is for. The thin grey dashed curve is their sum:
+            # the actual fit under NNLS/MCR; under the composition model A holds
+            # probabilities, so it only shows the references the model leaned on,
+            # not a goodness-of-fit.
+            recon = r.A[i] @ r.templates
+            rmax = float(recon.max()) or 1.0
+            cols = self._nb_colors(r)
+            for k, j in enumerate(r.nonbg):
+                contrib = r.A[i, j] * r.templates[j]
+                if float(contrib.max()) / rmax < 0.02:
+                    continue                       # absent substance — no clutter
+                ax.plot(axis, contrib / rmax, lw=1.0, color=cols[k], alpha=0.9,
+                        label=f"{r.comps[j]} {ratio_nb[i, k] * 100:.0f}%")
+            lab = ("references the model picked" if r.method == "dlpx"
+                   else "fit (sum)")
+            ax.plot(axis, recon / rmax, lw=0.9, color=FAINT, ls="--", label=lab)
+        xp, yp = r.coords[i]
         rat = "  ·  ".join(f"{r.comps[j]} {ratio_nb[i, k] * 100:.0f}%"
                            for k, j in enumerate(r.nonbg) if ratio_nb[i, k] > 0.02)
         tag = rat if r.hit[i] else "background"
         if (not r.hit[i] and getattr(r, "bg_score", None) is not None
                 and r.bg_score[i] >= r.bg_thr):
             tag = f"background (matches measured bg, score {r.bg_score[i]:.2f})"
+        if getattr(r, "sat_frac", None) is not None and r.sat_frac[i] > 0:
+            tag += (f"  (!) clipped — {r.sat_frac[i] * 100:.0f}% of channels were "
+                    "saturated and bridged")
         if self._flagged(r)[i]:                           # low-R² warning
             r2 = float(r.reliab[i]) if getattr(r, "reliab", None) is not None else 0.0
-            tag += (f"  ⚠ low R²={r2:.2f} — references fit this pixel badly"
+            tag += (f"  (!) low R²={r2:.2f} — references fit this pixel badly"
                     + (" (excluded)" if self.chk_rel.isChecked() else ""))
         if getattr(r, "conc", None) is not None and r.hit[i]:   # absolute µM per pixel
             um = r.conc[i] * 1e6
             cs = "  ·  ".join(f"{r.comps[j]} {um[k]:.3g}µM" for k, j in enumerate(r.nonbg)
                               if np.isfinite(um[k]) and um[k] > 0)
-            sat = ("  ⚠sat" if r.pp_theta is not None and r.pp_theta[i] > 0.85 else "")
+            sat = ("  (!) saturated" if r.pp_theta is not None
+                   and r.pp_theta[i] > 0.85 else "")
             ood_names = [r.comps[j] for k, j in enumerate(r.nonbg) if not np.isfinite(um[k])]
             if cs:
                 tag += f"  |  {cs}{sat}"
             if ood_names:
                 tag += "  |  OOD: " + ", ".join(ood_names)
-        ax.set_xlabel("Raman shift (cm$^{-1}$)"); ax.set_yticks([])
-        ax.legend(fontsize=9, framealpha=0.0, labelcolor="black",
-                  loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=2, frameon=False)
-        self.c_spec.fig.tight_layout(); self.c_spec.draw_idle()
+        # the pixel readout goes in the TITLE. The card is short now, and this text
+        # was being built and then thrown away — composition, µM, the low-R² warning
+        # and the OOD list never reached the screen at all.
+        ax.set_title(f"({xp:g}, {yp:g})  ·  {tag}", fontsize=9, pad=4)
+        ax.set_xlabel("Raman shift (cm$^{-1}$)", labelpad=1); ax.set_yticks([])
+        # legend inside the axes — a short card cannot spare a strip under the plot
+        ax.legend(fontsize=8, framealpha=0.0, labelcolor="black",
+                  loc="upper right", ncol=6, frameon=False,
+                  handlelength=1.4, columnspacing=0.9)
+        self.c_spec.fig.subplots_adjust(left=0.035, right=0.995, top=0.86, bottom=0.20)
+        self.c_spec.draw_idle()
 
     # ---- interaction ----
     def _on_click(self, event):
@@ -1465,9 +1710,11 @@ class RealDataPage(QWidget):
         inten = r.spectra.sum(axis=1)                      # total baseline-removed signal
         cal = getattr(r, "conc", None) is not None
         has_bg = getattr(r, "bg_score", None) is not None
+        has_sat = getattr(r, "sat_frac", None) is not None
         head = (["x", "y", "hit", "total_intensity"]
                 + [f"ratio_{nm}" for nm in nb] + [f"A_{c}" for c in r.comps]
                 + ([f"conc_uM_{nm}" for nm in nb] if cal else []) + ["reliability_r2"]
+                + (["clipped_frac"] if has_sat else [])
                 + (["bg_match"] if has_bg else []))
         rows = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}", int(r.hit[i]),
                  f"{inten[i]:.4f}"]
@@ -1476,6 +1723,7 @@ class RealDataPage(QWidget):
                 + ([f"{r.conc[i, k] * 1e6:.4g}" if np.isfinite(r.conc[i, k]) else "OOD"
                     for k in range(len(nb))] if cal else [])
                 + [f"{r.reliab[i]:.4f}"]
+                + ([f"{r.sat_frac[i]:.4f}"] if has_sat else [])
                 + ([f"{r.bg_score[i]:.4f}"] if has_bg else [])
                 for i in range(r.n_pixels)]
         write_csv(os.path.join(d, "per_pixel.csv"), head, rows)

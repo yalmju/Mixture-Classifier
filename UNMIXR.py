@@ -44,12 +44,14 @@ from page_real import RealDataPage
 # --------------------------------------------------------------------------
 class MainWindow(QMainWindow):
     # native analysis pages — clicking switches the view in-place
+    # Quantify sits BEFORE Model: its Langmuir calibration is an input to training
+    # (physics pre-training + the µM head), so the tabs read as the pipeline runs
     PAGES = [
         ("Samples",   "samples", "Group your maps into substance classes (batches)"),
-        ("Model",     "model", "Train a classifier on your reference maps"),
+        ("Quantify",  "quant", "Dilution series → Langmuir calibration (feeds Model + Real)"),
+        ("Model",     "model", "Train the composition model (adopts the calibration)"),
         ("Recovery",  "valid", "Known-ratio mixtures → response factors + composition "
                                "recovery (predicted vs real · colour blend · drift)"),
-        ("Quantify",  "quant", "Ratio → concentration + adsorption competition"),
         ("Real data", "real",  "Analyze real maps: composition · mixtures · µM · calibration"),
     ]
 
@@ -106,7 +108,7 @@ class MainWindow(QMainWindow):
             "valid": ValidatePage(),
             "real": RealDataPage(),
         }
-        for key in ("samples", "model", "valid", "quant", "real"):
+        for key in ("samples", "quant", "model", "valid", "real"):
             self.stack.addWidget(self.pages[key])
         for page in self.pages.values():          # type numbers instead of clicking arrows
             type_in_spinboxes(page)

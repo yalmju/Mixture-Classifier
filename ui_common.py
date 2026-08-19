@@ -142,6 +142,25 @@ class _MixtureBus(QObject):
 MIXTURE_BUS = _MixtureBus()
 
 
+# the dilution-series calibration made in Quantify, shared the same way: Quantify
+# publishes the spectra-CSV path, Model adopts it for physics pre-training + the µM
+# head, Real adopts it for per-pixel Langmuir quantification. One calibration, made
+# in one place, no re-browsing the same file on three tabs.
+class _CalibBus(QObject):
+    changed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.path = None               # calibration_spectra.csv (app standard format)
+        self.origin = ""
+
+    def set(self, path, origin=""):
+        self.path = path; self.origin = origin
+        self.changed.emit()
+
+CALIB_BUS = _CalibBus()
+
+
 def set_substance_colors(mapping):
     """Replace the global substance→colour overrides ({name: '#hex'})."""
     _SUB_COLORS.clear()
@@ -476,6 +495,6 @@ __all__ = [
     "PAGE", "PANEL", "CARD", "LINE", "INK", "MUTE", "FAINT", "TEAL", "BLUE",
     "AMBER", "CORAL", "PURPLE", "PINK", "GREEN", "RED", "TNGRAY",
     "SERIES", "CM_CMAP", "Canvas", "Kpi", "_card", "_save_figs", "EXPORT_DPI",
-    "COLOR_BUS", "MODEL_BUS", "MIXTURE_BUS", "set_substance_colors", "substance_colors",
+    "COLOR_BUS", "MODEL_BUS", "MIXTURE_BUS", "CALIB_BUS", "set_substance_colors", "substance_colors",
     "substance_color", "start_worker", "stop_worker", "worker_busy", "type_in_spinboxes",
 ]

@@ -17,7 +17,7 @@ from scipy.optimize import nnls
 
 from real_data import load_map
 from dataset import discover_dataset, is_blank
-from sers_mixture import als_baseline
+from sers_mixture import als_baseline, desaturate
 from calibration import calibrate, quantify, _langmuir_B
 from io_utils import load_calibration_csv
 
@@ -55,6 +55,7 @@ class UnmixResult:
     pp_theta: np.ndarray = None  # (n_pix,) total surface coverage Σθ per pixel
     calib_r2: np.ndarray = None  # (Knb,) isotherm fit R² per substance
     calib_slope: np.ndarray = None  # (Knb,) gA*K — signal per molar at low C
+    sat_frac: np.ndarray = None  # (n_pix,) fraction of detector-clipped channels
     bg_score: np.ndarray = None  # (n_pix,) match to the MEASURED background (0..1)
     bg_thr: float = None         # score at/above which a pixel is judged background
     hit_rule: str = ""           # which single rule decided background vs substance
@@ -251,6 +252,9 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
 
     if progress:
         progress("preprocessing spectra")
+    # detector-clipped plateaus first: ALS rings under a flat-top peak and the
+    # jagged residue reads as fake bands (looked like DQ on saturated pixels)
+    cube_u, sat_frac = desaturate(cube_u)
     spectra = _baseline_removed(cube_u, baseline)          # for the band image / display
     X = _l2(spectra)                                        # unit spectra for the fit
     templates = _l2(_baseline_removed(means, baseline))
@@ -430,7 +434,7 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         conc_se=conc_se,
         pp_theta=pp_theta, calib_r2=calib_r2,
         calib_slope=calib_slope, conc_ood=conc_ood, conc_ranges=conc_ranges,
-        bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
+        sat_frac=sat_frac, bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
 
 
 def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,

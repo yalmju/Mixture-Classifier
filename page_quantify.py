@@ -614,6 +614,7 @@ class QuantifyPage(QWidget):
             self._cal = (axis, names, dilutions)
             self.src.setText(f"source: {os.path.basename(p)} ({len(names)})")
             self.src.setStyleSheet("")
+            CALIB_BUS.set(p, os.path.basename(p))          # Model + Real adopt it
         except Exception as exc:
             self.src.setText("load failed"); self.src.setStyleSheet(f"color:{RED};")
             print("load cal:", exc, file=sys.stderr)
@@ -819,6 +820,31 @@ class QuantifyPage(QWidget):
         names = list(self._acc)
         dilutions = [self._acc[n] for n in names]
         self._cal = (self._axis, names, dilutions)
+        self._publish_cal()
+
+    def _publish_cal(self):
+        """Hand the loaded dilution series to the other tabs (CALIB_BUS): Model uses
+        it for physics pre-training + the µM head, Real for per-pixel Langmuir µM.
+        Folder loads have no single CSV on disk, so the shared-format spectra CSV
+        (mean spectrum per concentration) is written to a temp file once."""
+        if self._cal is None or self._axis is None:
+            return
+        try:
+            import tempfile
+            axis, names, dils = self._cal
+            head = ["compound", "concentration_M"] + [f"{v:.2f}" for v in axis]
+            rows = []
+            for nm, (C, specs) in zip(names, dils):
+                C = np.asarray(C, float); specs = np.asarray(specs, float)
+                for c in np.unique(C):
+                    mean_sp = specs[C == c].mean(axis=0)
+                    rows.append([nm, f"{c:.4e}"] + [f"{v:.4f}" for v in mean_sp])
+            p = os.path.join(tempfile.gettempdir(), "unmixr_calibration_spectra.csv")
+            write_csv(p, head, rows)
+            CALIB_BUS.set(p, "Quantify (" + " · ".join(names) + ")")
+        except Exception as exc:
+            print("publish calibration:", exc, file=sys.stderr)
+
 
     def _clear_cal(self):
         self._cal = None; self._acc = {}; self._axis = None
