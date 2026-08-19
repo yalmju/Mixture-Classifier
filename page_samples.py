@@ -250,9 +250,17 @@ class SamplingPage(QWidget):
                     pass
             if len(ratio) >= 2:
                 if self.chk_mix_uM.isChecked():
-                    # µM must come from the ORIGINAL amounts — the table ratio is reduced
-                    amt = self.mix_amounts[row] if row < len(self.mix_amounts) else {}
-                    amt = amt or ratio
+                    # µM comes from the FILENAME — the single source of truth
+                    # (260814_mixture_final doctrine). The old mix_amounts cache
+                    # drifted out of row order once and silently scrambled EVERY
+                    # concentration label (101/101 mismatched, the µM head trained
+                    # on another map's answer key); a per-row cache is never again
+                    # trusted for µM.
+                    nm = os.path.splitext(os.path.basename(self.mix_files[row]))[0]
+                    amt = parse_mixture_label(nm, self._mix_ref_names()) or {}
+                    if not amt:                        # non-standard filename only
+                        amt = (self.mix_amounts[row]
+                               if row < len(self.mix_amounts) else {}) or ratio
                     items.append((self.mix_files[row], ratio,
                                   {k: float(v) * 1e-6 for k, v in amt.items() if float(v) > 0}))
                 else:
