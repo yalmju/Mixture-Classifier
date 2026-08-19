@@ -1055,6 +1055,181 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
     return out
 
 
+def _fit_predict_uM(method, Xtr, Ytr, Xte, *, epochs=350, seed=0, n_components=8,
+                    n_trees=300, rf_max_features=None):
+    """Fit ``method`` on (context features -> log10 uM + 6) and predict for Xte.
+
+    Every method reads the SAME inputs — the competitive-adsorption context features the
+    deployed head uses — so the comparison isolates the regressor, not the featuriser.
+    Targets are log10 because concentration spans decades and the field's criterion
+    (within 2-fold) is a log-scale one.
+    """
+    if method == "null":
+        return np.repeat(np.asarray(Ytr, float).mean(axis=0, keepdims=True),
+                         len(np.atleast_2d(Xte)), axis=0)
+    if method == "total":
+        # The trivial quantifier a reviewer will propose: per substance, regress log10 uM
+        # on the map's log total intensity and that substance's fitted fraction. Two
+        # coefficients each — if this matches the learned head, learning is not earning
+        # its place. Columns 0..k-1 are the ratios, column k is log total intensity.
+        k = Ytr.shape[1]
+        A_tr = np.column_stack([Xtr[:, :k], Xtr[:, k], np.ones(len(Xtr))])
+        A_te = np.column_stack([np.atleast_2d(Xte)[:, :k], np.atleast_2d(Xte)[:, k],
+                                np.ones(len(np.atleast_2d(Xte)))])
+        out = np.zeros((len(A_te), k))
+        for j in range(k):
+            coef, *_ = np.linalg.lstsq(A_tr, np.asarray(Ytr, float)[:, j], rcond=None)
+            out[:, j] = A_te @ coef
+        return out
+    if method == "pls":
+        from sklearn.cross_decomposition import PLSRegression
+        nc = max(1, min(int(n_components), len(Xtr) - 1, Xtr.shape[1]))
+        p = np.atleast_2d(PLSRegression(n_components=nc).fit(Xtr, Ytr)
+                          .predict(np.atleast_2d(Xte)))
+        # a rank-deficient fold yields NaN; fall back to the training mean rather than
+        # poisoning the summary with inf
+        bad = ~np.isfinite(p)
+        if bad.any():
+            p = np.where(bad, np.asarray(Ytr, float).mean(axis=0), p)
+        return p
+    if method == "rf":
+        from sklearn.ensemble import RandomForestRegressor
+        kw = {} if rf_max_features is None else {"max_features": rf_max_features}
+        return np.atleast_2d(RandomForestRegressor(n_estimators=int(n_trees),
+                                                   random_state=int(seed), **kw)
+                             .fit(Xtr, Ytr).predict(np.atleast_2d(Xte)))
+    # 'mlp' — the deployed head's shape (128/32 over the context features)
+    import torch
+    import torch.nn as nn
+    torch.manual_seed(int(seed))
+    mu = Xtr.mean(0); sd = Xtr.std(0) + 1e-8
+    xt = torch.tensor(((Xtr - mu) / sd).astype(np.float32))
+    yt = torch.tensor(np.asarray(Ytr, np.float32))
+    net = nn.Sequential(nn.Linear(Xtr.shape[1], 128), nn.BatchNorm1d(128), nn.ReLU(),
+                        nn.Dropout(0.25), nn.Linear(128, 32), nn.ReLU(),
+                        nn.Linear(32, yt.shape[1]))
+    op = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=3e-3)
+    for _ in range(int(epochs)):
+        net.train(); op.zero_grad()
+        torch.nn.functional.smooth_l1_loss(net(xt), yt, beta=0.25).backward(); op.step()
+    net.eval()
+    with torch.no_grad():
+        xe = torch.tensor(((np.atleast_2d(Xte) - mu) / sd).astype(np.float32))
+        return net(xe).numpy()
+
+
+def benchmark_uM_loo(data_dir, items, baseline=True, trim=None, progress=None,
+                     methods=("null", "total", "pls", "rf", "mlp"), epochs=350, seed=0,
+                     n_components=8, n_trees=300, rf_max_features=None):
+    """Leave-one-condition-out benchmark of ABSOLUTE concentration (uM).
+
+    This is the comparison the composition table cannot make. NNLS, the VIP band and
+    MCR-ALS return a ratio and nothing else: without a dilution-series calibration they
+    produce no concentration at all, so they cannot appear here. What CAN appear is every
+    honest shortcut — the training mean, a two-coefficient fit on total intensity, and
+    the standard regressors — against the learned head.
+
+    A condition here is a prepared SOLUTION: the same ratio at a different concentration
+    is a different condition (unlike the composition benchmark, where they share a label),
+    so folds are grouped by ratio AND uM and no repeat of a solution is split across the
+    fold boundary.
+
+    Returns {method: {"true_uM", "pred_uM"}} in uM, plus "subs".
+    """
+    from real_data import load_map
+    from dl_quantify import _ratio, surface_composition
+    subs, wn, mask, P, lo, hi = _refs(data_dir, baseline, trim)
+    X, C, gkey, paths = [], [], [], []
+    for k, it in enumerate(items):
+        if progress:
+            progress(f"loading maps {k + 1}/{len(items)}")
+        conc = it[2] if len(it) > 2 else None
+        if not conc:
+            continue
+        cv = np.array([float(conc.get(s, 0.0)) for s in subs], float) * 1e6   # M -> uM
+        if cv.sum() <= 0:
+            continue
+        vec = _ratio([float(it[1].get(s, 0.0)) for s in subs])
+        _w, cube, _m, _c = load_map(it[0])
+        for ya in _map_spectra(cube, mask, 0, baseline_correct=baseline):
+            X.append(ya); C.append(cv); paths.append(it[0])
+            gkey.append("r:" + ",".join(f"{v:.6f}" for v in vec)
+                        + "|c:" + ",".join(f"{v:.6g}" for v in cv))
+    if len(X) < 3:
+        raise ValueError("need >=3 mixtures WITH per-substance uM for a concentration "
+                         "benchmark — check that Samples carries concentrations.")
+    X = np.asarray(X, float); C = np.asarray(C, float)
+    gkey = np.asarray(gkey, object); paths = np.asarray(paths, object)
+
+    # every method reads the deployed head's inputs: NNLS composition + intensity context
+    R = surface_composition(_composition_features(X, "legacy_l2"), P)
+    Xctx = _concentration_context_features(X, paths, R)
+    # Those context features summarise a map with P10/median/P90 over its PIXELS. One mean
+    # spectrum per map makes each summary a copy of the row itself: the matrix goes rank
+    # deficient and PLS returns NaN (measured — every fold came back inf). Keep only the
+    # independent block, the composition and the log total intensity, when that happens.
+    if len(set(paths.tolist())) == len(paths):
+        Xctx = Xctx[:, :R.shape[1] + 1]
+    Y = np.log10(np.clip(C, 1e-3, None))          # uM, floored well below any real level
+
+    out = {"subs": subs}
+    uniq = list(dict.fromkeys(gkey.tolist()))
+    for mi, meth in enumerate(methods):
+        tv, pv = [], []
+        for i, ck in enumerate(uniq):
+            if progress:
+                progress(f"{meth.upper()} leave-one-condition-out {i + 1}/{len(uniq)}  "
+                         f"[{mi + 1}/{len(methods)} methods]")
+            te = np.where(gkey == ck)[0]; tr = np.where(gkey != ck)[0]
+            pred = _fit_predict_uM(meth, Xctx[tr], Y[tr], Xctx[te], epochs=epochs,
+                                   seed=seed + i, n_components=n_components,
+                                   n_trees=n_trees, rf_max_features=rf_max_features)
+            tv.append(C[te[0]].tolist())
+            pv.append((10.0 ** np.asarray(pred, float).mean(0)).tolist())
+        out[meth] = {"true_uM": tv, "pred_uM": pv}
+    return out
+
+
+def benchmark_uM_summary(bench, folds=(2.0,)):
+    """Concentration metrics, per method, from a ``benchmark_uM_loo`` result.
+
+    within_fold — fraction of (condition, substance) pairs recovered inside a factor of
+        ``f`` of the prepared value. The field's own convention, not a cut of ours, which
+        is why it is the headline here while composition leads with a deviation.
+    log_mae — mean |log10(pred/true)|; 0.30 is exactly 2-fold.
+    recovery — {substance: (mean %, SE %, n)} of pred/true*100, same definition as the
+        composition table so both read in one language.
+    Substances absent from a condition are excluded throughout: a ratio of zero has no
+    fold error and no recovery. Detection is the ROC's job, not this table's.
+    """
+    subs = list(bench.get("subs", []))
+    out = {}
+    for m, r in bench.items():
+        if not isinstance(r, dict) or "true_uM" not in r:
+            continue
+        T = np.asarray(r["true_uM"], float); Pd = np.asarray(r["pred_uM"], float)
+        present = T > 0
+        lr = np.abs(np.log10(np.clip(Pd, 1e-9, None) / np.clip(T, 1e-9, None)))
+        entry = {"n": int(len(T)), "n_pairs": int(present.sum()),
+                 "log_mae": float(lr[present].mean()) if present.any() else float("nan")}
+        for f in folds:
+            entry[f"within_{f:g}fold"] = (float((lr[present] <= np.log10(f)).mean())
+                                          if present.any() else float("nan"))
+        rec = {}
+        for j, s in enumerate(subs):
+            sel = present[:, j]
+            n = int(sel.sum())
+            if n:
+                q = Pd[sel, j] / T[sel, j] * 100.0
+                se = float(q.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
+                rec[s] = (float(q.mean()), se, n)
+            else:
+                rec[s] = (float("nan"), float("nan"), 0)
+        entry["recovery"] = rec
+        out[m] = entry
+    return out
+
+
 def benchmark_summary(bench, cut_pp=None, ref="nnls"):
     """The benchmark table's numbers, from a ``benchmark_loo`` result — computed in ONE
     place so the UI table and the CSV export cannot drift apart. Returns
