@@ -15,37 +15,26 @@ os.environ.setdefault("QT_API", "PyQt6")
 
 
 def _ensure_qt_plugin_path():
-    """Point Qt at PyQt6's own plugins when nothing else has.
+    """Clear QT_QPA_PLATFORM_PLUGIN_PATH so Qt's own wheel discovery runs.
 
-    Startup otherwise dies with `Could not find the Qt platform plugin "cocoa"
-    in ""` on macOS (or "xcb" on Linux): the empty path means Qt was handed a
-    blank QT_QPA_PLATFORM_PLUGIN_PATH — usually exported by a stale Homebrew /
-    conda / PyQt5 Qt in the shell profile — and searched nowhere at all instead
-    of falling back to the wheel's own plugins.
+    This helper used to do the opposite — replace a stale value with the wheel's
+    plugins directory. On Qt 6.11 (macOS, verified 2026-08-19) the variable being
+    set AT ALL breaks startup: `Could not find the Qt platform plugin "cocoa"`,
+    whether it points at the wheel's plugins/, plugins/platforms/, or anywhere
+    else — while an unset variable finds the very same libqcocoa.dylib fine.
+    So the app was planting the bug it was written to fix, and reinstalling
+    PyQt6 "fixed" it only until the next launch.
 
-    A path that is set and actually usable is always left alone. One that is
-    blank, or that points somewhere with no platforms/ directory (a Qt5 or
-    Homebrew Qt left over in the shell profile — the reason this keeps coming
-    back after a reinstall "fixes" it), is replaced with the wheel's own.
-
-    Does nothing if the wheel has no plugins directory, which is the other cause
-    of this error (a broken PyQt6-Qt6 install) and needs a reinstall, not a path.
+    The stale-shell-profile export this guarded against (a Homebrew / conda /
+    PyQt5 Qt path) is also cured by deletion, so deletion is the one policy that
+    handles both. Anyone who really needs a custom Qt can still set QT_PLUGIN_PATH.
     """
     key = "QT_QPA_PLATFORM_PLUGIN_PATH"
-    current = os.environ.get(key)
-    if current and os.path.isdir(os.path.join(current, "platforms")):
-        return                               # set and usable: respect it
-    try:
-        import PyQt6
-    except ImportError:                      # nothing to point at yet
-        return
-    plugins = os.path.join(os.path.dirname(PyQt6.__file__), "Qt6", "plugins")
-    if os.path.isdir(os.path.join(plugins, "platforms")):
-        if current:
-            print(f"UNMIXR: ignoring unusable {key}={current!r} "
-                  f"(no platforms/ there); using PyQt6's own plugins",
-                  file=sys.stderr)
-        os.environ[key] = plugins
+    current = os.environ.pop(key, None)
+    if current:
+        print(f"UNMIXR: dropping {key}={current!r} — with it set, Qt ≥6.11 "
+              f"cannot find its platform plugin at all; the wheel's own "
+              f"auto-discovery works only when it is unset", file=sys.stderr)
 
 
 _ensure_qt_plugin_path()

@@ -188,18 +188,9 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    # Point Qt at its bundled platform plugins. Fixes the macOS start-up error
-    #   qt.qpa.plugin: Could not find the Qt platform plugin "cocoa" in ""
-    # which happens when the plugin search path is empty (e.g. launched from Finder or a
-    # venv where auto-discovery fails). QLibraryInfo works without a platform plugin.
-    if "QT_QPA_PLATFORM_PLUGIN_PATH" not in os.environ:
-        try:
-            from PyQt6.QtCore import QLibraryInfo
-            pp = QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath)
-            if pp and os.path.isdir(pp):
-                os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = pp
-        except Exception:
-            pass
+    # QT_QPA_PLATFORM_PLUGIN_PATH is handled (removed) in ui_common at import time:
+    # on Qt ≥6.11 the variable being set at all — even to the wheel's own plugins —
+    # makes the platform plugin unfindable, so nothing here may set it back.
     # Windows taskbar groups by AppUserModelID; without an explicit one the taskbar shows
     # the python(w).exe icon instead of our window icon. Set it before the QApplication.
     if sys.platform == "win32":
