@@ -363,7 +363,26 @@ class RealDataPage(QWidget):
                                   "and a recovery % under the bars.")
         self.true_edit.editingFinished.connect(
             lambda: self._plot_conc(self._res) if self._res is not None else None)
-        vrow.addWidget(_tl); vrow.addWidget(self.true_edit); vrow.addStretch(1)
+        vrow.addWidget(_tl); vrow.addWidget(self.true_edit)
+        # the VALIDATED quantification window, not the label range: held-out
+        # recovery was demonstrated on the 3-24 uM grid, so µM claims outside the
+        # window the user declares here are OOD no matter what the head says
+        _rl2 = QLabel("report range µM (lo–hi) — 0 = model's"); _rl2.setObjectName("field")
+        self.rep_lo = QDoubleSpinBox(); self.rep_lo.setDecimals(1)
+        self.rep_lo.setRange(0.0, 1e6); self.rep_lo.setValue(0.0)
+        self.rep_lo.setFixedWidth(70)
+        self.rep_hi = QDoubleSpinBox(); self.rep_hi.setDecimals(1)
+        self.rep_hi.setRange(0.0, 1e6); self.rep_hi.setValue(0.0)
+        self.rep_hi.setFixedWidth(70)
+        for _sp in (self.rep_lo, self.rep_hi):
+            _sp.setToolTip("the range where held-out recovery was actually "
+                           "demonstrated (e.g. 3–24 for the grid). Pixels outside "
+                           "leave the medians and are counted as OOD. 0–0 falls "
+                           "back to the model's own training-label range.")
+            _sp.valueChanged.connect(
+                lambda _=0: self._plot_conc(self._res) if self._res is not None else None)
+        vrow.addWidget(_rl2); vrow.addWidget(self.rep_lo); vrow.addWidget(self.rep_hi)
+        vrow.addStretch(1)
         lay_conc.addLayout(vrow)
         lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(340)
         body.addWidget(self.card_conc)
@@ -1425,9 +1444,15 @@ class RealDataPage(QWidget):
         ood = getattr(r, "conc_ood", None)
         rngs = getattr(r, "conc_ranges", None)
         hi_um = None
+        lo_um = None
         if rngs is not None:
             _h = np.asarray(rngs, float)[:, 1] * 1e6
             hi_um = np.where(np.isfinite(_h), _h, np.inf)
+        # user-declared VALIDATED window beats the label range
+        _ulo, _uhi = float(self.rep_lo.value()), float(self.rep_hi.value())
+        if _uhi > _ulo > 0 or (_ulo == 0 and _uhi > 0):
+            hi_um = np.full(len(nb), _uhi)
+            lo_um = np.full(len(nb), _ulo) if _ulo > 0 else None
         vmask = hit[:, None] & np.isfinite(um_all) & (um_all > 0)
         vals = um_all[vmask]
         vmax = float(np.quantile(vals, 0.90)) if vals.size else 1.0
@@ -1466,6 +1491,8 @@ class RealDataPage(QWidget):
                 bad |= np.asarray(ood, bool)[sel, i]
             if hi_um is not None and np.isfinite(hi_um[i]):
                 bad |= fin & (v > hi_um[i])
+            if lo_um is not None:
+                bad |= fin & (v < lo_um[i])
             keep = fin & ~bad
             bad_frac[i] = float(bad[fin].mean()) if fin.any() else 0.0
             vv = v[keep]
