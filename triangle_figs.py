@@ -73,7 +73,7 @@ def _bary(frac, BR, BL, TOP):
     return f[0] * BR + f[1] * BL + (f[2] * TOP if len(f) > 2 else 0.0)
 
 
-def _frame(ax, BR, BL, TOP, subs, colors, corner_labels=None):
+def _frame(ax, BR, BL, TOP, subs, colors, corner_labels=None, text=True):
     for t in (0.25, 0.5, 0.75):
         for P, Q, R in [(BR, TOP, BL), (TOP, BR, BL), (BL, BR, TOP)]:
             ax.plot([P[0] + t * (Q[0] - P[0]), P[0] + t * (R[0] - P[0])],
@@ -85,6 +85,8 @@ def _frame(ax, BR, BL, TOP, subs, colors, corner_labels=None):
     spots = [(BR, "left", "top", 0.03, -0.05), (BL, "right", "top", -0.03, -0.05),
              (TOP, "center", "bottom", 0.0, 0.05)]
     for i, (p, ha, va, dx, dy) in enumerate(spots[:len(subs)]):
+        if not text:
+            continue         # figure-only export: labels live in a CSV
         txt = subs[i] if not corner_labels else f"{subs[i]}\n{corner_labels[i]}"
         ax.text(p[0] + dx, p[1] + dy, txt, ha=ha, va=va, fontsize=_fs(15), fontweight="bold",
                 color=colors[i], linespacing=1.3)
@@ -102,7 +104,7 @@ def _recovery(rows, i):
     return float(v.mean()), float(se)
 
 
-def accuracy_triangle(rows, subs, colors, fig=None, arrows=True):
+def accuracy_triangle(rows, subs, colors, fig=None, arrows=True, text=True):
     """Interior shaded by prediction accuracy; arrows true -> predicted; corner recovery."""
     fig = fig or Figure(figsize=(7.2, 6.8))
     fig.patch.set_alpha(0.0)
@@ -138,7 +140,7 @@ def accuracy_triangle(rows, subs, colors, fig=None, arrows=True):
     for i in range(len(subs)):
         rec, se = _recovery(rows, i)
         corner.append("—" if rec != rec else f"{rec:.0f}±{se:.0f}%")
-    _frame(ax, BR, BL, TOP, subs, colors, corner_labels=corner)
+    _frame(ax, BR, BL, TOP, subs, colors, corner_labels=corner, text=text)
 
     for r in rows:
         p0 = _bary(r[1], BR, BL, TOP); p1 = _bary(r[2], BR, BL, TOP)
