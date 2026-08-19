@@ -124,6 +124,32 @@ pure-refs 폴더의 `unmixr_last_error.txt`에 저장된다 ("failed — trainin
 4. **`band`의 위치** — 예상은 하위. 사다리 맨 아래 칸으로 "방법론이 왜 필요한가"를 보여줌
 5. 편차는 **11.6 %p 바닥과 나란히** 보고. 컷 없는 CDF + 바닥 세로선이 1순위 보고 형식
 
+## 5-1. 🔴 레이아웃 충돌 — 내일 첫 번째로 처리할 것
+
+**앱 폴더의 `page_compose.py`가 GitHub main보다 최신이었다.** 그 폴더에서 UI를 다시 짠
+작업이 GitHub에 푸시된 적이 없다 (좁은 왼쪽 세로 열 배치). 8/19 밤에 벤치마크 변경분을
+얹으려고 main 버전으로 덮어썼고, 그 결과 **그 UI 작업이 되돌아갔다** (가로 한 줄 배치로 바뀜).
+어젯밤 `git pull`이 충돌난 것도 같은 이유다.
+
+- `dl_model.py`는 레이아웃과 무관하므로 **새 버전 그대로 두면 된다** (`[n/9]`를 만드는 파일)
+- `page_compose.py`만 원래 것으로 되돌리면 화면·Export에 **옛 5개만** 나오고
+  `null`·`band`·`nnls_rf`·`mcr` 결과가 버려진다. 8/19 밤 런은 가로 레이아웃(= main 기반
+  page_compose)으로 돌렸으므로 9개가 모두 나온 상태다
+
+**복구 순서:**
+1. 원래 `page_compose.py`를 찾는다 — 그 폴더에서 `git log --oneline -3 -- page_compose.py`,
+   커밋돼 있으면 `git checkout <해당커밋> -- page_compose.py`.
+   커밋이 없으면 **Google Drive 웹 → 그 파일 우클릭 → 버전 기록 → 복원**
+   (Drive 이력은 영구 보관이 아니므로 미루지 말 것)
+2. 그 원본 위에 벤치마크 변경분을 다시 얹는다. 얹을 것:
+   - 9개 메서드 라벨/순서 (`null`·`band`·`nnls`·`nnls_rf`·`mcr`·`pls`·`rf`·`cnn`·`mlp`)
+   - advanced의 `declared cut` 스핀박스 (+ `_benchmark`에서 클릭 시 동결)
+   - `_benchmark`가 `px_per_map=0`을 보내는 것 ← **이거 빠지면 다시 못 돈다**
+   - 벤치마크 표(9열) · 정답률/recovery 차트 · Export의 벤치마크 CSV·PNG 4장
+   - `_fail` 진단 개선, 워커의 큐 드레인
+   변경분은 GitHub main `202487b`의 `page_compose.py`에 전부 들어 있으므로 diff로 옮기면 된다
+3. **합친 뒤 그 폴더에서 커밋·푸시할 것.** GitHub에 그 UI가 없는 한 같은 사고가 반복된다
+
 ## 6. 남은 것
 
 - [ ] 새 모델 LOO로 산출물 갱신 (grid 편차 CSV, 삼각형, tri64_labels.csv)
