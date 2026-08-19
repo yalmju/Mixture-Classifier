@@ -102,7 +102,7 @@ def _recovery(rows, i):
     return float(v.mean()), float(se)
 
 
-def accuracy_triangle(rows, subs, colors, fig=None):
+def accuracy_triangle(rows, subs, colors, fig=None, arrows=True):
     """Interior shaded by prediction accuracy; arrows true -> predicted; corner recovery."""
     fig = fig or Figure(figsize=(7.2, 6.8))
     fig.patch.set_alpha(0.0)
@@ -143,7 +143,7 @@ def accuracy_triangle(rows, subs, colors, fig=None):
     for r in rows:
         p0 = _bary(r[1], BR, BL, TOP); p1 = _bary(r[2], BR, BL, TOP)
         e = 0.5 * np.abs(np.asarray(r[2]) - np.asarray(r[1])).sum()
-        if np.hypot(*(p1 - p0)) > 4e-3:                 # skip only true zero-length
+        if arrows and np.hypot(*(p1 - p0)) > 4e-3:      # skip only true zero-length
             ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=_fs(16),
                                          color="#3f4650", lw=1.8, alpha=0.9, zorder=3,
                                          shrinkA=3, shrinkB=6))
