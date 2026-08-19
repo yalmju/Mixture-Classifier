@@ -123,8 +123,12 @@ def _map_spectra(cube, mask, n_px=0, spread=False, baseline_correct=True):
     individual pixels, brightest first unless ``spread`` is requested. Pixels from the
     same map must remain in the same validation split because they share one map label.
     """
-    from sers_mixture import als_baseline
+    from sers_mixture import als_baseline, desaturate
     cube = np.asarray(cube, float)[:, mask]
+    cube, _sat = desaturate(cube)      # bridge clipped plateaus before any ALS
+    ok = _sat <= 0.01                  # quarantine: clipped pixels don't train
+    if ok.any() and not ok.all():
+        cube = cube[ok]
     w = cube.sum(1); wn_ = w / (w.sum() + 1e-12)
     mean = wn_ @ cube
     out = ([] if n_px else
@@ -144,8 +148,12 @@ def _map_spectra(cube, mask, n_px=0, spread=False, baseline_correct=True):
 
 def _mean_spectrum(cube, mask, baseline_correct=True):
     cube = np.asarray(cube, float)[:, mask]
+    from sers_mixture import als_baseline, desaturate
+    cube, _sat = desaturate(cube)      # bridge clipped plateaus before any ALS
+    ok = _sat <= 0.01                  # quarantine: clipped pixels don't train
+    if ok.any() and not ok.all():
+        cube = cube[ok]
     w = cube.sum(1); w = w / (w.sum() + 1e-12)
-    from sers_mixture import als_baseline
     mean = w @ cube
     return (np.clip(mean - als_baseline(mean), 0, None) if baseline_correct
             else np.clip(mean, 0, None))
@@ -388,6 +396,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     def _norm_rows(p):
         p = np.clip(np.asarray(p, float), 0, None); return p / (p.sum(1, keepdims=True) + 1e-12)
     loss_curve = []
+    comp = None                       # torch composition head (mlp branch only)
     if method == "nnls":                       # classical baseline: nothing is trained
         from dl_quantify import surface_composition
         comp_store = {"method": "nnls"}
@@ -535,8 +544,23 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         # single pseudo-map and change what the head is trained to predict.
         gp = np.asarray(abs_paths, object)[hv]
         gcond = np.asarray(abs_conds, object)[hv]
-        from dl_quantify import surface_composition
-        Rabs = surface_composition(_composition_features(Xabs[hv], 'legacy_l2'), P)
+        # ratio input from the trained COMPOSITION HEAD (full spectrum), not the
+        # template projection: the projection reads any strong ~1580 band as DQ,
+        # and the µM head inherited that single-band misreading. Falls back to
+        # the projection for non-torch composition heads.
+        uM_input_mode = "nnls_ratio+intensity_quantiles_v1"
+        Rabs = None
+        if method == "mlp" and comp is not None:
+            from dl_quantify import predict_composition
+            feats_abs = np.stack([_composition_features(y) for y in Xabs[hv]])
+            pk = np.clip(np.asarray(predict_composition(comp, feats_abs), float), 0, None)
+            cols = [subs.index(s_) for s_ in conc_subs]
+            R_ = pk[:, cols]
+            Rabs = R_ / (R_.sum(axis=1, keepdims=True) + 1e-12)
+            uM_input_mode = "mlp_ratio+intensity_quantiles_v1"
+        if Rabs is None:
+            from dl_quantify import surface_composition
+            Rabs = surface_composition(_composition_features(Xabs[hv], 'legacy_l2'), P)
         Xctx = _concentration_context_features(Xabs[hv], gp, Rabs)
         target = (np.log10(np.clip(C[hv], 1e-8, None)) + 6.0).astype(np.float32)
 
@@ -607,7 +631,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         uM = {"kind": "map_pooled_pixel_concentration_v1",
               "state": {k: v.detach().numpy() for k, v in net.state_dict().items()},
               "mu": mu, "sd": sd, "subs": list(conc_subs), "pool": "median_log10",
-              "input_mode": "nnls_ratio+intensity_quantiles_v1", "hidden": (128, 32),
+              "input_mode": uM_input_mode, "hidden": (128, 32),
               "raw_n_feat": Xabs.shape[1], "ratio_n_feat": len(conc_subs),
               "ood_threshold": float(np.quantile(dist, 0.99)),
               "ranges_M": np.asarray(ranges, float), "train_loss": loss_curve_uM,
@@ -616,6 +640,60 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
               "selection_val_history": selection_uM_val,
               "selection_level": "condition",
               "n_maps": len(dict.fromkeys(gp.tolist())), "n_pixels": len(hv)}
+
+        # ---- the VALIDATED window, derived from the file itself -----------------
+        # One condition-grouped 20% holdout of the µM head (cheap - one extra fit,
+        # not the ~100x LOO): a concentration level counts as validated for a
+        # substance when its held-out maps recover within 2-fold at that level.
+        # Real reports inside this window automatically; nothing is typed by hand.
+        try:
+            v_tr, v_va = _group_validation_indices(gcond, seed=seed + 31)
+            if len(v_va) and len(v_tr) >= 3:
+                if progress:
+                    progress("validating the reportable window (20% held-out)")
+                vtrain = _concentration_context_features(Xabs[hv][v_tr], gp[v_tr], Rabs[v_tr])
+                vmu_ = vtrain.mean(0); vsd_ = vtrain.std(0) + 1e-8
+                vX = torch.tensor(((vtrain - vmu_) / vsd_).astype(np.float32))
+                vY = torch.tensor((np.log10(np.clip(C[hv][v_tr], 1e-8, None)) + 6.0
+                                   ).astype(np.float32))
+                torch.manual_seed(seed + 31); vnet = make_conc_net()
+                vop = torch.optim.Adam(vnet.parameters(), lr=1e-3, weight_decay=3e-3)
+                for _ in range(selected_uM_epochs):
+                    vnet.train(); vop.zero_grad()
+                    vl = pooled_loss(vnet(vX), vY, gp[v_tr]); vl.backward(); vop.step()
+                vnet.eval()
+                vtest = _concentration_context_features(Xabs[hv][v_va], ratios=Rabs[v_va])
+                with torch.no_grad():
+                    vlog = vnet(torch.tensor(((vtest - vmu_) / vsd_
+                                              ).astype(np.float32))).numpy()
+                vgp = gp[v_va]
+                lv_err = {}                       # (subs j, level µM) -> [fold errors]
+                for mp in dict.fromkeys(vgp.tolist()):
+                    sel = np.where(vgp == mp)[0]
+                    pred = 10.0 ** np.clip(np.median(vlog[sel], axis=0), -3.0, 6.0)
+                    true = C[hv][v_va[sel[0]]] * 1e6
+                    for j in range(len(conc_subs)):
+                        if true[j] > 0 and np.isfinite(pred[j]) and pred[j] > 0:
+                            lv_err.setdefault((j, round(float(true[j]), 4)),
+                                              []).append(abs(np.log10(pred[j] / true[j])))
+                vr = np.full((len(conc_subs), 2), np.nan)
+                for j in range(len(conc_subs)):
+                    good = [lvl for (jj, lvl), es in lv_err.items()
+                            if jj == j and 10.0 ** float(np.median(es)) <= 2.0]
+                    if len(good) >= 2:
+                        vr[j] = [min(good) * 1e-6, max(good) * 1e-6]
+                uM["validated_ranges_M"] = vr
+                uM["validated_note"] = ("levels recovered within 2-fold on a 20% "
+                                        "condition-grouped holdout")
+                if progress:
+                    _txt = " · ".join(
+                        f"{conc_subs[j]} {vr[j][0]*1e6:.3g}-{vr[j][1]*1e6:.3g}uM"
+                        if np.isfinite(vr[j]).all() else f"{conc_subs[j]} n/a"
+                        for j in range(len(conc_subs)))
+                    progress("validated window: " + _txt)
+        except Exception as _e:
+            if progress:
+                progress(f"validated-window check skipped ({_e})")
 
         # Concentration validation follows the same leave-one-CONDITION-out boundary as
         # composition. Each held-out map is pooled from its pixel predictions.
@@ -665,8 +743,20 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             uM["loo_eval"] = {"true_uM": loo_true, "pred_uM": loo_pred,
                               "paths": loo_paths, "level": "condition"}
 
+    # carry the calibration INSIDE the model: Real then quantifies µM from the
+    # .dlm alone — no separate CSV to re-browse (and no way to pair the wrong one)
+    calib_csv_text = calib_csv_name = None
+    if calib_path:
+        try:
+            with open(calib_path, "r", encoding="utf-8", errors="replace") as fh:
+                calib_csv_text = fh.read()
+            calib_csv_name = os.path.basename(str(calib_path))
+        except OSError:
+            pass
+
     return {"subs": subs, "lo": lo, "hi": hi, "n_feat": int(mask.sum()), "P": P,
             "feature_mode": "log1p_raw",
+            "calib_csv_text": calib_csv_text, "calib_csv_name": calib_csv_name,
             "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None,
             "n_maps": int(len(set(paths.tolist()))),
             "px_per_map": int(px_per_map),
@@ -890,7 +980,16 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
     X = np.asarray(spectra, float)
     if X.shape[1] == len(wn):
         X = X[:, mask]
-    if u.get("input_mode") == "nnls_ratio+intensity_quantiles_v1":
+    if u.get("input_mode") == "mlp_ratio+intensity_quantiles_v1":
+        # the composition head's full-spectrum ratios — the same eyes that already
+        # call this pixel right — normalised over the µM head's substances
+        pk = np.clip(np.asarray(apply_model_pixels(model, wn, spectra), float), 0, None)
+        subs_all = list(model["subs"])
+        cols = [subs_all.index(s_) for s_ in usubs if s_ in subs_all]
+        R_ = pk[:, cols]
+        ratios = R_ / (R_.sum(axis=1, keepdims=True) + 1e-12)
+        X = _concentration_context_features(X, ratios=ratios)
+    elif u.get("input_mode") == "nnls_ratio+intensity_quantiles_v1":
         from dl_quantify import surface_composition
         ratios = surface_composition(_composition_features(X, "legacy_l2"), model["P"])
         X = _concentration_context_features(X, ratios=ratios)
@@ -912,16 +1011,41 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
         for i in range(0, len(Xe), 512):
             out.append(net(torch.tensor(Xe[i:i + 512])).numpy())
     logv = np.vstack(out)
-    result = (10.0 ** np.clip(logv, -3.0, 6.0), list(usubs))
+    um = 10.0 ** np.clip(logv, -3.0, 6.0)
+    # ---- answer INSIDE the trained range, never outside it -------------------
+    # The head extrapolates freely, and on out-of-distribution input the weak
+    # binder's inversion runs to thousands of µM ("한정된 범위 내에서 답해야지").
+    # Predictions are clamped to each substance's training range; a clamped pixel
+    # is FLAGGED, so downstream medians can drop it and the export names it.
+    # UPPER side only: the explosion artifact lives above the range, and clipping
+    # the LOW side up (or flagging it out) truncated the low tail — the medians of
+    # every minor component came back inflated 3–9× ("여전히 튀어나가는데"). A
+    # below-range prediction is information ("small"), not an artifact.
+    clamped = np.zeros_like(um, bool)
+    rngs = u.get("ranges_M")
+    if rngs is not None:
+        r_um = np.asarray(rngs, float) * 1e6               # (n_subs, 2) in µM
+        for k in range(min(len(usubs), len(r_um))):
+            hi_u = r_um[k][1]
+            if np.isfinite(hi_u) and hi_u > 0:
+                clamped[:, k] = um[:, k] > hi_u
+                um[:, k] = np.minimum(um[:, k], hi_u)
+    result = (um, list(usubs))
     if not return_meta:
         return result
     meta = {}
     if u.get("kind") == "map_pooled_pixel_concentration_v1":
         dist = np.sqrt(np.mean(Xe ** 2, axis=1))
         ood = dist > float(u.get("ood_threshold", np.inf))
+        rngs_out = u.get("ranges_M")
+        vr = u.get("validated_ranges_M")
+        if vr is not None and rngs_out is not None:
+            vr = np.asarray(vr, float); rngs_out = np.asarray(rngs_out, float).copy()
+            ok_ = np.isfinite(vr).all(axis=1)
+            rngs_out[ok_] = vr[ok_]              # validated window beats label range
         meta = {"feature_ood": ood,
-                "component_ood": np.repeat(ood[:, None], len(usubs), axis=1),
-                "ranges_M": u.get("ranges_M")}
+                "component_ood": np.repeat(ood[:, None], len(usubs), axis=1) | clamped,
+                "ranges_M": rngs_out}
     return (*result, meta)
 
 

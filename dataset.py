@@ -191,6 +191,32 @@ def save_colors(data_dir, mapping):
 _MIXTURES = "mixtures.json"
 
 
+def rebase_path(p, data_dir):
+    """mixtures.json written on the OTHER machine stores that machine's absolute
+    paths (F:/Google Drive/... there, S:/Google Drive/... here). When the stored
+    path does not exist on this machine, graft its tail onto whichever ancestor of
+    ``data_dir`` shares a folder name with it (ACF_PEST_DB, 내 드라이브, ...) —
+    Drive keeps the tree identical below the shared root, so that is the same
+    file under this machine's drive letter. Returns the input untouched when it
+    already exists or no graft point is found."""
+    import re as _re
+    if not p or os.path.exists(p):
+        return p
+    parts = [x for x in _re.split(r"[\/]+", str(p)) if x]
+    a = os.path.abspath(data_dir)
+    seen = set()
+    while a and a not in seen:
+        seen.add(a)
+        name = os.path.basename(a)
+        if name and name in parts:
+            i = len(parts) - 1 - parts[::-1].index(name)   # last occurrence
+            cand = os.path.join(a, *parts[i + 1:])
+            if os.path.exists(cand):
+                return cand
+        a = os.path.dirname(a)
+    return p
+
+
 def load_mixture_list(data_dir, role=None):
     """Read <data_dir>/mixtures.json → list of (path, ratio_dict[, conc_dict in M]).
     The known-ratio mixtures are prepared once in Samples (Step 1); Model/Recovery read
@@ -206,7 +232,7 @@ def load_mixture_list(data_dir, role=None):
         return []
     out = []
     for m in raw:
-        path = m.get("path")
+        path = rebase_path(m.get("path"), data_dir)   # other-machine drive letters
         ratio = {str(k): float(v) for k, v in (m.get("ratio") or {}).items()}
         if not path or not ratio:
             continue
@@ -227,7 +253,8 @@ def load_mixture_roles(data_dir):
             raw = json.load(f)
     except Exception:
         return {}
-    return {m["path"]: (m.get("role") or "train") for m in raw if m.get("path")}
+    return {rebase_path(m["path"], data_dir): (m.get("role") or "train")
+            for m in raw if m.get("path")}
 
 
 def save_mixture_list(data_dir, items, roles=None):

@@ -1,6 +1,9 @@
-"""64조건 완전격자를 DQ 고정 블록 4개(각 16조건)로 나눠 본다.
+"""64조건 완전격자를 THI 고정 블록 4개(각 16조건)로 나눠 본다.
 
-  DQ 3 / 6 / 12 / 24 µM 블록마다 TBZ × THI 의 4×4.
+  THI 3 / 6 / 12 / 24 µM 블록마다 TBZ(y) × DQ(x) 의 4×4 — THI가 경쟁을
+  주도하므로 블록 순서가 곧 이야기다. 값은 |예측−실제| 조성의 평균으로
+  percentage points(pp)다: 'Error(%)'는 상대오차로 오독되고 모델 탓처럼
+  읽혀서 버렸다 (조제·측정 재현성 몫이 섞여 있는 양이다).
   라벨은 전부 **최종 농도(µM)**. 원액은 3배.
 
   실행:  python3 -u grid64.py [결과파일=~/Desktop/retrain64.txt]
@@ -34,14 +37,14 @@ print(f"{SRC} — {len(mlp)}조건")
 # ------------------------------------------------------------------ 오차 히트맵 4블록
 fig, axs = plt.subplots(1, 4, figsize=(15.2, 4.2))
 E = {}
-for bi, dq in enumerate(LV):
+for bi, thi in enumerate(LV):
     M = np.full((4, 4), np.nan)
     for r, tbz in enumerate(LV):
-        for c, thi in enumerate(LV):
+        for c, dq in enumerate(LV):
             k = (dq, tbz, thi)
             if k in mlp:
                 t, p = mlp[k]; M[r, c] = np.abs(p - t).sum() / 2
-    E[dq] = M
+    E[thi] = M
     ax = axs[bi]
     im = ax.imshow(M, cmap="RdYlGn_r", vmin=0, vmax=30, origin="upper")
     for r in range(4):
@@ -51,15 +54,15 @@ for bi, dq in enumerate(LV):
                         color="white" if M[r, c] > 18 else INK, fontweight="bold")
     ax.set_xticks(range(4)); ax.set_xticklabels([str(v) for v in LV], fontsize=9.5)
     ax.set_yticks(range(4)); ax.set_yticklabels([str(v) for v in LV], fontsize=9.5)
-    ax.set_xlabel("THI (μM)", color=CO["THI"])
+    ax.set_xlabel("DQ (μM)", color=CO["DQ"])
     if bi == 0:
         ax.set_ylabel("TBZ (μM)", color=CO["TBZ"])
-    ax.set_title(f"DQ {dq} μM\nmean {np.nanmean(M):.1f}%", fontsize=10, color=CO["DQ"])
+    ax.set_title(f"THI {thi} μM\nmean {np.nanmean(M):.1f} pp", fontsize=10, color=CO["THI"])
     for sp in ax.spines.values():
         sp.set_visible(False)
     ax.tick_params(length=0)
 cb = fig.colorbar(im, ax=axs, fraction=.02, pad=.02)
-cb.set_label("composition error (%)"); cb.outline.set_visible(False)
+cb.set_label("composition deviation (pp)"); cb.outline.set_visible(False)
 fig.savefig(f"{DESK}/fig9_grid64_error.png", **labfig.SAVE)
 print("fig9_grid64_error.png")
 
@@ -88,10 +91,10 @@ fig2.savefig(f"{DESK}/fig10_parity64.png", **labfig.SAVE)
 print("fig10_parity64.png")
 
 # ------------------------------------------------------------------ 콘솔 요약
-for dq in LV:
-    M = E[dq]
+for thi in LV:
+    M = E[thi]
     print(f"\nDQ {dq} μM   평균 {np.nanmean(M):.1f}%")
-    print("        THI " + "  ".join(f"{v:>5}" for v in LV))
+    print("         DQ " + "  ".join(f"{v:>5}" for v in LV))
     for r, tbz in enumerate(LV):
         print(f"  TBZ {tbz:>3}  " + "  ".join(
             f"{M[r, c]:5.1f}" if np.isfinite(M[r, c]) else "    -" for c in range(4)))

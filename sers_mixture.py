@@ -75,6 +75,77 @@ def als_baseline(y: np.ndarray, lam: float = 1e5, p: float = 0.01,
     return z
 
 
+def desaturate(spectra: np.ndarray, min_run: int = 3, top_frac: float = 0.98):
+    """Repair detector-clipped (saturated) spectra BEFORE baseline removal.
+
+    Two signatures, two passes:
+      1. RAW data — a flat-top run at the spectrum's own maximum (the detector
+         ceiling). Runs of >= ``min_run`` samples at >= ``top_frac`` x max.
+      2. Data that was ALS-baselined OUTSIDE the app before loading (the usual
+         workflow) — the plateau is gone; what remains is a block of strong
+         channels that zig-zags channel-to-channel far harder than any real band
+         (실측에서 DQ처럼 보이던 지글지글). Detected as >= 3 sign-alternating
+         big steps inside one strong run; real bands rise and fall monotonically.
+
+    Each detected run is bridged by a straight line between its shoulders — no
+    fake structure left for the (next) baseline pass to ring under. The repair is
+    for DISPLAY; the returned fraction is what quarantines the pixel.
+
+    Returns (repaired copy, per-spectrum fraction of clipped channels)."""
+    X = np.asarray(spectra, dtype=float).copy()
+    single = X.ndim == 1
+    if single:
+        X = X[None, :]
+    n, L = X.shape
+    sat_frac = np.zeros(n)
+    for i in range(n):
+        y = X[i]
+        top = float(y.max())
+        med = float(np.median(y))
+        # only peaks that tower over the spectrum body can be detector clips;
+        # without this, noise around a mild maximum reads as a tiny plateau
+        if top <= 0 or top < 2.5 * max(med, 1e-12):
+            continue
+        flat = y >= top * top_frac
+        if flat.sum() < min_run:
+            continue
+        # group near-top channels into runs; saturated readouts are often jagged
+        # rather than perfectly flat, so runs separated by 1-2 channel dips are
+        # ONE plateau and the dip channels are clipped too
+        idx = np.flatnonzero(flat)
+        splits = np.where(np.diff(idx) > 3)[0] + 1
+        clipped = np.zeros(L, bool)
+        for run in np.split(idx, splits):
+            run = np.arange(run[0], run[-1] + 1)          # fill the small dips
+            if len(run) < min_run:
+                continue                       # a sharp real peak, not a plateau
+            a, b = int(run[0]), int(run[-1])
+            lo = y[a - 1] if a > 0 else y[b + 1] if b + 1 < L else top
+            hi = y[b + 1] if b + 1 < L else lo
+            y[a:b + 1] = np.linspace(lo, hi, b - a + 1)
+            clipped[a:b + 1] = True
+        # ---- pass 2: ALS already ran outside the app -> jagged strong block ----
+        top = float(y.max())                    # pass 1 may have lowered the max
+        strong = np.flatnonzero(y > 0.5 * top)
+        if len(strong) >= min_run + 2:
+            for run in np.split(strong, np.where(np.diff(strong) > 1)[0] + 1):
+                if len(run) < min_run + 2:
+                    continue
+                seg = y[run[0]:run[-1] + 1]
+                d = np.diff(seg)
+                big = np.abs(d) > 0.12 * top    # steps a real band cannot take...
+                flips = (d[1:] * d[:-1] < 0) & big[1:] & big[:-1]
+                if int(flips.sum()) < 3:        # ...and certainly not alternating
+                    continue
+                a, b = int(run[0]), int(run[-1])
+                lo = y[a - 1] if a > 0 else y[b + 1] if b + 1 < L else top
+                hi = y[b + 1] if b + 1 < L else lo
+                y[a:b + 1] = np.linspace(lo, hi, b - a + 1)
+                clipped[a:b + 1] = True
+        sat_frac[i] = clipped.mean()
+    return (X[0], sat_frac[0]) if single else (X, sat_frac)
+
+
 def preprocess(spectra: np.ndarray, do_baseline: bool = True) -> np.ndarray:
     """ALS baseline removal + L2 normalization. ``spectra`` is (n, n_features)."""
     spectra = np.asarray(spectra, dtype=float)

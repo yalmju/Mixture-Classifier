@@ -10,11 +10,11 @@ import numpy as np
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QSpinBox, QCheckBox, QLineEdit, QFileDialog, QDialog, QDialogButtonBox,
+    QSpinBox, QDoubleSpinBox, QCheckBox, QLineEdit, QFileDialog, QDialog, QDialogButtonBox,
 )
 
 from ui_common import *
-from calibration import calibrate, quantify
+from calibration import calibrate
 from io_utils import load_calibration_csv, load_calibration_folder, write_csv, write_readme
 
 
@@ -29,11 +29,10 @@ def _prep_specs(specs, baseline=True):
     return np.clip(specs, 0.0, None)
 
 
-def _real_lab(cal, seed=0, n_validation=6, baseline=True):
-    """Build a lab dict from a loaded calibration CSV (real dilution series).
-    Validation mixtures are synthesized from the real templates + fitted physics
-    to demonstrate recovery (clearly a synthetic check on real calibration)."""
-    from competitive import forward_spectrum
+def _real_lab(cal, baseline=True):
+    """Prepared lab dict from a loaded dilution series: baseline-removed standards
+    and unit templates. This tab works on SINGLE compounds — the synthetic mixture
+    recovery it used to stage was theater (mixtures are the model's job now)."""
     axis, names, dilutions = cal
     # baseline-remove each standard (keep magnitude, no normalisation) so the fitted
     # signal B tracks the peak vs concentration, not the fluorescence background
@@ -41,24 +40,79 @@ def _real_lab(cal, seed=0, n_validation=6, baseline=True):
                  for c, sp in dilutions]
     Praw = np.array([sp[int(np.argmax(c))] for c, sp in dilutions])
     P = Praw / (np.linalg.norm(Praw, axis=1, keepdims=True) + 1e-12)
-    n = len(names)
-    if n < 2:                                            # single compound: curve only
-        return {"axis": axis, "names": names, "P": P, "dilutions": dilutions,
-                "val_specs": np.empty((0, len(axis))),
-                "val_true": np.empty((0, n)), "K_true": None}
-    tmp = calibrate(dilutions, P, names)
-    rng = np.random.default_rng(seed)
-    K = tmp.K; A = tmp.gA / (tmp.gA.max() or 1.0)
-    val_specs, val_true = [], []
-    for _ in range(n_validation):
-        k = int(rng.integers(2, n + 1)); idx = rng.choice(n, k, replace=False)
-        C = np.zeros(n); C[idx] = 10 ** rng.uniform(-6, -3.3, k)
-        y = forward_spectrum(C, K, A, P)
-        y = np.clip(y + rng.normal(0, 0.01 * (y.max() or 1.0), len(axis)), 0, None)
-        val_specs.append(y); val_true.append(C)
     return {"axis": axis, "names": names, "P": P, "dilutions": dilutions,
-            "val_specs": np.array(val_specs), "val_true": np.array(val_true),
             "K_true": None}
+
+
+def _single_bench(cal, peak_map=None, window=10.0, baseline=True, seed=0):
+    """Per-compound spectrum→concentration check, leave-one-concentration-out.
+
+    Single-compound quantification is the simple problem, so the Model tab's
+    simple heads come down here: RF and PLS regress log10(C) from the compound's
+    VIP marker-band features, against the two isotherm inversions (Langmuir,
+    linear) on the same band. ×N fold error per method per compound — which
+    readout of this dilution series actually quantifies, before any mixture."""
+    axis, names, dilutions = cal
+    axis = np.asarray(axis, float)
+    out = {}
+    for i, nm in enumerate(names):
+        C, S = dilutions[i]
+        C = np.asarray(C, float); S = _prep_specs(S, baseline)
+        uc = np.unique(C)
+        if len(uc) < 4 or C.min() <= 0:
+            continue
+        pks = (peak_map or {}).get(nm) if isinstance(peak_map, dict) else None
+        if not pks:
+            top = S[int(np.argmax(C))]
+            pks = [float(axis[int(np.argmax(top))])]       # strongest band fallback
+        pks = pks if isinstance(pks, (list, tuple)) else [pks]
+        masks = [(np.abs(axis - float(pk)) <= window) for pk in pks]
+        masks = [m if m.any() else (np.abs(axis - float(pk)).argmin()
+                                    == np.arange(len(axis)))
+                 for m, pk in zip(masks, pks)]
+        B = sum(S[:, m].max(axis=1) for m in masks)        # the curve's signal
+        F = np.column_stack([S[:, m].mean(axis=1) for m in masks] + [S.sum(axis=1)])
+        y = np.log10(C)
+        preds = {m: np.full(len(C), np.nan) for m in ("Langmuir", "linear", "RF", "PLS")}
+        for c0 in uc:
+            te = C == c0; tr = ~te
+            trc = np.unique(C[tr])
+            trB = np.array([B[tr][C[tr] == c].mean() for c in trc])
+            lo, hi = trc.min() / 10.0, trc.max() * 10.0    # sane inversion clamp
+            try:
+                gA, K = _langmuir_fit(trc, trB)
+                Bq = np.clip(B[te], None, gA * 0.999)
+                preds["Langmuir"][te] = np.clip(
+                    Bq / (K * np.maximum(gA - Bq, 1e-12)), lo, hi)
+            except Exception:
+                pass
+            try:
+                m, b0 = _linear_fit(trc, trB)
+                preds["linear"][te] = np.clip((B[te] - b0) / (m or 1e-12), lo, hi)
+            except Exception:
+                pass
+            try:
+                from sklearn.ensemble import RandomForestRegressor
+                rf = RandomForestRegressor(n_estimators=200, random_state=seed)
+                rf.fit(F[tr], y[tr])
+                preds["RF"][te] = 10.0 ** rf.predict(F[te])
+            except Exception:
+                pass
+            try:
+                from sklearn.cross_decomposition import PLSRegression
+                nc = max(1, min(2, F.shape[1] - 1, int(tr.sum()) - 1))
+                pls = PLSRegression(n_components=nc)
+                pls.fit(F[tr], y[tr])
+                preds["PLS"][te] = 10.0 ** np.asarray(pls.predict(F[te])).ravel()
+            except Exception:
+                pass
+        res = {}
+        for m, pv in preds.items():
+            ok = np.isfinite(pv) & (pv > 0)
+            res[m] = (float(10.0 ** np.mean(np.abs(np.log10(pv[ok] / C[ok]))))
+                      if ok.any() else float("nan"))
+        out[nm] = res
+    return out
 
 
 def _r2_on_means(C, B, gA, K):
@@ -235,11 +289,22 @@ def _empirical_lod(C, B, blank_vals=None):
     return float(uc[above[0]]) if len(above) else float("nan")
 
 
-def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=None):
-    """Calibration from a marker band: B = baseline-removed PEAK HEIGHT (max within
-    peak ± window), Langmuir- or linear-fit per compound. ``peak`` is one wavenumber
-    (same band for every compound) or a {compound: wavenumber} map (each compound at
-    its own band). Curve only (no competition)."""
+def _band_height(bl, m, local_base=True):
+    """Peak height of each spectrum inside window mask ``m`` — above the window's own
+    shoulders when ``local_base`` (max − min inside the window), else the raw max.
+    The local base is what kills a constant background riding on the band: DQ@1572
+    sat ~3000 counts high at 0.1 µM and its LOD came out 596 µM until the offset
+    was subtracted."""
+    seg = bl[:, m]
+    return seg.max(axis=1) - (seg.min(axis=1) if local_base else 0.0)
+
+
+def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=None,
+                local_base=True, fit_range=None):
+    """Calibration from a marker band: B = PEAK HEIGHT within peak ± window — above
+    the window's local base by default — Langmuir- or linear-fit per compound.
+    ``peak`` is one wavenumber (same band for every compound) or a {compound:
+    wavenumber} map (each compound at its own band). Curve only (no competition)."""
     from calibration import _langmuir_B
     axis, names, dilutions = cal
     blk = (_prep_specs(blank[1], baseline)                  # aligned BLK spectra, or None
@@ -265,20 +330,42 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
         C = np.asarray(C, float)
         bl = _prep_specs(specs, baseline)
         # signal = SUM of peak HEIGHTS over the compound's bands (THI 1 band; a
-        # compound with overlap-prone bands can use two, e.g. DQ 1177+1566)
-        B = sum(bl[:, m].max(axis=1) for m in masks)
-        dense = np.geomspace(C.min(), C.max(), 200)
+        # compound with overlap-prone bands can use two, e.g. DQ 1177+1566),
+        # measured RELATIVE TO BLANK when a BLK class is loaded — the original
+        # analysis was blank-relative ("blk 대비"), and a substrate band sitting
+        # inside the window (DQ@1572) cancels only that way
+        B = sum(_band_height(bl, m, local_base) for m in masks)
+        if blk is not None:
+            # subtract the band height of the MEAN blank spectrum — noise cancels
+            # in the average. Taking each blank's own max−min measured the NOISE
+            # AMPLITUDE (hundreds of counts) and its subtraction flattened genuine
+            # 1 µM signal to zero, which is exactly the LOD explosion this fixes.
+            blk_mean = blk.mean(axis=0, keepdims=True)
+            B = B - float(sum(_band_height(blk_mean, m, local_base)
+                              for m in masks)[0])
+            B = np.clip(B, 0.0, None)
+        # optional FIT WINDOW ("10–100 µM linearity"): only in-window points shape
+        # the fit and the R²; every point stays on the plot, and the fitted line
+        # is drawn across the window only, so what was claimed is what is shown
+        Cf, Bf = C, B
+        if fit_range is not None:
+            _fl, _fh = fit_range
+            _in = (C >= _fl) & (C <= _fh)
+            if len(np.unique(C[_in])) >= 3:
+                Cf, Bf = C[_in], B[_in]
+        dense = np.geomspace(Cf.min(), Cf.max(), 200)
         if model == "linear":
-            slope, b0 = _linear_fit(C, B)
+            slope, b0 = _linear_fit(Cf, Bf)
             iso.append((C, B, dense, slope * dense + b0))
-            r2.append(_r2_lin_on_means(C, B, slope, b0))
+            r2.append(_r2_lin_on_means(Cf, Bf, slope, b0))
             K_fit.append(slope); gA_fit.append(b0)     # slope, intercept
         else:
-            gA, K = _langmuir_fit(C, B)
+            gA, K = _langmuir_fit(Cf, Bf)
             iso.append((C, B, dense, _langmuir_B(dense, gA, K)))
-            r2.append(_r2_on_means(C, B, gA, K))
+            r2.append(_r2_on_means(Cf, Bf, gA, K))
             K_fit.append(K); gA_fit.append(gA)
-        bv = sum(blk[:, m].max(axis=1) for m in masks) if blk is not None else None
+        bv = (sum(_band_height(blk, m, local_base) for m in masks)
+              if blk is not None else None)
         if bv is not None:                             # blank-based on the same band(s)
             lod, loq = _lod_from_blank(C, B, bv)
         else:
@@ -291,21 +378,51 @@ def _peak_quant(cal, peak, window=10.0, model="langmuir", baseline=True, blank=N
             "gA_fit": np.array(gA_fit), "iso": iso, "r2": r2, "model": model,
             "lod": lods, "loq": loqs, "lod_emp": lods_e, "lod_method": lod_method,
             "lod_window": lod_wins,
-            "parity": (np.array([]), np.array([]), np.array([], int)),
-            "log_err": float("nan"), "example": None, "example_true": None,
-            "selectivity": float("nan"),
+            "competition": (_competition(names, K_fit, gA_fit)
+                            if model != "linear" else None),
             "peak_wn": None if per_cmpd else peak, "peaks_used": peaks_used}
 
 
+def _competition(names, K, gA):
+    """Who wins the surface when everyone is present at equal concentration —
+    read straight off the fitted isotherms, no synthetic mixtures needed.
+    θ_i ∝ K_i at equal C, so K ranks the surface; gA·K ranks the low-C signal."""
+    K = np.asarray(K, float)
+    if len(names) < 2 or not np.all(np.isfinite(K)) or K.min() <= 0:
+        return None
+    return {"surface_dominant": names[int(K.argmax())],
+            "buried": names[int(K.argmin())],
+            "selectivity": float(K.max() / K.min())}
+
+
 def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
-               model="langmuir", baseline=True, blank=None, use_dl_quant=False):
+               model="langmuir", baseline=True, blank=None, local_base=True,
+               fit_range=None):
     from calibration import _langmuir_B
     if cal is None:
         raise ValueError("load a calibration (a dilution-series folder or CSV) first.")
+    bench = _single_bench(cal, peak_map=peak_map if isinstance(peak_map, dict) else None,
+                          baseline=baseline)
     if peak_map:
-        return _peak_quant(cal, peak_map, model=model, baseline=baseline, blank=blank)
+        r = _peak_quant(cal, peak_map, model=model, baseline=baseline, blank=blank,
+                        local_base=local_base, fit_range=fit_range)
+        r["single_bench"] = bench
+        return r
     if peak_wn and peak_wn > 0:
-        return _peak_quant(cal, peak_wn, model=model, baseline=baseline, blank=blank)
+        r = _peak_quant(cal, peak_wn, model=model, baseline=baseline, blank=blank,
+                        local_base=local_base, fit_range=fit_range)
+        r["single_bench"] = bench
+        return r
+    if fit_range is not None:                    # whole-spectrum mode: filter series
+        _fl, _fh = fit_range
+        axis0, names0, dils0 = cal
+        dils0 = [(np.asarray(c, float)[(np.asarray(c, float) >= _fl)
+                                       & (np.asarray(c, float) <= _fh)],
+                  np.asarray(sp)[(np.asarray(c, float) >= _fl)
+                                 & (np.asarray(c, float) <= _fh)])
+                 for c, sp in dils0]
+        if all(len(np.unique(c)) >= 3 for c, _ in dils0):
+            cal = (axis0, names0, dils0)
     lab = _real_lab(cal, baseline=baseline)
     calib = calibrate(lab["dilutions"], lab["P"], lab["names"])
 
@@ -341,48 +458,37 @@ def _run_quant(cal=None, peak_wn=0.0, peak_map=None,
         lods_e.append(_empirical_lod(C, B, bv))
     K_out = np.array(K_out); gA_out = np.array(gA_out)
 
-    # single-compound calibration → fit the curve only (no competition / recovery)
-    if len(lab["val_specs"]) == 0 or calib.n < 2:
-        return {"names": calib.names, "K_true": lab["K_true"], "K_fit": K_out,
-                "gA_fit": gA_out, "iso": iso, "r2": r2, "model": model,
-                "lod": lods, "loq": loqs, "lod_emp": lods_e, "lod_method": lod_method,
-            "lod_window": lod_wins,
-                "parity": (np.array([]), np.array([]), np.array([], int)),
-                "log_err": float("nan"), "example": None,
-                "example_true": None, "selectivity": float("nan")}
+    return {"names": calib.names, "K_true": lab["K_true"], "K_fit": K_out,
+            "gA_fit": gA_out, "iso": iso, "r2": r2, "model": model,
+            "lod": lods, "loq": loqs, "lod_emp": lods_e, "lod_method": lod_method,
+            "lod_window": lod_wins, "single_bench": bench,
+            "competition": (_competition(calib.names, K_out, gA_out)
+                            if model != "linear" else None)}
 
-    B_predictor = None                       # NNLS fit_B unless the DL toggle is on
-    if use_dl_quant:
+
+class _CalFolderWorker(QObject):
+    done = pyqtSignal(object)
+    fail = pyqtSignal(str)
+    progress = pyqtSignal(str)
+
+    def __init__(self, folders):
+        super().__init__()
+        self.folders = list(folders)
+
+    def run(self):
         try:
-            from unmix_net import quantifier_from_calibration
-        except ImportError as e:
-            raise RuntimeError("DL spectrum→B needs PyTorch — "
-                               "install it with `pip install torch`") from e
-        dl_quant = quantifier_from_calibration(calib, lab["P"], epochs=50,
-                                               n_train=6000, seed=0)
-        B_predictor = dl_quant.predict_B_one
-    quants = [quantify(y, lab["P"], calib, B_predictor=B_predictor)
-              for y in lab["val_specs"]]
-    true_flat, est_flat, col_flat = [], [], []
-    for q, Ct in zip(quants, lab["val_true"]):
-        for i in range(calib.n):
-            if Ct[i] > 0 and q["C"][i] > 0:
-                true_flat.append(Ct[i]); est_flat.append(q["C"][i]); col_flat.append(i)
-    log_err = float(np.mean(np.abs(np.log10(
-        np.array(est_flat) / np.array(true_flat))))) if true_flat else float("nan")
-
-    ex = next((k for k, q in enumerate(quants)
-               if q["competition"]["flipped"]), 0)
-    return {
-        "names": calib.names, "K_true": lab["K_true"], "K_fit": K_out,
-        "gA_fit": gA_out, "iso": iso, "r2": r2, "model": model,
-        "lod": lods, "loq": loqs, "lod_emp": lods_e, "lod_method": lod_method,
-            "lod_window": lod_wins,
-        "parity": (np.array(true_flat), np.array(est_flat), np.array(col_flat, int)),
-        "log_err": log_err, "example": quants[ex],
-        "example_true": lab["val_true"][ex],
-        "selectivity": quants[ex]["competition"]["selectivity"],
-    }
+            loaded, errors = [], []
+            for i, f in enumerate(self.folders):
+                self.progress.emit(f"loading {os.path.basename(f) or f} "
+                                   f"({i + 1}/{len(self.folders)})")
+                try:
+                    axis, name, concs, specs = load_calibration_folder(f)
+                    loaded.append((axis, name, concs, specs))
+                except Exception as exc:
+                    errors.append(str(exc))
+            self.done.emit({"loaded": loaded, "errors": errors})
+        except Exception:
+            self.fail.emit(traceback.format_exc())
 
 
 class QuantWorker(QObject):
@@ -490,11 +596,13 @@ class QuantifyPage(QWidget):
         root.setContentsMargins(24, 18, 24, 20); root.setSpacing(14)
 
         head = QVBoxLayout(); head.setSpacing(2)
-        h1 = QLabel("Quantify — calibration curve"); h1.setObjectName("h1")
+        h1 = QLabel("Isotherm — single-compound calibration"); h1.setObjectName("h1")
         sub = QLabel("Load a dilution series (a folder of per-concentration map CSVs, "
-                     "or one calibration CSV) and draw the calibration curve — signal "
-                     "vs concentration with a Langmuir fit and R² per compound. With "
-                     "≥2 compounds it also reports competitive adsorption.")
+                     "or one calibration CSV) and fit each compound's isotherm — "
+                     "signal vs concentration, R², LOD. An inversion check scores "
+                     "Langmuir/linear against RF/PLS on the VIP bands per compound. "
+                     "The calibration feeds Model (physics pre-training) and Real "
+                     "automatically; mixtures are the model's job, not this tab's.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
@@ -506,6 +614,22 @@ class QuantifyPage(QWidget):
             "0 = signal is the whole-fingerprint projection (robust). Set a "
             "wavenumber to calibrate on that single marker band's intensity instead.")
         ctl.addLayout(self.sp_peak)
+        frcol = QVBoxLayout(); frcol.setSpacing(2)
+        _fr = QLabel("fit window µM (0–0 = all)"); _fr.setObjectName("field")
+        frcol.addWidget(_fr)
+        _frrow = QHBoxLayout(); _frrow.setSpacing(4)
+        self.sp_fitlo = QDoubleSpinBox(); self.sp_fitlo.setDecimals(1)
+        self.sp_fitlo.setRange(0.0, 1e6); self.sp_fitlo.setFixedWidth(70)
+        self.sp_fithi = QDoubleSpinBox(); self.sp_fithi.setDecimals(1)
+        self.sp_fithi.setRange(0.0, 1e6); self.sp_fithi.setFixedWidth(70)
+        for _spw in (self.sp_fitlo, self.sp_fithi):
+            _spw.setToolTip("fit (and R²) only inside this concentration window — "
+                            "e.g. 10–100 with 'linear' ticked answers the classic "
+                            "linear-dynamic-range question. All points stay on the "
+                            "plot; the fitted line spans the window. LOD/LOQ keep "
+                            "using the full series.")
+            _frrow.addWidget(_spw)
+        frcol.addLayout(_frrow); ctl.addLayout(frcol)
         lcol = QVBoxLayout(); lcol.setSpacing(2)
         _ll = QLabel("fit"); _ll.setObjectName("field"); lcol.addWidget(_ll)
         self.chk_linear = QCheckBox("linear")
@@ -513,6 +637,16 @@ class QuantifyPage(QWidget):
                                    "Langmuir isotherm (LOD/LOQ use a linear low-range "
                                    "fit either way)")
         lcol.addWidget(self.chk_linear); ctl.addLayout(lcol)
+        lbcol = QVBoxLayout(); lbcol.setSpacing(2)
+        _lb = QLabel("peak height"); _lb.setObjectName("field"); lbcol.addWidget(_lb)
+        self.chk_localbase = QCheckBox("above local base")
+        self.chk_localbase.setChecked(True)
+        self.chk_localbase.setToolTip(
+            "measure each band as max − min INSIDE its ±10 cm⁻¹ window, so a "
+            "constant background riding on the band (DQ@1572 sat ~3000 counts high "
+            "at 0.1 µM) does not bury the low-concentration slope. Untick for the "
+            "raw window maximum.")
+        lbcol.addWidget(self.chk_localbase); ctl.addLayout(lbcol)
         bcol = QVBoxLayout(); bcol.setSpacing(2)
         _bl = QLabel("baseline"); _bl.setObjectName("field"); bcol.addWidget(_bl)
         self.chk_baselined = QCheckBox("already corrected")
@@ -520,14 +654,6 @@ class QuantifyPage(QWidget):
                                       "the app's internal ALS baseline so it isn't "
                                       "applied twice")
         bcol.addWidget(self.chk_baselined); ctl.addLayout(bcol)
-        qcol = QVBoxLayout(); qcol.setSpacing(2)
-        _ql = QLabel("spectrum→B"); _ql.setObjectName("field"); qcol.addWidget(_ql)
-        self.chk_dlq = QCheckBox("DL")
-        self.chk_dlq.setToolTip("recover the validation mixtures' B with the ResNet1D "
-                                "quantifier (spectrum→B) instead of NNLS fit_B — a "
-                                "drift-robust drop-in. The calibration fit and θ→M "
-                                "inversion stay NNLS. Needs PyTorch.")
-        qcol.addWidget(self.chk_dlq); ctl.addLayout(qcol)
         self.src = QLabel("no calibration loaded"); self.src.setObjectName("field")
         ctl.addWidget(self.src); ctl.addStretch(1)
         fold_b = QPushButton("Load conc. folder…"); fold_b.setObjectName("ghost")
@@ -540,7 +666,7 @@ class QuantifyPage(QWidget):
         clr_b.setToolTip("clear loaded calibration"); clr_b.clicked.connect(self._clear_cal)
         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
         exp_b.clicked.connect(self._export)
-        self.btn = QPushButton("Calibrate + quantify"); self.btn.setObjectName("primary")
+        self.btn = QPushButton("Fit isotherm"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
         ctl.addWidget(fold_b); ctl.addWidget(load_b); ctl.addWidget(clr_b)
         ctl.addWidget(exp_b); ctl.addWidget(self.btn)
@@ -614,6 +740,7 @@ class QuantifyPage(QWidget):
             self._cal = (axis, names, dilutions)
             self.src.setText(f"source: {os.path.basename(p)} ({len(names)})")
             self.src.setStyleSheet("")
+            CALIB_BUS.set(p, os.path.basename(p))          # Model + Real adopt it
         except Exception as exc:
             self.src.setText("load failed"); self.src.setStyleSheet(f"color:{RED};")
             print("load cal:", exc, file=sys.stderr)
@@ -622,22 +749,35 @@ class QuantifyPage(QWidget):
         """Load a dilution series from either ONE compound's concentration folder,
         or a PARENT folder that holds a per-compound subfolder each (conc_tbz/,
         conc_dq/, …) — every subfolder becomes a compound. Concentration is parsed
-        from each filename (1nM/10uM/1_mM…). Loads accumulate across calls."""
+        from each filename (1nM/10uM/1_mM…). Loads accumulate across calls.
+
+        The file reading runs in a WORKER: on Drive-synced folders each CSV can
+        block for seconds while it streams, and reading them on the GUI thread is
+        what froze this tab ("먹통")."""
+        if worker_busy(self):
+            return
         d = QFileDialog.getExistingDirectory(
             self, "Concentration folder (one compound), or a parent of per-compound folders")
         if not d:
             return
         subdirs = [os.path.join(d, x) for x in sorted(os.listdir(d))
                    if os.path.isdir(os.path.join(d, x))]
+        self.src.setText("● loading folders…"); self.src.setStyleSheet("")
+        start_worker(self, _CalFolderWorker([d] + subdirs),
+                     done=self._folder_done, fail=self._folder_fail,
+                     progress=lambda m: self.src.setText("● " + m))
+
+    def _folder_fail(self, tb):
+        self.src.setText("folder load failed"); self.src.setStyleSheet(f"color:{RED};")
+        print(tb, file=sys.stderr)
+
+    def _folder_done(self, res):
         added, errs = [], []
-        for f in [d] + subdirs:                            # the folder itself, then children
-            try:
-                axis, name, concs, specs = load_calibration_folder(f)
-            except Exception as exc:
-                errs.append(str(exc)); continue
+        for axis, name, concs, specs in res["loaded"]:
             if self._axis is not None and len(axis) != len(self._axis):
                 errs.append(f"{name}: axis {len(axis)} ≠ {len(self._axis)}"); continue
             self._axis = axis; self._acc[name] = (concs, specs); added.append(name)
+        errs += res["errors"]
         if added:
             self._rebuild_cal()
             pts = "  ·  ".join(f"{n} ({len(c)})" for n, (c, _s) in self._acc.items())
@@ -819,6 +959,32 @@ class QuantifyPage(QWidget):
         names = list(self._acc)
         dilutions = [self._acc[n] for n in names]
         self._cal = (self._axis, names, dilutions)
+        self._publish_cal()
+
+    def _publish_cal(self):
+        """Hand the loaded dilution series to the other tabs (CALIB_BUS): Model uses
+        it for physics pre-training + the µM head, Real for per-pixel Langmuir µM.
+        Folder loads have no single CSV on disk, so the shared-format spectra CSV
+        (mean spectrum per concentration) is written to a temp file once."""
+        if self._cal is None or self._axis is None:
+            return
+        try:
+            import tempfile
+            axis, names, dils = self._cal
+            head = ["compound", "concentration_M"] + [f"{v:.2f}" for v in axis]
+            rows = []
+            for nm, (C, specs) in zip(names, dils):
+                C = np.asarray(C, float); specs = np.asarray(specs, float)
+                # every replicate, not a mean per level — downstream fits keep
+                # their SE/LOD statistics ("점이 너무 적다"는 그 손실)
+                for c, sp in zip(C, specs):
+                    rows.append([nm, f"{c:.4e}"] + [f"{v:.4f}" for v in sp])
+            p = os.path.join(tempfile.gettempdir(), "unmixr_calibration_spectra.csv")
+            write_csv(p, head, rows)
+            CALIB_BUS.set(p, "Quantify (" + " · ".join(names) + ")")
+        except Exception as exc:
+            print("publish calibration:", exc, file=sys.stderr)
+
 
     def _clear_cal(self):
         self._cal = None; self._acc = {}; self._axis = None
@@ -914,14 +1080,14 @@ class QuantifyPage(QWidget):
                     f"{lod_e[i]:.4e}" if i < len(lod_e) and np.isfinite(lod_e[i]) else "",
                     lmeth]
                    for i, nm in enumerate(r["names"])])
-        # per-mixture quantification (only when a ≥2-compound example exists)
-        if r["example"] is not None:
-            q = r["example"]
-            rows = [[nm, f"{q['C'][i]:.3e}", f"{q['conc_ratio'][i]:.3f}",
-                     f"{q['theta'][i]:.3f}", f"{r['K_fit'][i]:.3e}"]
-                    for i, nm in enumerate(r["names"])]
-            write_csv(os.path.join(d, "quantify.csv"),
-                      ["compound", "C_M", "ratio", "theta", "K_fit"], rows)
+        # inversion check — which readout of this series quantifies best
+        sb = r.get("single_bench") or {}
+        if sb:
+            meths = list(next(iter(sb.values())).keys())
+            write_csv(os.path.join(d, "inversion_check.csv"),
+                      ["compound"] + [f"fold_error_{m}" for m in meths],
+                      [[nm] + [f"{sb[nm][m]:.3f}" if np.isfinite(sb[nm][m]) else ""
+                               for m in meths] for nm in sb])
         n = _save_figs([("calibration_curve", self.c_iso)], d)
         self._export_readme(d, r)
         self.src.setText(f"exported README + CSV + {n} PNG → {os.path.basename(d)}")
@@ -975,13 +1141,18 @@ class QuantifyPage(QWidget):
                       peak_map=peak_map,
                       model="linear" if self.chk_linear.isChecked() else "langmuir",
                       baseline=not self.chk_baselined.isChecked(),
-                      use_dl_quant=self.chk_dlq.isChecked(),
+                      local_base=self.chk_localbase.isChecked(),
+                      fit_range=((self.sp_fitlo.value() * 1e-6,
+                                  self.sp_fithi.value() * 1e-6)
+                                 if self.sp_fithi.value() > self.sp_fitlo.value() > 0
+                                 or (self.sp_fitlo.value() == 0
+                                     and self.sp_fithi.value() > 0) else None),
                       blank=self._load_blank())     # Samples BLK → blank-based LOD
         self.btn.setEnabled(False); self.btn.setText("Working…")
         start_worker(self, QuantWorker(params), done=self._apply, fail=self._error)
 
     def _error(self, tb):
-        self.btn.setEnabled(True); self.btn.setText("Calibrate + quantify")
+        self.btn.setEnabled(True); self.btn.setText("Fit isotherm")
         print(tb, file=sys.stderr)
 
     def _recolor(self):
@@ -991,7 +1162,7 @@ class QuantifyPage(QWidget):
 
     def _apply(self, res):
         self._res = res
-        self.btn.setEnabled(True); self.btn.setText("Calibrate + quantify")
+        self.btn.setEnabled(True); self.btn.setText("Fit isotherm")
         names = res["names"]; r2 = res.get("r2", [])
         npts = res["iso"][0][0].shape[0] if res["iso"] else 0
         allC = (np.concatenate([iso[0] for iso in res["iso"]])
@@ -1079,17 +1250,39 @@ class QuantifyPage(QWidget):
                 "'onset' = lowest MEASURED concentration above blank+3.3σ — a reality "
                 "check: if it sits far above LOD, the regression LOD is optimistic "
                 "(load the BLK for a blank-based σ).</p>")
-        if res["example"] is not None:                    # ≥2 compounds → competition
-            comp = res["example"]["competition"]
+        sb = res.get("single_bench") or {}
+        if sb:
+            mrows = []
+            for i, nm in enumerate(names):
+                d = sb.get(nm)
+                if not d:
+                    continue
+                finite = {k: v for k, v in d.items() if np.isfinite(v)}
+                best = min(finite, key=finite.get) if finite else None
+                cells = "".join(
+                    ("<td style='padding-right:12px;" +
+                     (f"font-weight:600;color:{TEAL}" if k == best else f"color:{MUTE}")
+                     + f"'>{k} ×{v:.2f}</td>") if np.isfinite(v) else
+                    f"<td style='padding-right:12px;color:{FAINT}'>{k} —</td>"
+                    for k, v in d.items())
+                mrows.append(f"<tr><td style='padding-right:12px;"
+                             f"color:{substance_color(nm, i)};font-weight:600'>"
+                             f"{nm}</td>{cells}</tr>")
+            html += (f"<p style='margin-top:10px'><b>Inversion check</b> — "
+                     "spectrum→concentration on THIS series, leave-one-concentration-"
+                     "out; ×N = mean fold error, best per compound highlighted. "
+                     "RF/PLS regress the VIP-band features (the Model tab's simple "
+                     "heads on the single-compound problem).</p>"
+                     f"<table style='font-size:13px'>{''.join(mrows)}</table>")
+        comp = res.get("competition")
+        if comp:
             html += (f"<p style='margin-top:10px'><b style='color:{CORAL}'>"
-                     "Competitive adsorption</b> — " +
-                     (f"<b>{comp['surface_dominant']}</b> dominates the surface but "
-                      f"<b>{comp['solution_dominant']}</b> dominates in solution "
-                      f"(selectivity {comp['selectivity']:.1f}×)."
-                      if comp["flipped"] else
-                      f"surface and solution agree (selectivity "
-                      f"{comp['selectivity']:.1f}×).") + "</p>")
-        else:
+                     "Competitive adsorption</b> — at equal concentrations "
+                     f"<b>{comp['surface_dominant']}</b> takes the surface and "
+                     f"<b>{comp['buried']}</b> gets buried "
+                     f"(K selectivity {comp['selectivity']:.1f}×) — why single-"
+                     "compound curves cannot be inverted inside a mixture.</p>")
+        elif len(names) < 2:
             html += (f"<p style='color:{FAINT};margin-top:10px'>load another "
                      "compound's concentration folder to add competition analysis.</p>")
         html += "</div>"

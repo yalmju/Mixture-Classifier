@@ -44,6 +44,8 @@ def classify_map(model_path, test_path, min_conf=0.0, progress=None) -> UnmixRes
 
     if progress:
         progress("classifying pixels")
+    from sers_mixture import desaturate
+    cube, sat_frac = desaturate(cube)  # bridge clipped plateaus before any ALS
     X = _featurize(cube, baseline=baseline, deriv=deriv, norm=norm)
     K = len(classes)
     A = np.zeros((len(X), K))
@@ -72,7 +74,7 @@ def classify_map(model_path, test_path, min_conf=0.0, progress=None) -> UnmixRes
 
     return UnmixResult(
         comps=classes, bg_mask=bg_mask, nonbg=nonbg, method="model", wn=wn,
-        coords=coord, spectra=spectra.astype(np.float32), templates=None,
+        coords=coord, spectra=spectra.astype(np.float32), templates=None, sat_frac=sat_frac,
         A=A, ratio_nb=ratio_nb, hit=hit, reliab=conf, n_pixels=len(X),
         hit_frac=hit_frac, mean_ratio=mean_ratio, dominant=dominant,
         mean_r2=float(conf.mean()))

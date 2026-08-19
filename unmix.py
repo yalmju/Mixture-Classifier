@@ -12,12 +12,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import os
+
 import numpy as np
 from scipy.optimize import nnls
 
 from real_data import load_map
 from dataset import discover_dataset, is_blank
-from sers_mixture import als_baseline
+from sers_mixture import als_baseline, desaturate
 from calibration import calibrate, quantify, _langmuir_B
 from io_utils import load_calibration_csv
 
@@ -55,6 +57,7 @@ class UnmixResult:
     pp_theta: np.ndarray = None  # (n_pix,) total surface coverage Σθ per pixel
     calib_r2: np.ndarray = None  # (Knb,) isotherm fit R² per substance
     calib_slope: np.ndarray = None  # (Knb,) gA*K — signal per molar at low C
+    sat_frac: np.ndarray = None  # (n_pix,) fraction of detector-clipped channels
     bg_score: np.ndarray = None  # (n_pix,) match to the MEASURED background (0..1)
     bg_thr: float = None         # score at/above which a pixel is judged background
     hit_rule: str = ""           # which single rule decided background vs substance
@@ -251,6 +254,9 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
 
     if progress:
         progress("preprocessing spectra")
+    # detector-clipped plateaus first: ALS rings under a flat-top peak and the
+    # jagged residue reads as fake bands (looked like DQ on saturated pixels)
+    cube_u, sat_frac = desaturate(cube_u)
     spectra = _baseline_removed(cube_u, baseline)          # for the band image / display
     X = _l2(spectra)                                        # unit spectra for the fit
     templates = _l2(_baseline_removed(means, baseline))
@@ -385,13 +391,64 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
                     if um_meta.get("ranges_M") is not None:
                         conc_ranges[k] = um_meta["ranges_M"] [ui]
             conc[~hit] = 0.0
+            # ---- composition-consistency prior ("33 µM 아래라는 전제") -------
+            # A substance the spectrum barely shows cannot be at high µM: with
+            # response slopes s_i = gA_i·K_i from the embedded calibration,
+            # C_i ≤ C_anchor·(r_i/r_anchor)·(s_anchor/s_i)·margin, anchor = the
+            # pixel's most visible substance (best-conditioned inversion). This
+            # is the general form of "buried under THI ⇒ below ~33 µM"; the
+            # slope term keeps a weak responder at genuinely high C uncapped.
+            _ct = dl_model.get("calib_csv_text")
+            if _ct:
+                try:
+                    import tempfile, hashlib
+                    _h = hashlib.sha1(_ct.encode("utf-8", "replace")).hexdigest()[:12]
+                    _cp = os.path.join(tempfile.gettempdir(), f"unmixr_mc_{_h}.csv")
+                    if not os.path.exists(_cp):
+                        with open(_cp, "w", encoding="utf-8") as _f:
+                            _f.write(_ct)
+                    _axc, _nmc, _dlc = load_calibration_csv(_cp)
+                    _al = []
+                    for _c in [names[j] for j in nonbg]:
+                        _Cg, _sp = _dlc[_nmc.index(_c)]
+                        _sp = np.asarray(_sp, float)
+                        if trim is not None:
+                            _lo, _hi = trim
+                            _mm = (_axc >= _lo) & (_axc <= _hi)
+                            if _mm.sum() >= 10:
+                                _sp = _sp[:, _mm]
+                        _al.append((_Cg, _baseline_removed(_sp, baseline)))
+                    _cb = calibrate(_al, ref_templates[nonbg], [names[j] for j in nonbg])
+                    slopes = np.asarray(_cb.gA, float) * np.asarray(_cb.K, float)
+                    if np.all(np.isfinite(slopes)) and slopes.min() > 0:
+                        MARGIN = 3.0
+                        anch = ratio_nb.argmax(axis=1)
+                        px = np.where(hit)[0]
+                        for i_ in px:
+                            a = anch[i_]
+                            ra = ratio_nb[i_, a]
+                            Ca = conc[i_, a]
+                            if not (np.isfinite(Ca) and Ca > 0 and ra > 0.05):
+                                continue
+                            for k_ in range(conc.shape[1]):
+                                if k_ == a:
+                                    continue
+                                cap = (Ca * (ratio_nb[i_, k_] / ra)
+                                       * (slopes[a] / slopes[k_]) * MARGIN)
+                                if np.isfinite(conc[i_, k_]) and conc[i_, k_] > cap:
+                                    conc[i_, k_] = cap
+                                    if conc_ood is not None:
+                                        conc_ood[i_, k_] = True
+                except Exception as _e:
+                    if progress:
+                        progress(f"consistency cap skipped ({_e})")
             with np.errstate(invalid="ignore"):
                 conc_avg = np.nanmean(conc[hit], axis=0) if hit.any() else np.nanmean(conc, axis=0)
             calibrated = True
     if calib_path and nonbg:
         nb_names = [names[i] for i in nonbg]
         pures = ref_templates[nonbg]                       # calibrate against the references
-        conc, pp_theta, calib_r2, calib_slope = _quantify_map(
+        conc, pp_theta, calib_r2, calib_slope, conc_ood, conc_ranges = _quantify_map(
             calib_path, nb_names, pures, spectra, wn, trim, baseline, hit, progress)
         conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
         calibrated = True
@@ -430,7 +487,7 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         conc_se=conc_se,
         pp_theta=pp_theta, calib_r2=calib_r2,
         calib_slope=calib_slope, conc_ood=conc_ood, conc_ranges=conc_ranges,
-        bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
+        sat_frac=sat_frac, bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
 
 
 def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
@@ -472,7 +529,21 @@ def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
             progress(f"quantifying — pixel {n}/{len(idx)}")
         q = quantify(spectra[i], pures, calib)
         conc[i] = q["C"]; theta[i] = q["theta_total"]
-    return conc, theta, r2, np.asarray(calib.gA) * np.asarray(calib.K)
+    # ---- answer INSIDE the calibrated range, never outside it ----------------
+    # Near saturation the inversion C = B/(K·(gA−B)) explodes; below the lowest
+    # standard it is noise. Clamp each substance to its own standards' range and
+    # FLAG the clamped pixels, so medians can drop them and the maps say so.
+    ranges = np.array([[float(np.min(calib.C_series[k])),
+                        float(np.max(calib.C_series[k]))]
+                       for k in range(len(nb_names))])
+    ood = np.zeros_like(conc, bool)
+    for k in range(len(nb_names)):
+        hi_c = ranges[k][1]
+        v = conc[:, k]
+        ood[:, k] = v > hi_c                   # UPPER side only — below-range means
+        conc[:, k] = np.minimum(v, hi_c)       # "small", and cutting it inflated medians
+    ood[~hit] = False
+    return conc, theta, r2, np.asarray(calib.gA) * np.asarray(calib.K), ood, ranges
 
 
 if __name__ == "__main__":

@@ -65,6 +65,7 @@ def _train_subprocess(params, q):
         from dl_model import train_model
         model = train_model(items=items, progress=lambda s: q.put(("progress", s)),
                             **_accepted(train_model, params))
+        q.put(("progress", "packaging results — this can take a minute on low RAM"))
         q.put(("done", model))
     except Exception:
         import traceback
@@ -171,6 +172,7 @@ class ComposePanel(QWidget):
         super().__init__()
         self.data_dir = PEST_DEFAULT
         self.calib_path = None
+        self._calib_manual = False     # a CSV browsed here beats the Quantify bus
         self._items_cache = []
         self._test_items = []
         self._model = None
@@ -251,6 +253,16 @@ class ComposePanel(QWidget):
                               "(one row per map), higher = use that many individual "
                               "individual pixels, all labelled with the map's ratio. More rows "
                               "fight overfitting; splits stay grouped by map either way.")
+        # OFF by default (2026-08-19): defaulting ON cost two accidental all-day
+        # runs — LOO refits once per condition (~100×, hours). Tick it exactly once,
+        # for the final model whose held-out numbers go in the paper.
+        self.chk_loo = QCheckBox("held-out scoring (LOO)")
+        self.chk_loo.setChecked(False); self.chk_loo.setObjectName("field")
+        self.chk_loo.setToolTip(
+            "score every condition held-out (leave-one-condition-out) after training. "
+            "HONEST but SLOW — it refits the model once per condition (~100×, hours). "
+            "Tick for the FINAL model only; everyday retrains leave it off "
+            "(the saved .dlm then carries train-set numbers only).")
         self.chk_screen = QCheckBox("NNLS-screen ink first")
         self.chk_screen.setChecked(True); self.chk_screen.setObjectName("field")
         self.chk_screen.setToolTip("Use the same NNLS hit/background gate as Real data, then train "
@@ -260,9 +272,17 @@ class ComposePanel(QWidget):
         self.sp_hit.setDecimals(3); self.sp_hit.setSingleStep(0.025); self.sp_hit.setValue(0.15)
         self.sp_hit.setPrefix("hit fraction "); self.sp_hit.setObjectName("field")
         self.sp_hit.setToolTip("Minimum NNLS substance fraction for the hit/background gate.")
-        self.chk_equal_volume = QCheckBox("equal-volume mixtures")
-        self.chk_equal_volume.setChecked(True); self.chk_equal_volume.setObjectName("field")
-        self.chk_equal_volume.setToolTip("Use when Samples concentrations are source solutions mixed at equal volumes; disable when they already are final concentrations.")
+        # OFF by default (2026-08-19): the current label set (260814_mixture_final)
+        # carries FINAL µM in the filenames. Ticked, every µM target is divided by
+        # the number of components (÷2 binary, ÷3 ternary) — the 260815 model was
+        # trained that way by accident and its apparent µM came out low and
+        # order-dependent. Tick ONLY for labels that really are pre-mix stocks.
+        self.chk_equal_volume = QCheckBox("µM labels are pre-mix stocks (÷N)")
+        self.chk_equal_volume.setChecked(False); self.chk_equal_volume.setObjectName("field")
+        self.chk_equal_volume.setToolTip(
+            "tick only when Samples µM values are SOURCE solutions mixed at equal "
+            "volumes — targets are then divided by the number of components. "
+            "260814_mixture_final filenames are FINAL concentrations: leave this off.")
         self.sp_nt = QSpinBox(); self.sp_nt.setRange(20, 1000); self.sp_nt.setSingleStep(20)
         self.sp_nt.setValue(300); self.sp_nt.setPrefix("trees "); self.sp_nt.setObjectName("field")
 
@@ -312,12 +332,36 @@ class ComposePanel(QWidget):
                                      "and THI the wrong way — off is the adopted setting.")
 
         mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
+        # every knob lives in a FOLDED advanced box — the defaults are the adopted
+        # settings, so the normal run is: calibration arrives from Quantify, Train.
+        self.adv_tgl = QPushButton("▸ advanced"); self.adv_tgl.setObjectName("ghost")
+        self.adv_tgl.setCheckable(True)
+        self.adv_tgl.setToolTip("epochs/seed, NNLS screen, blank class, physics "
+                                "pre-training, benchmark knobs — defaults are the "
+                                "adopted settings; open only to deviate")
+        mrow.addWidget(self.adv_tgl)
+        mrow.addStretch(1)
+        self.advw = QWidget(); adv = QVBoxLayout(self.advw)
+        adv.setContentsMargins(0, 0, 0, 0); adv.setSpacing(6)
+        _adv1 = QHBoxLayout(); _adv1.setSpacing(8)
         for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px,
-                  self.chk_screen, self.sp_hit, self.chk_equal_volume, self.chk_blank,
+                  self.chk_screen, self.sp_hit, self.chk_loo):
+            _adv1.addWidget(w)
+        _adv1.addStretch(1)
+        _adv2 = QHBoxLayout(); _adv2.setSpacing(8)
+        for w in (self.chk_equal_volume, self.chk_blank,
                   self.chk_pretrain, self.cmb_iso, self.chk_nuisance,
                   self.cmb_rfmf, self.sp_cnnep):
-            mrow.addWidget(w)
-        mrow.addStretch(1)
+            _adv2.addWidget(w)
+        _adv2.addStretch(1)
+        adv.addLayout(_adv1); adv.addLayout(_adv2)
+        self.advw.setVisible(False)
+
+        def _adv_tgl(on):
+            self.advw.setVisible(on)
+            self.adv_tgl.setText(("▾ " if on else "▸ ") + "advanced")
+
+        self.adv_tgl.toggled.connect(_adv_tgl)
         self.train_b = QPushButton("Train"); self.train_b.setObjectName("primary")
         self.train_b.clicked.connect(self._train)
         self.cancel_b = QPushButton("Cancel"); self.cancel_b.setObjectName("ghost")
@@ -344,6 +388,7 @@ class ComposePanel(QWidget):
         mrow.addWidget(self.pix_b); mrow.addWidget(self.save_b)
         mrow.addWidget(self.cancel_b); mrow.addWidget(self.train_b)
         root.addLayout(mrow)
+        root.addWidget(self.advw)                          # folded advanced knobs
         self._update_params()
 
         self.pbar = QProgressBar(); self.pbar.setTextVisible(False)
@@ -399,6 +444,8 @@ class ComposePanel(QWidget):
 
         MIXTURE_BUS.changed.connect(self._load_from_samples)   # Samples edits → refresh here
         self._load_from_samples()
+        CALIB_BUS.changed.connect(self._adopt_calib_bus)       # Quantify → calibration
+        self._adopt_calib_bus()                # Quantify may have published already
 
     # ---- data dir shared with the Model tab / Samples ----
     def set_data_dir(self, path):
@@ -419,8 +466,22 @@ class ComposePanel(QWidget):
                                            self.data_dir, "CSV (*.csv);;all files (*)")
         if not p:
             return
+        self._calib_manual = True
         self.calib_path = p
         self.calib_lbl.setText("calib: " + os.path.basename(p))
+        # a calibration is here to be used — physics pre-training defaults ON
+        self.chk_pretrain.setChecked(True)
+        self._update_params()
+
+    def _adopt_calib_bus(self):
+        """Quantify published its dilution series: adopt it unless one was browsed
+        here by hand. Physics pre-training follows — that is the point of having it."""
+        if getattr(self, "_calib_manual", False) or not CALIB_BUS.path:
+            return
+        self.calib_path = CALIB_BUS.path
+        self.calib_lbl.setText("calib: from Quantify"
+                               + (f" ({CALIB_BUS.origin})" if CALIB_BUS.origin else ""))
+        self.chk_pretrain.setChecked(True)
         self._update_params()
 
     def _load_from_samples(self):
@@ -498,7 +559,7 @@ class ComposePanel(QWidget):
         params = self._opts(); params["items"] = items
         if self._test_items:
             params["test_items"] = self._test_items
-        params["loo"] = True   # always score held-out: train-set numbers are meaningless here
+        params["loo"] = self.chk_loo.isChecked()   # the honest-but-slow switch, in the open
         self.train_b.setEnabled(False); self.train_b.setText("Training…")
         self.save_b.setEnabled(False); self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
@@ -638,16 +699,26 @@ class ComposePanel(QWidget):
         self._model = model
         self._reset_buttons()
         self.save_b.setEnabled(True)
+        MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         self._rows = rows
-        self._plot_triangle(rows)
+        try:
+            self._plot_triangle(rows)
+        except Exception:
+            import traceback as _tb
+            print(_tb.format_exc(), file=sys.stderr)
         self._plot_loss(model.get("train_eval", {}).get("loss", []))
         self._err_title.setText("Per-substance error — mean |predicted − true| fraction "
                                 "(lower = better)")
         self._roc_title.setText("Detection ROC — is each substance present? "
                                 "(threshold the predicted fraction)")
-        self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
+        try:
+            self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
+        except Exception:
+            import traceback as _tb
+            print(_tb.format_exc(), file=sys.stderr)
+            self.status.setText("trained OK — a result plot failed to draw (see console); "
+                                "the model itself is live and can be Saved")
         self.export_b.setEnabled(True)
-        MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
         errtxt = f"{err:.0%}" if err == err else "—"
         kind = ("leave-one-map-out" if model.get("loo_eval")
