@@ -256,7 +256,10 @@ class ComposePanel(QWidget):
         self.sp_px.setToolTip("individual hit-pixel training rows per map: 0 = one mean spectrum per map "
                               "(one row per map), higher = use that many individual "
                               "individual pixels, all labelled with the map's ratio. More rows "
-                              "fight overfitting; splits stay grouped by map either way.")
+                              "fight overfitting; splits stay grouped by map either way. "
+                              "Affects TRAINING only — Benchmark always scores one mean "
+                              "spectrum per map, since refitting six methods per condition "
+                              "on 400 px/map does not fit in memory.")
         # OFF by default (2026-08-19): defaulting ON cost two accidental all-day
         # runs — LOO refits once per condition (~100×, hours). Tick it exactly once,
         # for the final model whose held-out numbers go in the paper.
@@ -650,6 +653,16 @@ class ComposePanel(QWidget):
             self.status.setStyleSheet(f"color:{RED};"); return
         params = self._opts(); params.pop("method", None); params.pop("loo", None)
         params["items"] = items; params["_benchmark"] = True
+        # ONE mean spectrum per map, whatever "pixels/map" says. That spinbox sizes the
+        # TRAINING set, where 400 px/map is affordable because the model is fit once; the
+        # benchmark refits six methods per condition, so the same setting means a
+        # 102x400 = 40,800-row matrix in every one of ~100 folds. Measured on this code:
+        # the 1-D CNN runs full-batch, so its activations alone come to ~18 GB (the
+        # machine has 15.7) and one method would need ~830 h. At map level the whole
+        # six-method run is an overnight job. Said out loud in the status line below,
+        # because it makes the benchmark's MLP column a map-level number that will not
+        # equal the deployed model's pixel-level one.
+        params["px_per_map"] = 0
         # the accuracy cut is frozen NOW, before any result exists — changing the spinbox
         # afterwards must not re-score a finished run
         v = float(self.sp_cut.value())
@@ -658,7 +671,10 @@ class ComposePanel(QWidget):
         self.bench_b.setText("Benchmarking…")
         self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
-        self.status.setText("● leave-one-out benchmark…"); self.status.setStyleSheet(f"color:{MUTE};")
+        self.status.setText(f"● leave-one-out benchmark — {len(items)} conditions × 6 methods, "
+                            "one mean spectrum per map (pixel-level would need ~18 GB per "
+                            "CNN fold)")
+        self.status.setStyleSheet(f"color:{MUTE};")
         start_worker(self, TrainComposeWorker(params), done=self._done,
                      fail=self._fail,
                      progress=lambda m: self.status.setText("● " + m))
