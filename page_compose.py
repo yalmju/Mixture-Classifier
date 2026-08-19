@@ -676,7 +676,10 @@ class ComposePanel(QWidget):
         self.bench_b.setText("Benchmarking…")
         self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
-        self.status.setText(f"● leave-one-out benchmark — {len(items)} conditions × 6 methods, "
+        # maps, not folds: repeats of one ratio are held out together (that is the point
+        # of grouping), so the fold count is the number of distinct ratios and is only
+        # known once the maps are loaded — the progress line reports it.
+        self.status.setText(f"● leave-one-out benchmark — {len(items)} maps × 6 methods, "
                             "one mean spectrum per map (pixel-level would need ~18 GB per "
                             "CNN fold)")
         self.status.setStyleSheet(f"color:{MUTE};")
