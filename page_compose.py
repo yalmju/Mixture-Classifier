@@ -16,7 +16,7 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QComboBox, QSpinBox, QDoubleSpinBox,
     QCheckBox, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QProgressBar,
+    QAbstractItemView, QProgressBar, QGridLayout, QScrollArea, QFrame,
 )
 
 from ui_common import *
@@ -176,15 +176,26 @@ class ComposePanel(QWidget):
         self._items_cache = []
         self._test_items = []
         self._model = None
-        root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(12)
+        root = QHBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(14)
+
+        # Compact control rail on the left; every plot gets the wide right side.
+        # The rail scrolls only when advanced options are opened on a short screen.
+        left_body = QWidget(); left = QVBoxLayout(left_body)
+        left.setContentsMargins(0, 0, 6, 0); left.setSpacing(9)
+        left_body.setFixedWidth(300)
+        root.addWidget(left_body)
+
+        right_body = QWidget(); right = QVBoxLayout(right_body)
+        right.setContentsMargins(0, 0, 0, 0); right.setSpacing(8)
+        root.addWidget(right_body, 1)
 
         sub = QLabel("Pick a method (the best one is data-dependent) and train once on the "
                      "mixtures prepared in Samples. Save the model so Recovery and Real-data "
                      "just apply it — no retraining.")
-        sub.setObjectName("sub"); sub.setWordWrap(True); root.addWidget(sub)
+        sub.setObjectName("sub"); sub.setWordWrap(True); left.addWidget(sub)
 
         # ---- files: pure refs + (mixtures come from Samples) ----
-        frow = QHBoxLayout(); frow.setSpacing(8)
+        frow = QVBoxLayout(); frow.setSpacing(5)
         pure_b = QPushButton("Pure refs…"); pure_b.setObjectName("ghost")
         pure_b.setToolTip("folder of pure reference maps (one class per substance)")
         pure_b.clicked.connect(self._browse_pure)
@@ -198,13 +209,16 @@ class ComposePanel(QWidget):
                            "run — train_model needs it to build the simulated mixtures.")
         calib_b.clicked.connect(self._browse_calib)
         self.calib_lbl = QLabel("no calibration"); self.calib_lbl.setObjectName("field")
-        frow.addWidget(pure_b); frow.addWidget(self.ref_lbl, 1)
+        self.ref_lbl.setWordWrap(True); self.calib_lbl.setWordWrap(True)
+        _pure_row = QHBoxLayout(); _pure_row.setSpacing(5)
+        _pure_row.addWidget(pure_b); _pure_row.addWidget(reload_b)
+        frow.addLayout(_pure_row); frow.addWidget(self.ref_lbl)
         frow.addWidget(calib_b); frow.addWidget(self.calib_lbl)
-        frow.addWidget(self.mix_lbl); frow.addWidget(reload_b)
-        root.addLayout(frow)
+        self.mix_lbl.setWordWrap(True); frow.addWidget(self.mix_lbl)
+        left.addLayout(frow)
 
         # ---- step 1: which method? (leave-one-out comparison, trains nothing) ----
-        brow = QHBoxLayout(); brow.setSpacing(8)
+        brow = QVBoxLayout(); brow.setSpacing(5)
         blbl = QLabel("1 · compare methods:"); blbl.setObjectName("field")
         self.bench_b = QPushButton("Benchmark (LOO)"); self.bench_b.setObjectName("ghost")
         self.bench_b.setToolTip("score NNLS / PLS / RF / 1D-CNN / MLP on the same mixtures "
@@ -218,12 +232,15 @@ class ComposePanel(QWidget):
         self.kfold_b.clicked.connect(self._kfold)
         self.bench_lbl = QLabel("run this first to see which method fits your data")
         self.bench_lbl.setObjectName("field")
-        brow.addWidget(blbl); brow.addWidget(self.bench_b); brow.addWidget(self.kfold_b)
-        brow.addWidget(self.bench_lbl, 1)
-        root.addLayout(brow)
+        brow.addWidget(blbl)
+        _bench_row = QHBoxLayout(); _bench_row.setSpacing(5)
+        _bench_row.addWidget(self.bench_b); _bench_row.addWidget(self.kfold_b)
+        brow.addLayout(_bench_row)
+        self.bench_lbl.setWordWrap(True); brow.addWidget(self.bench_lbl)
+        left.addLayout(brow)
 
         # ---- step 2: train the model that gets deployed ----
-        mrow = QHBoxLayout(); mrow.setSpacing(8)
+        mrow = QVBoxLayout(); mrow.setSpacing(6)
         mlbl = QLabel("2 · train:"); mlbl.setObjectName("field")
         self.cmb = QComboBox(); self.cmb.setObjectName("field")
         for text, data in self.METHODS:
@@ -264,10 +281,10 @@ class ComposePanel(QWidget):
             "Tick for the FINAL model only; everyday retrains leave it off "
             "(the saved .dlm then carries train-set numbers only).")
         self.chk_screen = QCheckBox("NNLS-screen ink first")
-        self.chk_screen.setChecked(True); self.chk_screen.setObjectName("field")
-        self.chk_screen.setToolTip("Use the same NNLS hit/background gate as Real data, then train "
-                                   "the model only on accepted SERS-ink pixels. The model estimates "
-                                   "composition/concentration but cannot change the spatial hit mask.")
+        self.chk_screen.setChecked(False); self.chk_screen.setObjectName("field")
+        self.chk_screen.setToolTip("Optional: remove background pixels before training. Leave off "
+                                   "when every mixture-map pixel is a measured hit (the current "
+                                   "102-map set); enable only for maps containing empty substrate.")
         self.sp_hit = QDoubleSpinBox(); self.sp_hit.setRange(0.0, 1.0)
         self.sp_hit.setDecimals(3); self.sp_hit.setSingleStep(0.025); self.sp_hit.setValue(0.15)
         self.sp_hit.setPrefix("hit fraction "); self.sp_hit.setObjectName("field")
@@ -331,7 +348,9 @@ class ComposePanel(QWidget):
                                      "spectra. Tried on the 64-condition grid and it pushed TBZ "
                                      "and THI the wrong way — off is the adopted setting.")
 
-        mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
+        mrow.addWidget(mlbl)
+        _method_row = QHBoxLayout(); _method_row.setSpacing(5)
+        _method_row.addWidget(self.cmb, 1)
         # every knob lives in a FOLDED advanced box — the defaults are the adopted
         # settings, so the normal run is: calibration arrives from Quantify, Train.
         self.adv_tgl = QPushButton("▸ advanced"); self.adv_tgl.setObjectName("ghost")
@@ -339,22 +358,16 @@ class ComposePanel(QWidget):
         self.adv_tgl.setToolTip("epochs/seed, NNLS screen, blank class, physics "
                                 "pre-training, benchmark knobs — defaults are the "
                                 "adopted settings; open only to deviate")
-        mrow.addWidget(self.adv_tgl)
-        mrow.addStretch(1)
-        self.advw = QWidget(); adv = QVBoxLayout(self.advw)
-        adv.setContentsMargins(0, 0, 0, 0); adv.setSpacing(6)
-        _adv1 = QHBoxLayout(); _adv1.setSpacing(8)
-        for w in (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt, self.sp_px,
-                  self.chk_screen, self.sp_hit, self.chk_loo):
-            _adv1.addWidget(w)
-        _adv1.addStretch(1)
-        _adv2 = QHBoxLayout(); _adv2.setSpacing(8)
-        for w in (self.chk_equal_volume, self.chk_blank,
-                  self.chk_pretrain, self.cmb_iso, self.chk_nuisance,
-                  self.cmb_rfmf, self.sp_cnnep):
-            _adv2.addWidget(w)
-        _adv2.addStretch(1)
-        adv.addLayout(_adv1); adv.addLayout(_adv2)
+        _method_row.addWidget(self.adv_tgl)
+        mrow.addLayout(_method_row)
+        self.advw = QWidget(); adv = QGridLayout(self.advw)
+        adv.setContentsMargins(0, 0, 0, 0); adv.setSpacing(5)
+        _advanced_widgets = (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt,
+                             self.sp_px, self.chk_screen, self.sp_hit, self.chk_loo,
+                             self.chk_equal_volume, self.chk_blank, self.chk_pretrain,
+                             self.cmb_iso, self.chk_nuisance, self.cmb_rfmf, self.sp_cnnep)
+        for _i, _w in enumerate(_advanced_widgets):
+            adv.addWidget(_w, _i // 2, _i % 2)
         self.advw.setVisible(False)
 
         def _adv_tgl(on):
@@ -384,64 +397,67 @@ class ComposePanel(QWidget):
         self.pix_b.setToolTip("after an Export, re-unmix every scored map and tile the "
                               "per-pixel composition maps into one figure. Slow — it runs "
                               "the Real-data path once per map.")
-        mrow.addWidget(self.load_b); mrow.addWidget(self.export_b)
-        mrow.addWidget(self.pix_b); mrow.addWidget(self.save_b)
-        mrow.addWidget(self.cancel_b); mrow.addWidget(self.train_b)
-        root.addLayout(mrow)
-        root.addWidget(self.advw)                          # folded advanced knobs
+        _actions = QGridLayout(); _actions.setSpacing(5)
+        _actions.addWidget(self.load_b, 0, 0); _actions.addWidget(self.save_b, 0, 1)
+        _actions.addWidget(self.export_b, 1, 0); _actions.addWidget(self.pix_b, 1, 1)
+        _actions.addWidget(self.cancel_b, 2, 0); _actions.addWidget(self.train_b, 2, 1)
+        mrow.addLayout(_actions)
+        left.addLayout(mrow)
+        left.addWidget(self.advw)                          # folded advanced knobs
         self._update_params()
 
         self.pbar = QProgressBar(); self.pbar.setTextVisible(False)
-        self.pbar.setFixedHeight(6); self.pbar.setVisible(False); root.addWidget(self.pbar)
+        self.pbar.setFixedHeight(6); self.pbar.setVisible(False); left.addWidget(self.pbar)
 
         # read-only view of the shared mixtures (managed in Samples) — collapsible
         self.mix_tgl = QPushButton(); self.mix_tgl.setObjectName("ghost")
-        self.mix_tgl.setCheckable(True); self.mix_tgl.setChecked(True)
+        self.mix_tgl.setCheckable(True); self.mix_tgl.setChecked(False)
         self.mix_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
         self.mix_tgl.toggled.connect(self._toggle_table)
-        root.addWidget(self.mix_tgl)
+        left.addWidget(self.mix_tgl)
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["mixture file (from Samples)", "true ratio"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setMaximumHeight(140)
-        root.addWidget(self.table)
-        self._toggle_table(True)
+        self.table.setMaximumHeight(160)
+        left.addWidget(self.table)
+        self._toggle_table(False)
 
-        plots = QHBoxLayout(); plots.setSpacing(12)
+        self.status = QLabel(""); self.status.setObjectName("sub")
+        self.status.setWordWrap(True); right.addWidget(self.status)
+
+        # Five results in a fixed two-row dashboard: two wide panels above, three
+        # compact diagnostics below. No full-screen window and no vertical hunt.
+        plots = QGridLayout(); plots.setSpacing(8)
         lcard, llay = _card("Learning curve — training loss vs epoch (MLP / CNN)")
-        self.c_loss = Canvas(); self.c_loss.setMinimumHeight(300)
+        self.c_loss = Canvas(); self.c_loss.setMinimumHeight(210)
         self.c_loss.placeholder("Train an MLP or CNN to see the loss curve")
-        llay.addWidget(self.c_loss); plots.addWidget(lcard, 1)
-        tcard, tlay = _card("Held-out recovery (leave-one-out) — true (○) vs predicted (●, colour = accuracy)")
-        self.c_tri = Canvas(); self.c_tri.setMinimumHeight(300)
-        self.c_tri.placeholder("Train to see held-out composition recovery")
-        tlay.addWidget(self.c_tri); plots.addWidget(tcard, 1)
-        root.addLayout(plots, 1)
+        llay.addWidget(self.c_loss); plots.addWidget(lcard, 0, 0, 1, 3)
+        tcard, tlay = _card("Recovery — true (○) vs predicted (●, colour = accuracy)")
+        self.c_tri = Canvas(); self.c_tri.setMinimumHeight(210)
+        self.c_tri.placeholder("Train to see composition recovery")
+        tlay.addWidget(self.c_tri); plots.addWidget(tcard, 0, 3, 1, 3)
 
-        plots2 = QHBoxLayout(); plots2.setSpacing(12)
-        pcard, play = _card("Parity per substance — predicted vs true fraction "
-                            "(on the line = exact)")
-        self.c_parity = Canvas(); self.c_parity.setMinimumHeight(300)
+        pcard, play = _card("Parity per substance — predicted vs true fraction")
+        self.c_parity = Canvas(); self.c_parity.setMinimumHeight(210)
         self.c_parity.placeholder("Train to see the per-substance parity")
-        play.addWidget(self.c_parity); plots2.addWidget(pcard, 1)
-        ecard, elay = _card("Per-substance error — mean |predicted − true| fraction "
-                            "(lower = better)")
-        self.c_err = Canvas(); self.c_err.setMinimumHeight(300)
+        play.addWidget(self.c_parity); plots.addWidget(pcard, 1, 0, 1, 2)
+        ecard, elay = _card("Per-substance error — mean absolute fraction error")
+        self.c_err = Canvas(); self.c_err.setMinimumHeight(210)
         self.c_err.placeholder("Train to see the per-substance error")
-        elay.addWidget(self.c_err); plots2.addWidget(ecard, 1)
+        elay.addWidget(self.c_err); plots.addWidget(ecard, 1, 2, 1, 2)
         self._err_title = elay.itemAt(0).widget()
-        rcard, rlay = _card("Detection ROC — is each substance present? "
-                            "(threshold the predicted fraction)")
-        self.c_roc = Canvas(); self.c_roc.setMinimumHeight(300)
+        rcard, rlay = _card("Detection ROC — is each substance present?")
+        self.c_roc = Canvas(); self.c_roc.setMinimumHeight(210)
         self.c_roc.placeholder("Train to see the detection ROC / AUC")
-        rlay.addWidget(self.c_roc); plots2.addWidget(rcard, 1)
+        rlay.addWidget(self.c_roc); plots.addWidget(rcard, 1, 4, 1, 2)
         self._roc_title = rlay.itemAt(0).widget()
-        root.addLayout(plots2, 1)
-
-        self.status = QLabel(""); self.status.setObjectName("sub"); root.addWidget(self.status)
-
+        for _c in range(6):
+            plots.setColumnStretch(_c, 1)
+        plots.setRowStretch(0, 1); plots.setRowStretch(1, 1)
+        right.addLayout(plots, 1)
+        left.addStretch(1)
         MIXTURE_BUS.changed.connect(self._load_from_samples)   # Samples edits → refresh here
         self._load_from_samples()
         CALIB_BUS.changed.connect(self._adopt_calib_bus)       # Quantify → calibration

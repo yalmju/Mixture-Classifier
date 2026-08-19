@@ -17,14 +17,15 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QComboBox, QDoubleSpinBox, QSpinBox, QCheckBox, QFileDialog, QColorDialog,
-    QScrollArea, QFrame, QProgressBar, QLineEdit,
+    QScrollArea, QFrame, QProgressBar, QLineEdit, QSizePolicy,
 )
 
 from ui_common import *
 from unmix import unmix_map, vip_bands
 from classify import classify_map
 from real_data import PEST_DEFAULT
-from dataset import load_preprocess, load_colors, save_colors
+from dataset import (load_preprocess, load_colors, save_colors,
+                     parse_mixture_label, BLANK_ALIASES)
 from io_utils import write_csv, write_readme
 
 BG_GREY = "#c7ccd3"
@@ -279,8 +280,13 @@ class RealDataPage(QWidget):
         left.addLayout(self.swatches)
         left.addStretch(1)
 
-        # ---------- stacked result sections (scrollable) ----------
-        body = QVBoxLayout(); body.setSpacing(8)
+        # ---------- result dashboard (one viewport, scroll only as a fallback) ----------
+        # Do not stack every result as a full-width, tall report page. That made the
+        # Real tab depend heavily on monitor height: on a laptop the composition and
+        # concentration lived several screens below the maps. The dashboard keeps
+        # related evidence side-by-side and uses modest minimum heights; the outer
+        # scroll area remains only for genuinely small windows / large font scaling.
+        body = QGridLayout(); body.setSpacing(8)
 
         # 1) band maps: raw intensity at one marker band per substance + their RGB merge
         self.c_maps = Canvas()
@@ -291,8 +297,7 @@ class RealDataPage(QWidget):
         self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
-        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(300)
-        self.c_maps.setMaximumHeight(460)
+        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(210)
         # one min/max pair PER band panel (rebuilt with the band row) — the card-wide
         # pair could not stretch a weak channel without flattening a strong one
         self.scalerow = QHBoxLayout(); self.scalerow.setSpacing(6)
@@ -309,38 +314,33 @@ class RealDataPage(QWidget):
             "NNLS/MCR runs show abundances; a composition model shows its per-pixel "
             "probabilities. ALL panels share ONE scale (0–1 for probabilities, "
             "0–P99 for abundances) so brightness compares across components")
-        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(300)
-        self.c_abund.setMaximumHeight(460)
+        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(210)
         lay_ab.addLayout(self._scale_row("abund", 1.0))
         self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=True, key="abund")
-        # band | abundance half-and-half on one row — raw evidence beside the
-        # stage-1 split, no scrolling between them
-        mrow = QHBoxLayout(); mrow.setSpacing(12)
-        mrow.addWidget(card_maps, 1); mrow.addWidget(card_ab, 1)
-        mrow_w = QWidget(); mrow_w.setLayout(mrow); body.addWidget(mrow_w)
+        # Six logical columns let this row split 1/2 + 1/2 and the next one
+        # split 1/3 + 1/3 + 1/3 without nested layouts forcing a wide size hint.
+        body.addWidget(card_maps, 0, 0, 1, 3)
+        body.addWidget(card_ab, 0, 3, 1, 3)
 
-        # 2) the clicked pixel's spectrum — full width but SHORT. It sits directly
-        #    under the maps (a click lands there, the trace it produces should be the
-        #    very next thing on screen) and a trace needs width, not half a screen of
-        #    height; the pixel's own numbers ride along in the panel title.
+        # 2) the clicked pixel's spectrum — a short readout beside the pie map.
+        #    The pixel's own numbers ride along in the panel title.
         self.c_spec = Canvas()
         scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
         slay.addWidget(self.c_spec)
-        self.c_spec.setMinimumHeight(190); self.c_spec.setMaximumHeight(220)
-        body.addWidget(scard)
+        self.c_spec.setMinimumHeight(150)
 
         # 3) per-pixel composition pie | the same composition summed over the map —
         #    the pie map and the number it adds up to belong on one row
         self.c_pie = Canvas(); self.c_comp = Canvas()
         pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
-        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(380)
-        self.c_pie.setMaximumHeight(500)
+        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(150)
         ccard, clay = _card("Composition (overall)")
-        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(300)
-        self.c_comp.setMaximumHeight(360)
-        prow = QHBoxLayout(); prow.setSpacing(12)
-        prow.addWidget(pcard, 3); prow.addWidget(ccard, 1)
-        prow_w = QWidget(); prow_w.setLayout(prow); body.addWidget(prow_w)
+        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(150)
+
+        # One comparison row, in reading order. All three stay visible.
+        body.addWidget(scard, 1, 0, 1, 2)
+        body.addWidget(pcard, 1, 2, 1, 2)
+        body.addWidget(ccard, 1, 4, 1, 2)
 
         # 4) per-substance concentration (µM) maps — its own full-width row
         self.c_conc = Canvas()
@@ -373,16 +373,32 @@ class RealDataPage(QWidget):
         # and the summary shows which window it used
         vrow.addStretch(1)
         lay_conc.addLayout(vrow)
-        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(340)
-        self.c_conc.setMaximumHeight(460)
-        body.addWidget(self.card_conc)
+        lay_conc.addWidget(self.c_conc); self.c_conc.setMinimumHeight(210)
+        body.addWidget(self.card_conc, 2, 0, 1, 6)
         self.card_conc.setVisible(False)
 
+        self.result_grid = body
+        for col in range(6):
+            body.setColumnStretch(col, 1)
+        body.setRowStretch(0, 3)
+        body.setRowStretch(1, 2)
+        body.setRowStretch(2, 0)  # enabled only while concentration is visible
+
+        # Matplotlib advertises a large preferred width. Ignore that hint so three
+        # canvases can share one row instead of growing the page sideways.
+        for cv in (self.c_maps, self.c_abund, self.c_spec, self.c_pie,
+                   self.c_comp, self.c_conc):
+            cv.setMinimumWidth(0)
+            cv.setSizePolicy(QSizePolicy.Policy.Ignored,
+                             QSizePolicy.Policy.Expanding)
+
         bodyw = QWidget(); bodyw.setLayout(body)
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(bodyw)
-        scroll.setStyleSheet("QScrollArea{background:transparent;}")
-        outer.addWidget(scroll, 1)
+        bodyw.setMinimumWidth(0)
+        bodyw.setSizePolicy(QSizePolicy.Policy.Expanding,
+                            QSizePolicy.Policy.Expanding)
+        # Real is a dashboard, not a report page: fit the viewport and do not hide
+        # results behind horizontal or vertical scrollbars.
+        outer.addWidget(bodyw, 1)
 
         for cv, m in [(self.c_maps, "Load a test map, then Unmix"),
                       (self.c_pie, "Composition appears here"),
@@ -801,6 +817,21 @@ class RealDataPage(QWidget):
     def _method(self):
         return self.cmb_method.itemAt(1).widget().currentData()
 
+    def _activate_dl_method(self):
+        """A loaded/published .dlm is actionable immediately. In particular its µM
+        head only runs under dlpx, so leaving a previous NNLS/MCR selection in place
+        made concentration silently disappear."""
+        cb = self.cmb_method.itemAt(1).widget()
+        idx = cb.findData("dlpx")
+        if idx >= 0:
+            cb.setCurrentIndex(idx)
+
+    def _um_tag(self):
+        m = getattr(self, "dl_model", None)
+        if not isinstance(m, dict):
+            return ""
+        return "  ·  µM head ✓" if m.get("uM") else "  ·  composition only (no µM head)"
+
     def _blank_tag(self):
         """Say on the label whether this model carries a blank class. Without one it
         cannot answer 'nothing here', so NNLS still supplies the substance mass and the
@@ -842,9 +873,37 @@ class RealDataPage(QWidget):
         if p:
             self.test = p; self.test_lbl.setText(os.path.basename(p))
             self.test_x.setVisible(True)
+            self._set_truth_from_filename(p)
+
+    def _set_truth_from_filename(self, path):
+        """Use a filename such as DQ24-TBZ24-THI3 as the comparison truth.
+
+        The filename is measurement metadata. Requiring it to be typed again here
+        invites order and transcription errors, especially for a trace component.
+        """
+        if not hasattr(self, "true_edit"):
+            return
+        subs = []
+        model = getattr(self, "dl_model", None)
+        if isinstance(model, dict):
+            subs = [str(s) for s in (model.get("subs") or [])
+                    if str(s).lower() not in BLANK_ALIASES]
+        if not subs:
+            subs = ["DQ", "TBZ", "THI"]
+        stem = os.path.splitext(os.path.basename(path))[0]
+        amounts = parse_mixture_label(stem, subs)
+        if amounts and all(name in amounts for name in subs):
+            self.true_edit.setText(",".join(f"{amounts[name]:g}" for name in subs))
+            self.true_edit.setToolTip(
+                "auto-read from the test-map filename in panel order: "
+                + ", ".join(f"{name}={amounts[name]:g} µM" for name in subs))
+        else:
+            self.true_edit.clear()
 
     def _clear_test(self):
         self.test = None; self.test_lbl.setText("no test map"); self.test_x.setVisible(False)
+        if hasattr(self, "true_edit"):
+            self.true_edit.clear()
 
     def _browse_model(self):
         p, _ = QFileDialog.getOpenFileName(self, "Trained model (unmixr_model.joblib)",
@@ -865,8 +924,9 @@ class RealDataPage(QWidget):
         if MODEL_BUS.model is None:
             return
         self.dl_model = MODEL_BUS.model
+        self._activate_dl_method()
         self.dlm_lbl.setText("DL: " + (MODEL_BUS.origin or "trained model")
-                             + self._blank_tag())
+                             + self._blank_tag() + self._um_tag())
         self.dlm_lbl.setStyleSheet(""); self._sync_controls()
         self._refresh_calib_label()          # the model may carry its own calibration
 
@@ -882,11 +942,17 @@ class RealDataPage(QWidget):
             else:
                 from dl_model import load_model
                 self.dl_model = load_model(p)
-            self.dlm_lbl.setText("DL: " + os.path.basename(p) + self._blank_tag())
+            self._activate_dl_method()
+            self.dlm_lbl.setText("DL: " + os.path.basename(p) + self._blank_tag()
+                                 + self._um_tag())
             self.dlm_lbl.setStyleSheet(""); self._sync_controls()
             self._refresh_calib_label()      # the model may carry its own calibration
-            if self._res is not None:
-                self._apply(self._res)                    # redraw with the DL model in play
+            # Existing results were computed by the previous method/model; merely
+            # redrawing them made a freshly loaded µM model look as though it returned
+            # no concentration. Keep the plots as historical context, but require a run.
+            self.status.setText("DL model loaded — click Unmix to compute composition"
+                                + (" + concentration" if self.dl_model.get("uM") else ""))
+            self.status.setStyleSheet(f"color:{MUTE};")
         except Exception as e:
             self.dl_model = None; self.dlm_lbl.setText("DL load failed")
             print(e, file=sys.stderr)
@@ -1184,11 +1250,20 @@ class RealDataPage(QWidget):
         self.btn.setEnabled(True); self.btn.setText("Unmix")
         ov = getattr(self, "_bl_override", None)
         _ns = int((self._clipped(r) & r.hit).sum())
+        _conc_note = ""
+        if not (getattr(r, "calibrated", False) and getattr(r, "conc", None) is not None):
+            if r.method == "dlpx" and isinstance(self.dl_model, dict):
+                _conc_note = (" · concentration unavailable: this model has no µM head"
+                              if not self.dl_model.get("uM") else
+                              " · concentration unavailable: the µM head returned no values")
+            else:
+                _conc_note = " · concentration unavailable: no µM model/calibration applied"
         self.status.setText(f"done — {r.method.upper()}"
                             + (f" · {_ns} saturated px quarantined" if _ns else "")
                             + ("" if ov is None else
                             f" · baseline removal {'on' if ov else 'off'} — followed the "
-                            f"model's own setting, not this folder's"))
+                            f"model's own setting, not this folder's")
+                            + _conc_note)
         self.status.setStyleSheet(f"color:{MUTE};")
         nb = [r.comps[i] for i in r.nonbg]
         mr = self._mean_ratio(r)                          # corrected when toggle on
@@ -1416,8 +1491,10 @@ class RealDataPage(QWidget):
         dilution-series calibration has been applied."""
         if not getattr(r, "calibrated", False) or r.conc is None:
             self.card_conc.setVisible(False)
+            self.result_grid.setRowStretch(2, 0)
             return
         self.card_conc.setVisible(True)
+        self.result_grid.setRowStretch(2, 3)
         self.c_conc.fig.clear()
         self._exp_conc = []
         nb = [r.comps[i] for i in r.nonbg]; nbcols = self._nb_colors(r)
@@ -1466,10 +1543,13 @@ class RealDataPage(QWidget):
             ax.set_title(f"{nm} (µM; scale capped at hit-pixel P90)", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
-        # ---- summary bars: the maps show WHERE, this shows HOW MUCH ----
+        # ---- pixel distribution: show the measurements, not only one median bar ----
         axb = self.c_conc.style(self.c_conc.fig.add_subplot(1, n, n))
         med = np.full(len(nb), np.nan); q1 = med.copy(); q3 = med.copy()
         bad_frac = np.zeros(len(nb))
+        total_n = np.zeros(len(nb), dtype=int)
+        valid_n = np.zeros(len(nb), dtype=int)
+        distributions = []
         for i in range(len(nb)):
             sel = hit if hit.any() else np.ones(r.n_pixels, bool)
             v = um_all[sel, i]
@@ -1484,17 +1564,35 @@ class RealDataPage(QWidget):
             keep = fin & ~bad
             bad_frac[i] = float(bad[fin].mean()) if fin.any() else 0.0
             vv = v[keep]
+            total_n[i] = int(fin.sum())
+            valid_n[i] = int(vv.size)
+            distributions.append(vv)
             if vv.size:
                 med[i], q1[i], q3[i] = (float(np.median(vv)),
                                         float(np.quantile(vv, 0.25)),
                                         float(np.quantile(vv, 0.75)))
         xs = np.arange(len(nb))
         ok = np.isfinite(med)
-        axb.bar(xs[ok], med[ok], width=0.6, color=[nbcols[i] for i in np.where(ok)[0]],
-                edgecolor="none", zorder=2)
-        axb.errorbar(xs[ok], med[ok],
-                     yerr=[(med - q1)[ok], (q3 - med)[ok]],
-                     fmt="none", ecolor=INK, elinewidth=1.0, capsize=3, zorder=3)
+        rng = np.random.default_rng(260819)       # stable jitter across redraws
+        for i, vv in enumerate(distributions):
+            if vv.size >= 2:
+                violin = axb.violinplot(vv, positions=[i], widths=0.66,
+                                        showmeans=False, showmedians=False,
+                                        showextrema=False)
+                for body_part in violin["bodies"]:
+                    body_part.set_facecolor(nbcols[i])
+                    body_part.set_edgecolor(nbcols[i])
+                    body_part.set_alpha(0.18)
+            if vv.size:
+                jitter = rng.uniform(-0.20, 0.20, size=vv.size)
+                axb.scatter(np.full(vv.size, i) + jitter, vv, s=11,
+                            color=nbcols[i], alpha=0.65, edgecolors="none", zorder=2)
+                # black IQR and median marks are a compact summary on top of all dots
+                axb.vlines(i, q1[i], q3[i], color=INK, lw=1.2, zorder=3)
+                axb.hlines([q1[i], q3[i]], i - 0.08, i + 0.08,
+                           color=INK, lw=1.0, zorder=3)
+                axb.plot(i, med[i], marker="_", ms=14, mew=2.0,
+                         color=INK, zorder=4)
         vol = float(self.vol_spin.value()) if hasattr(self, "vol_spin") else 0.0
         tv = None
         txt = self.true_edit.text().strip() if hasattr(self, "true_edit") else ""
@@ -1507,38 +1605,46 @@ class RealDataPage(QWidget):
                 tv = None
         if tv is not None:                                 # red tick = dispensed truth
             axb.plot(xs, tv, ls="none", marker="_", ms=16, mew=1.8, color=RED,
-                     zorder=4)
+                     zorder=5)
         for i in np.where(ok)[0]:
-            lab = f"{med[i]:.1f}"
+            lab = f"{med[i]:.1f} µM\nn={valid_n[i]}/{total_n[i]}"
             if lo_um is not None and np.isfinite(med[i]) and med[i] < lo_um[i]:
-                lab = f"< {lo_um[i]:g}"          # below the validated window: censored
+                lab = f"< {lo_um[i]:g} µM\nn={valid_n[i]}/{total_n[i]}"
             if tv is not None:
-                lab += chr(10) + f"rec {100 * med[i] / tv[i]:.0f}%"
+                lab += f"\nrecovery {100 * med[i] / tv[i]:.0f}%"
             if vol > 0:                                    # µM × µL = pmol
-                lab += chr(10) + f"≈{med[i] * vol:.0f} pmol"
-            if bad_frac[i] >= 0.05:                        # the hole must be visible
-                lab += chr(10) + f"({bad_frac[i] * 100:.0f}% OOD excl.)"
+                lab += f"\n≈{med[i] * vol:.0f} pmol"
+            n_above = total_n[i] - valid_n[i]
+            if n_above:
+                # Plain language: OOD is implementation jargon and looked like
+                # "weak/no signal", while it usually means the opposite here.
+                lab += f"\n{n_above}/{total_n[i]} above valid range"
             axb.annotate(lab, (xs[i], q3[i]), xytext=(0, 4),
                          textcoords="offset points", ha="center", fontsize=8,
                          color=INK)
-        # a substance whose hit pixels are ALL out of range gets a verdict, not a bar
+        # If no reportable point remains, state exactly how many exceeded the range.
         for i in np.where(~ok)[0]:
             if bad_frac[i] > 0:
-                axb.annotate("not reportable" + chr(10)
-                             + f"({bad_frac[i] * 100:.0f}% OOD)",
+                axb.annotate("no concentration in valid range\n"
+                             + f"0/{total_n[i]} usable · "
+                             + f"{total_n[i]}/{total_n[i]} above range",
                              (xs[i], 0), xytext=(0, 8), textcoords="offset points",
                              ha="center", fontsize=8, color=RED)
         axb.set_xticks(xs); axb.set_xticklabels(nb, fontsize=8)
         _wtxt = ""
         if hi_um is not None and np.all(np.isfinite(hi_um)):
             _lo0 = lo_um if lo_um is not None else np.zeros(len(nb))
-            _wtxt = " · window " + "/".join(
+            _wtxt = "\nvalidated µM range: " + " / ".join(
                 f"{_lo0[i]:g}–{hi_um[i]:g}" for i in range(len(nb)))
-        axb.set_ylabel("median µM (in-range hit px, IQR)"
-                       + (f" · {vol:g} µL" if vol > 0 else "") + _wtxt, fontsize=7)
+        axb.set_title("Pixel concentration distribution"
+                      + (" · red tick = filename truth" if tv is not None else "")
+                      + _wtxt, fontsize=8)
+        axb.set_ylabel("apparent µM per pixel\n"
+                       "dots = usable pixels; black = median/IQR"
+                       + (f" · {vol:g} µL" if vol > 0 else ""), fontsize=7)
         axb.tick_params(labelsize=8)
         axb.set_ylim(bottom=0)
-        self._exp_conc.append(("uM_summary_bars", axb, None))
+        self._exp_conc.append(("uM_pixel_distribution", axb, None))
         self.c_conc.fig.tight_layout(); self.c_conc.draw_idle()
 
     # Final pie-map style (settled with the 260812 trio map): pure black ground,

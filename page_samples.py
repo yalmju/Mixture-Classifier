@@ -17,8 +17,8 @@ from real_data import PEST_DEFAULT
 from dataset import (discover_references, base_and_batch, load_manifest,
                      save_manifest, map_pixel_count, load_preprocess,
                      save_preprocess, load_mixture_list, save_mixture_list,
-                     load_mixture_roles)
-from validate import parse_mixture_label, simplify_ratio
+                     load_mixture_roles, parse_mixture_label)
+from validate import simplify_ratio
 
 
 # --------------------------------------------------------------------------
@@ -100,8 +100,9 @@ class SamplingPage(QWidget):
         self.mix_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
         self.mix_tgl.toggled.connect(self._toggle_mix)
         self.chk_mix_uM = QCheckBox("ratios are µM"); self.chk_mix_uM.setObjectName("field")
-        self.chk_mix_uM.setToolTip("treat the ratio numbers as absolute µM (e.g. DQ1000 → "
-                                   "1000 µM) so the concentration head can be trained")
+        self.chk_mix_uM.setToolTip("amounts encoded in filenames (e.g. DQ12-TB3-TH6) are "
+                                   "always read as µM automatically. Tick this only to treat "
+                                   "numbers from non-standard filenames as absolute µM too.")
         self.chk_mix_uM.stateChanged.connect(lambda _=0: self._save_mix())
         mix_add = QPushButton("Add mixtures…"); mix_add.setObjectName("ghost")
         mix_add.clicked.connect(self._add_mix)
@@ -249,15 +250,13 @@ class SamplingPage(QWidget):
                 except ValueError:
                     pass
             if len(ratio) >= 2:
-                if self.chk_mix_uM.isChecked():
-                    # µM comes from the FILENAME — the single source of truth
-                    # (260814_mixture_final doctrine). The old mix_amounts cache
-                    # drifted out of row order once and silently scrambled EVERY
-                    # concentration label (101/101 mismatched, the µM head trained
-                    # on another map's answer key); a per-row cache is never again
-                    # trusted for µM.
-                    nm = os.path.splitext(os.path.basename(self.mix_files[row]))[0]
-                    amt = parse_mixture_label(nm, self._mix_ref_names()) or {}
+                # A parseable filename is absolute measurement metadata, regardless
+                # of the checkbox. If the user meant only 1,2,3,4,5 ratios they would
+                # not have named the maps DQ12-TB3-TH6. The checkbox remains only as
+                # an explicit fallback for legacy/non-standard filenames.
+                nm = os.path.splitext(os.path.basename(self.mix_files[row]))[0]
+                amt = parse_mixture_label(nm, self._mix_ref_names()) or {}
+                if amt or self.chk_mix_uM.isChecked():
                     if not amt:                        # non-standard filename only
                         amt = (self.mix_amounts[row]
                                if row < len(self.mix_amounts) else {}) or ratio

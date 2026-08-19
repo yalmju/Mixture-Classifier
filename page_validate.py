@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QFileDialog, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QLineEdit, QCheckBox, QProgressBar, QSpinBox,
-    QComboBox,
+    QComboBox, QTabWidget, QSizePolicy,
 )
 
 from matplotlib.patches import FancyArrowPatch
@@ -242,10 +242,26 @@ class ValidatePage(QWidget):
         body.addWidget(ecard)
 
         bodyw = QWidget(); bodyw.setLayout(body)
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(bodyw)
-        scroll.setStyleSheet("QScrollArea{background:transparent;}")
-        root.addWidget(scroll, 1)
+        # Re-home the already-built cards into three in-place result views.
+        views = QTabWidget()
+        ratio_w = QWidget(); ratio_lay = QVBoxLayout(ratio_w)
+        ratio_lay.setContentsMargins(0, 8, 0, 0); ratio_lay.setSpacing(8)
+        ratio_lay.addWidget(prow_w, 1); ratio_lay.addWidget(rcard, 1)
+        comp_w = QWidget(); comp_lay = QVBoxLayout(comp_w)
+        comp_lay.setContentsMargins(0, 8, 0, 0); comp_lay.setSpacing(8)
+        comp_lay.addWidget(crow_w, 1); comp_lay.addWidget(dcard, 1)
+        explain_w = QWidget(); explain_lay = QVBoxLayout(explain_w)
+        explain_lay.setContentsMargins(0, 8, 0, 0)
+        explain_lay.addWidget(ecard, 1)
+        for cv in (self.c_parity, self.c_corr, self.c_resp, self.c_tri,
+                   self.c_rec, self.c_rel, self.c_explain):
+            cv.setMinimumWidth(0); cv.setMinimumHeight(150)
+            cv.setSizePolicy(QSizePolicy.Policy.Ignored,
+                             QSizePolicy.Policy.Expanding)
+        views.addTab(ratio_w, "Ratios & response")
+        views.addTab(comp_w, "Composition & drift")
+        views.addTab(explain_w, "Model explanation")
+        root.addWidget(views, 1)
         for cv, m in [(self.c_parity, "Add mixtures, then Validate"),
                       (self.c_corr, "Corrected ratio appears here"),
                       (self.c_resp, "Response factors appear here"),
@@ -818,7 +834,7 @@ class ValidatePage(QWidget):
                   ("3-component mixtures", [k for k in range(len(recs)) if ncomp[k] >= 3])]
         groups = [g for g in groups if g[1]] or [("mixtures", list(range(len(recs))))]
         tallest = max(len(idx) for _t, idx in groups)
-        self.c_rel.setMinimumHeight(max(300, tallest * 19 + 130))
+        self.c_rel.setMinimumHeight(150)
         fig = self.c_rel.fig; fig.clear()
         axes = fig.subplots(1, len(groups), squeeze=False)[0]
         gap = np.array([composition_distance(r["nominal"], r["mean"]) for r in recs])
