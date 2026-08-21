@@ -325,9 +325,9 @@ class RealDataPage(QWidget):
         # 3) per-pixel composition pie | the same composition summed over the map —
         #    the pie map and the number it adds up to belong on one row
         self.c_pie = Canvas(); self.c_comp = Canvas()
-        pcard, play = _card("Per-pixel composition — pie per pixel (click a pixel)")
+        pcard, play = _card("Per-pixel composition — spectral evidence (before) vs model (after)")
         play.addWidget(self.c_pie); self.c_pie.setFixedHeight(175)
-        ccard, clay = _card("Composition (overall)")
+        ccard, clay = _card("Composition (overall) — before vs after")
         clay.addWidget(self.c_comp); self.c_comp.setFixedHeight(175)
 
         # One comparison row, in reading order. All three stay visible.
@@ -1158,6 +1158,15 @@ class RealDataPage(QWidget):
         s = rn.sum(axis=1, keepdims=True)
         return np.divide(rn, s, out=np.zeros_like(rn), where=s > 0)
 
+    def _spectral_ratio_nb(self, r):
+        """Stage-1 full-spectrum composition before the learned model."""
+        rn = np.asarray(getattr(r, "A_evidence", r.A), float)[:, r.nonbg]
+        rf = self._rf_vec(r)
+        if rf is not None:
+            rn = rn / np.where(rf > 0, rf, 1.0)
+        s = rn.sum(axis=1, keepdims=True)
+        return np.divide(rn, s, out=np.zeros_like(rn), where=s > 0)
+
     def _saturated(self, r):
         """Detect ADC-like flat tops (three adjacent channels at the spectrum maximum).
         Fallback only — results carry sat_frac from the load-time detector now."""
@@ -1716,92 +1725,67 @@ class RealDataPage(QWidget):
     PIE_GRID = "#ffffff"
 
     def _plot_pies(self, r):
+        """Draw stage-1 and final per-pixel composition at a stable, fixed layout."""
         from matplotlib.collections import LineCollection
+        old = getattr(self.c_pie, "_rowgs_cid", None)
+        if old is not None:
+            self.c_pie.mpl_disconnect(old)
+            self.c_pie._rowgs_cid = None
         self.c_pie.fig.clear()
+        self.c_pie.fig.subplots_adjust(left=0.02, right=0.98, bottom=0.22,
+                                       top=0.88, wspace=0.10)
         cols = self._nb_colors(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux, uy = np.unique(x), np.unique(y)
-        # This card spans three common slots; centre the one spatial map in one slot.
-        gs = self._row_gs(self.c_pie.fig, 3, len(uy), len(ux))
-        for col in (0, 2):
-            self.c_pie.fig.add_subplot(gs[:, col]).set_axis_off()
-        self.c_pie.fig.add_subplot(gs[1, 1]).set_axis_off()
-        ax = self.c_pie.style(self.c_pie.fig.add_subplot(gs[0, 1]))
-        self._click_axes.append(ax)
         sx = float(np.median(np.diff(ux))) if len(ux) > 1 else 1.0
         sy = float(np.median(np.diff(uy))) if len(uy) > 1 else 1.0
-        rad = sx * 0.5                                    # pies fill their cell
-        hit = self._hit(r)                                # substance pixels kept
-        ax.set_facecolor(self.PIE_BG)
-        # every cell boundary — the empty cells are measured background, not canvas
-        gsegs = [[(ux[0] - sx / 2 + j * sx, uy[0] - sy / 2),
-                  (ux[0] - sx / 2 + j * sx, uy[-1] + sy / 2)]
-                 for j in range(len(ux) + 1)]
-        gsegs += [[(ux[0] - sx / 2, uy[0] - sy / 2 + i * sy),
-                   (ux[-1] + sx / 2, uy[0] - sy / 2 + i * sy)]
-                  for i in range(len(uy) + 1)]
-        ax.add_collection(LineCollection(gsegs, colors=self.PIE_GRID,
-                                         linewidths=0.5, zorder=1))
-        # saturated pixels are simply NOT classified — they render as empty cells
-        # like background ("분류하지 말고 넘기는게 낫지 않나"); the run status and
-        # per_pixel.csv carry the count, so the hole is documented, just not loud
-        if r.method == "model":                           # classifier → one class/pixel
-            dom = r.ratio_nb.argmax(axis=1)
-            if hit.any():
-                ax.scatter(x[hit], y[hit], c=[cols[dom[i]] for i in np.where(hit)[0]],
-                           marker="s", s=16, edgecolors="none")
-        else:                                             # per-pixel pie for hit pixels
-            ratio_nb = self._ratio_nb(r)                  # corrected when toggle on
+        rad = min(sx, sy) * 0.5
+        hit = self._hit(r)
+        before = self._spectral_ratio_nb(r)
+        after = self._ratio_nb(r)
+        titles = ("Before · spectral/NNLS", "After · model" if r.method == "dlpx"
+                  else f"After · {r.method.upper()}")
+        axes = []
+        for panel, (ratios, title) in enumerate(zip((before, after), titles), 1):
+            ax = self.c_pie.style(self.c_pie.fig.add_subplot(1, 2, panel))
+            axes.append(ax); self._click_axes.append(ax)
+            ax.set_facecolor(self.PIE_BG)
+            gsegs = [[(ux[0] - sx/2 + j*sx, uy[0] - sy/2),
+                      (ux[0] - sx/2 + j*sx, uy[-1] + sy/2)]
+                     for j in range(len(ux) + 1)]
+            gsegs += [[(ux[0] - sx/2, uy[0] - sy/2 + i*sy),
+                       (ux[-1] + sx/2, uy[0] - sy/2 + i*sy)]
+                      for i in range(len(uy) + 1)]
+            ax.add_collection(LineCollection(gsegs, colors=self.PIE_GRID,
+                                             linewidths=0.35, zorder=1))
             wedges, wcols = [], []
             for i in np.where(hit)[0]:
                 a0 = 90.0
-                for k, frac in enumerate(ratio_nb[i]):
+                for k, frac in enumerate(ratios[i]):
                     if frac <= 0.002:
                         continue
                     a1 = a0 - frac * 360.0
-                    wedges.append(Wedge((x[i], y[i]), rad, a1, a0)); wcols.append(cols[k])
-                    a0 = a1
+                    wedges.append(Wedge((x[i], y[i]), rad, a1, a0))
+                    wcols.append(cols[k]); a0 = a1
             if wedges:
                 ax.add_collection(PatchCollection(wedges, facecolors=wcols,
                                                   edgecolors="none"))
-        # hit-region outline: cell-edge segments, twice the grid weight
-        xi = {v: j for j, v in enumerate(ux)}; yi = {v: i for i, v in enumerate(uy)}
-        H = np.zeros((len(uy), len(ux)), bool)
-        H[[yi[v] for v in y[hit]], [xi[v] for v in x[hit]]] = True
-        segs = []
-        for i in range(len(uy)):
-            for j in range(len(ux)):
-                if not H[i, j]:
-                    continue
-                x0, y0 = ux[j] - sx / 2, uy[i] - sy / 2
-                x1, y1 = ux[j] + sx / 2, uy[i] + sy / 2
-                if i == 0 or not H[i - 1, j]:
-                    segs.append([(x0, y0), (x1, y0)])
-                if i == len(uy) - 1 or not H[i + 1, j]:
-                    segs.append([(x0, y1), (x1, y1)])
-                if j == 0 or not H[i, j - 1]:
-                    segs.append([(x0, y0), (x0, y1)])
-                if j == len(ux) - 1 or not H[i, j + 1]:
-                    segs.append([(x1, y0), (x1, y1)])
-        if segs:
-            ax.add_collection(LineCollection(segs, colors=self.PIE_GRID,
-                                             linewidths=1.6, zorder=6))
-        self._sel_arts = []                      # figs were cleared — old rings gone
-        self._pie_ax = ax
-        self._exp_pie = [("composition_pies", ax, None)]
-        ax.set_xlim(x.min() - sx, x.max() + sx)
-        ax.set_ylim(*((y.max() + sy, y.min() - sy) if self._flip()
-                      else (y.min() - sy, y.max() + sy)))
-        ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
-        # legend OUTSIDE the map (below), so it never covers the pixels
+            ax.set_xlim(x.min()-sx, x.max()+sx)
+            ax.set_ylim(*((y.max()+sy, y.min()-sy) if self._flip()
+                          else (y.min()-sy, y.max()+sy)))
+            ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
+            ax.set_title(title, fontsize=8, pad=2)
+        self._sel_arts = []
+        self._pie_ax = axes[-1]
+        self._exp_pie = [("composition_before", axes[0], None),
+                         ("composition_after", axes[1], None)]
         handles = [Patch(facecolor=cols[i], label=r.comps[j])
-                   for i, j in enumerate(r.nonbg)] + \
-                  [Patch(facecolor=self.PIE_BG, label="background")]
-        ax.legend(handles=handles, fontsize=9, framealpha=0.0, labelcolor="black",
-                  loc="upper center", bbox_to_anchor=(0.5, -0.02),
-                  ncol=len(handles), frameon=False)
+                   for i, j in enumerate(r.nonbg)] + [Patch(facecolor=self.PIE_BG,
+                                                             label="background")]
+        self.c_pie.fig.legend(handles=handles, fontsize=8, frameon=False,
+                              loc="lower center", ncol=len(handles),
+                              bbox_to_anchor=(0.5, 0.01))
         self.c_pie.draw_idle()
-
     def _update_sel_rings(self, r):
         """One ring on EVERY map (band, abundance, pie) at the clicked pixel — the
         click lands far from the pie, so the ring must appear where you clicked."""
@@ -1840,16 +1824,31 @@ class RealDataPage(QWidget):
                 facecolors="none", edgecolors=BLUE, linewidths=1.8, zorder=7)
 
     def _plot_comp(self, r):
-        ax = self.c_comp.new_ax()
+        self.c_comp.fig.clear()
+        self.c_comp.fig.subplots_adjust(left=0.01, right=0.99, bottom=0.06,
+                                        top=0.86, wspace=0.05)
         cols = self._nb_colors(r); nb = [r.comps[i] for i in r.nonbg]
-        mr = self._mean_ratio(r)                          # corrected when toggle on
-        keep = [i for i in range(len(nb)) if mr[i] >= 0.01] or [int(mr.argmax())]
-        ax.pie([mr[i] for i in keep], labels=[nb[i] for i in keep],
-               colors=[cols[i] for i in keep], autopct="%1.0f%%",
-               textprops={"fontsize": 10, "color": INK})
-        ax.set_aspect("equal")
-        self.c_comp.fig.tight_layout(); self.c_comp.draw_idle()
+        hit = self._hit(r)
+        weights = np.clip(np.asarray(r.spectra, float), 0.0, None).sum(axis=1)
 
+        def aggregate(ratios):
+            use = hit if hit.any() else np.ones(len(ratios), bool)
+            w = weights[use]
+            return ((ratios[use] * w[:, None]).sum(axis=0) / w.sum()
+                    if w.sum() > 0 else ratios[use].mean(axis=0))
+
+        pairs = ((aggregate(self._spectral_ratio_nb(r)), "Before\nspectral/NNLS"),
+                 (aggregate(self._ratio_nb(r)),
+                  "After\nmodel" if r.method == "dlpx" else f"After\n{r.method.upper()}"))
+        for panel, (mr, title) in enumerate(pairs, 1):
+            ax = self.c_comp.style(self.c_comp.fig.add_subplot(1, 2, panel))
+            keep = [i for i in range(len(nb)) if mr[i] >= 0.01] or [int(mr.argmax())]
+            ax.pie([mr[i] for i in keep], labels=[nb[i] for i in keep],
+                   colors=[cols[i] for i in keep], autopct="%1.0f%%",
+                   textprops={"fontsize": 8, "color": INK}, radius=0.88)
+            ax.set_title(title, fontsize=8, pad=1)
+            ax.set_aspect("equal")
+        self.c_comp.draw_idle()
     def _plot_spec(self, r, i):
         ax = self.c_spec.new_ax()
         axis = r.wn if r.wn is not None else np.arange(r.spectra.shape[1])
