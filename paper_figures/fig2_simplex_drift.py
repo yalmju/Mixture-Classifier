@@ -19,11 +19,12 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.ticker import LogLocator, MultipleLocator, NullFormatter
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 OUT = Path(__file__).resolve().parent
 DQ, TBZ, THI = "#1a73e8", "#27a679", "#e8467c"
-INK, AXIS, PLANE = "#000000", "#8f9aa6", "#dde5ee"
+INK, AXIS, PLANE, GUIDE = "#000000", "#8f9aa6", "#dde5ee", "#8c8c8c"
 PT = 18                                                  # one type size, everywhere
 
 # concentration (uM) -> composition percentages (DQ, TBZ, THI)
@@ -64,13 +65,13 @@ VERT = (((1, 0, 0), "TBZ", TBZ, (0.10, 0.0, 0.02), "right"),
         ((0, 0, 1), "THI", THI, (0.0, 0.0, 0.11), "center"))
 for v, lab, col, off, ha in VERT:
     v = np.array(v, float)
-    ax.plot(*np.array([[0, 0, 0], v * 1.04]).T, color=AXIS, lw=1.6, zorder=1)
+    ax.plot(*np.array([[0, 0, 0], v * 1.04]).T, color=AXIS, lw=2.0, zorder=1)
     ax.text(*(v * 1.04 + np.array(off)), lab, color=col, fontsize=PT, weight="bold",
             ha=ha, va="center", zorder=12)
 
 ax.add_collection3d(Poly3DCollection([[(1, 0, 0), (0, 1, 0), (0, 0, 1)]],
                                      facecolor=PLANE, alpha=0.6, zorder=2,
-                                     edgecolor="#7c8b9b", linewidths=1.6))
+                                     edgecolor="#7c8b9b", linewidths=2.0))
 
 tt = np.linspace(0, 0.86, 2)                             # the 1:1:1 truth line
 ax.plot(tt, tt, tt, ls=(0, (5, 3)), color=INK, lw=2.4, zorder=6)
@@ -79,10 +80,9 @@ ax.text(0.98, 0.98, 0.94, "1:1:1 truth line", color=INK, fontsize=PT, weight="bo
         ha="center", zorder=12)
 
 for q in Q:                                              # perpendicular offsets
-    ax.plot(*np.array([truth, q]).T, ls=":", color=INK, lw=1.8, zorder=8)
+    ax.plot(*np.array([truth, q]).T, ls=":", color=INK, lw=2.0, zorder=8)
 ax.plot(Q[:, 0], Q[:, 1], Q[:, 2], color=THI, lw=3.0, zorder=9)
-ax.scatter(Q[:, 0], Q[:, 1], Q[:, 2], s=150, color=THI, edgecolor="white",
-           linewidths=1.6, depthshade=False, zorder=10)
+ax.scatter(Q[:, 0], Q[:, 1], Q[:, 2], s=170, color=THI, depthshade=False, zorder=10)
 
 LAB = {10: ("10 µM", (-0.06, 0.18, -0.03), "left"),
        30: ("30 µM", (0.0, 0.04, 0.11), "center"),
@@ -97,23 +97,29 @@ fig.text(0.012, 0.945, "(a)", fontsize=PT, weight="bold", color=INK)
 
 # ------------------------------------------- b  the three shares against 33.3 %
 ax2 = fig.add_subplot(gs[1])
-ax2.set_position([0.655, 0.16, 0.325, 0.72])
-ax2.axhline(100 / 3, ls=(0, (5, 3)), color=INK, lw=1.6)
-ax2.text(370, 37, "1:1:1  (33.3 % each)", fontsize=PT, color=INK, ha="right")
-for j, (lab, col, dy) in enumerate((("DQ", DQ, 16), ("TBZ", TBZ, -30), ("THI", THI, 12))):
+ax2.set_position([0.665, 0.17, 0.315, 0.71])
+ax2.axhline(100 / 3, ls=(0, (6, 4)), color=GUIDE, lw=2.0, zorder=1)
+ax2.text(360, 37, "1:1:1  (33.3 %)", fontsize=PT, color=INK, ha="right")
+for j, (lab, col, dy) in enumerate((("DQ", DQ, 16), ("TBZ", TBZ, -32), ("THI", THI, 14))):
     y = np.array([c[j] for _, c in DATA], float)
-    ax2.plot(conc, y, color=col, lw=3.0, marker="o", ms=11, mec="white", mew=1.6,
-             zorder=5, clip_on=False)
+    ax2.plot(conc, y, color=col, lw=3.0, marker="o", ms=12, zorder=5, clip_on=False)
     ax2.annotate(lab, (conc[0], y[0]), textcoords="offset points", xytext=(14, dy),
                  ha="left", fontsize=PT, weight="bold", color=col)
+
 ax2.set_xscale("log")
-ax2.set_xlim(7.5, 400); ax2.set_ylim(-4, 108)
+ax2.set_xlim(8, 400); ax2.set_ylim(-3, 105)
 ax2.set_xticks([10, 30, 100, 300]); ax2.set_xticklabels(["10", "30", "100", "300"])
-ax2.set_yticks([0, 33.3, 100]); ax2.set_yticklabels(["0", "33", "100"])
+ax2.xaxis.set_minor_locator(LogLocator(base=10, subs=tuple(np.arange(2, 10) / 10 * 10), numticks=20))
+ax2.xaxis.set_minor_formatter(NullFormatter())
+ax2.yaxis.set_major_locator(MultipleLocator(20))
+ax2.yaxis.set_minor_locator(MultipleLocator(10))
 ax2.set_xlabel("Concentration (µM)", fontsize=PT)
-ax2.set_ylabel("Composition (%)", fontsize=PT, labelpad=6)
+ax2.set_ylabel("Composition (%)", fontsize=PT, labelpad=8)
 ax2.spines[["top", "right"]].set_visible(False)
-ax2.tick_params(direction="out", length=6, width=1.6, pad=6)
+for sp in ("left", "bottom"):
+    ax2.spines[sp].set_linewidth(2.2)
+ax2.tick_params(which="major", direction="out", length=9, width=2.2, pad=8)
+ax2.tick_params(which="minor", direction="out", length=5, width=1.6)
 fig.text(0.60, 0.945, "(b)", fontsize=PT, weight="bold", color=INK)
 
 fig.savefig(OUT / "fig2_simplex_drift.png", dpi=400)
