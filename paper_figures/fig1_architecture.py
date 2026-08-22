@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parent
-W, H = 1380, 400
+W, H = 1450, 400
 YC = 200                                   # the row's optical centre
 
 INK, MUTE, LINE = "#12202e", "#7b8a9b", "#2b3b4d"
@@ -22,10 +22,11 @@ CFILL, CEDGE = "#e9f5ef", "#a4d5bf"        # concentration head
 s = []
 add = s.append
 
-def txt(x, y, t, size=10, fill=MUTE, anchor="middle", weight=400, ls=0, italic=False):
+def txt(x, y, t, size=10, fill=MUTE, anchor="middle", weight=400, ls=0, italic=False, tr=""):
     st = "font-style:italic" if italic else ""
+    tr = f' transform="{tr}"' if tr else ""
     add(f'<text x="{x}" y="{y}" font-size="{size}" fill="{fill}" text-anchor="{anchor}" '
-        f'font-weight="{weight}" letter-spacing="{ls}" style="{st}">{t}</text>')
+        f'font-weight="{weight}" letter-spacing="{ls}" style="{st}"{tr}>{t}</text>')
 
 def stack(x, h, w, fill, edge, n=3, d=3.5):
     """A layer drawn as n offset sheets — the 'many units' look."""
@@ -48,10 +49,11 @@ add(f'<rect width="{W}" height="{H}" fill="#ffffff"/>')
 # ---------------------------------------------------------------- a  SPECTRA
 txt(22, 40, "a", 14.5, INK, "start", 700)
 txt(39, 40, "SPECTRA", 11, INK, "start", 700, 1.2)
+txt(39, 55, "one pixel is one spectrum", 9.5, MUTE, "start", 400, 0, True)
 
-mx, my, ms = 26, 160, 64                                   # a map = a grid of pixels
+mx, my, ms = 28, 146, 96                                   # a map = a grid of pixels
 for i in (2, 1):
-    add(f'<rect x="{mx+i*5}" y="{my-i*5}" width="{ms}" height="{ms}" fill="#f4f8fd" '
+    add(f'<rect x="{mx+i*6}" y="{my-i*6}" width="{ms}" height="{ms}" fill="#f4f8fd" '
         f'stroke="{BEDGE}" stroke-width="1"/>')
 cell, alpha = ms / 6, [.15,.55,.30,.85,.20,.45, .60,.25,.75,.35,.90,.15, .30,.80,.40,.20,.55,.70,
                        .85,.35,.60,.45,.25,.30, .20,.65,.35,.75,.40,.55, .50,.30,.85,.25,.60,.20]
@@ -60,24 +62,41 @@ for r in range(6):
         add(f'<rect x="{mx+c*cell:.1f}" y="{my+r*cell:.1f}" width="{cell:.1f}" height="{cell:.1f}" '
             f'fill="{DQ}" fill-opacity="{alpha[r*6+c]}"/>')
 add(f'<rect x="{mx}" y="{my}" width="{ms}" height="{ms}" fill="none" stroke="{LINE}" stroke-width="1.2"/>')
-txt(mx + ms/2, my + ms + 20, "109 maps", 10.5, INK, "middle", 600)
-txt(mx + ms/2, my + ms + 33, "10×10–20×20 px", 9.5)
+hr, hc = 2, 4                                              # the pixel the spectrum comes from
+add(f'<rect x="{mx+hc*cell:.1f}" y="{my+hr*cell:.1f}" width="{cell:.1f}" height="{cell:.1f}" '
+    f'fill="none" stroke="{INK}" stroke-width="2"/>')
+txt(mx + ms/2, my + ms + 21, "109 maps", 10.5, INK, "middle", 600)
+txt(mx + ms/2, my + ms + 34, "10×10–20×20 px", 9.5)
 
-sx0, sx1, sy0, sy1 = 116, 258, 128, 200                    # one example spectrum
+sx0, sx1, sy0, sy1 = 176, 356, 128, 248                    # one example spectrum
 peaks = [(555, 1.00, 11), (720, .16, 14), (950, .34, 16), (1140, .40, 14), (1250, .30, 12),
          (1380, .78, 10), (1470, .34, 12), (1600, .20, 16), (2100, .05, 30), (2300, .04, 30)]
 pts = []
-for i in range(220):
-    wn = 500 + 2000 * i / 219
+for i in range(320):
+    wn = 500 + 2000 * i / 319
     y = 0.03 + 0.92 * sum(a * math.exp(-((wn - c) / w) ** 2 / 2) for c, a, w in peaks)
-    pts.append(f"{sx0 + (sx1-sx0)*i/219:.1f},{sy1 - (sy1-sy0)*min(y,1.05):.1f}")
-add(f'<polyline points="{" ".join(pts)}" fill="none" stroke="{INK}" stroke-width="1.1"/>')
-add(f'<line x1="{sx0}" y1="{sy1}" x2="{sx1}" y2="{sy1}" stroke="{MUTE}" stroke-width="0.9"/>')
-txt((sx0+sx1)/2, sy1 + 20, "1,290 channels", 10.5, INK, "middle", 600)
-txt((sx0+sx1)/2, sy1 + 33, "500–2500 cm⁻¹", 9.5)
+    pts.append(f"{sx0 + (sx1-sx0)*i/319:.1f},{sy1 - (sy1-sy0)*min(y,1.05):.1f}")
+add(f'<polyline points="{" ".join(pts)}" fill="none" stroke="{INK}" stroke-width="1.3" '
+    'stroke-linejoin="round"/>')
+add(f'<line x1="{sx0}" y1="{sy1}" x2="{sx1}" y2="{sy1}" stroke="{LINE}" stroke-width="1"/>')
+add(f'<line x1="{sx0}" y1="{sy1}" x2="{sx0}" y2="{sy0}" stroke="{LINE}" stroke-width="1"/>')
+for wn in (500, 1000, 1500, 2000, 2500):                   # x ticks
+    x = sx0 + (sx1 - sx0) * (wn - 500) / 2000
+    add(f'<line x1="{x:.1f}" y1="{sy1}" x2="{x:.1f}" y2="{sy1+4}" stroke="{LINE}" stroke-width="1"/>')
+    if wn in (500, 1500, 2500):
+        txt(x, sy1 + 15, f"{wn:,}", 9)
+iy = (sy0 + sy1) / 2 + 16
+txt(sx0 - 9, iy, "Intensity (a.u.)", 9, MUTE, "middle", 400, 0, False,
+    f"rotate(-90 {sx0-9} {iy})")
+txt((sx0 + sx1) / 2, sy1 + 30, "Raman shift (cm⁻¹)", 9.5)
+txt((sx0 + sx1) / 2, sy1 + 45, "1,290 channels", 10.5, INK, "middle", 600)
+
+px, py = mx + (hc + 1) * cell, my + (hr + 0.5) * cell      # pixel -> spectrum
+add(f'<path d="M{px:.1f} {py:.1f} H{px+22:.1f} V{sy0+16} H{sx0-9}" fill="none" '
+    f'stroke="{LINE}" stroke-width="1.2" marker-end="url(#ah)"/>')
 
 # ------------------------------------------------- preprocessing / NNLS gate
-gx, gw = 278, 78
+gx, gw = 372, 78
 txt(gx + gw/2, YC - 26, "log(1 + x)", 10, INK, "middle", 600)
 txt(gx + gw/2, YC - 13, "NNLS gate ≥ 0.15", 9.5)
 arrow(gx, YC, gx + gw, YC)
@@ -85,7 +104,7 @@ txt(gx + gw/2, YC + 20, "23,125 hit pixels", 9.5)
 txt(gx + gw/2, YC + 32, "the gate never becomes a feature", 9, MUTE, "middle", 400, 0, True)
 
 # ------------------------------------------------------- b  COMPOSITION HEAD
-bx = 380
+bx = 472
 txt(bx, 40, "b", 14.5, INK, "start", 700)
 txt(bx + 17, 40, "COMPOSITION HEAD", 11, INK, "start", 700, 1.2)
 txt(bx + 17, 55, "one prediction per pixel", 9.5, MUTE, "start", 400, 0, True)
@@ -119,7 +138,7 @@ txt(rx + cw/2, ry - 6, "mean pool → composition (%)", 10, INK, "middle", 600)
 txt(rx + cw/2, ry + 36, "map-level readout, not in the loss", 9, MUTE, "middle", 400, 0, True)
 
 # ----------------------------------------------------- c  CONCENTRATION HEAD
-cx0 = 812
+cx0 = 904
 txt(cx0, 40, "c", 14.5, INK, "start", 700)
 txt(cx0 + 15, 40, "CONCENTRATION HEAD", 11, INK, "start", 700, 1.2)
 txt(cx0 + 15, 55, "one prediction per map", 9.5, MUTE, "start", 400, 0, True)
