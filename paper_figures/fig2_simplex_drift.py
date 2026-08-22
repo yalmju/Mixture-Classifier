@@ -117,9 +117,10 @@ fig.text(0.012, 0.945, "(a)", fontsize=PT, weight="bold", color=INK)
 
 # ------------------------------------------- b  the three shares against 33.3 %
 ax2 = fig.add_subplot(gs[1])
-ax2.set_position([0.665, 0.17, 0.315, 0.71])
+ax2.set_position([0.665, 0.17, 0.333, 0.72])
+ax2.set_box_aspect(1)      # square panel
 ax2.axhline(100 / 3, ls=(0, (6, 4)), color=GUIDE, lw=2.0, zorder=1)
-ax2.text(48, 37.5, "1:1:1  (33.3 %)", fontsize=PT, color=INK, ha="center")
+ax2.text(370, 37.5, "1:1:1  (33.3 %)", fontsize=PT, color=INK, ha="right")
 for j, (lab, col, dy) in enumerate((("DQ", DQ, 16), ("TBZ", TBZ, -32), ("THI", THI, 14))):
     y = np.array([c[j] for _, c in DATA], float)
     ax2.plot(conc, y, color=col, lw=3.0, marker="o", ms=12, zorder=5, clip_on=False)
@@ -128,10 +129,8 @@ for j, (lab, col, dy) in enumerate((("DQ", DQ, 16), ("TBZ", TBZ, -32), ("THI", T
 
 ARR = dict(arrowstyle="-|>,head_width=0.32,head_length=0.6", lw=3.0, shrinkA=0, shrinkB=0)
 ax2.annotate("", xy=(110, 94), xytext=(110, 62), arrowprops=dict(color=THI, **ARR), zorder=6)
-ax2.annotate("", xy=(110, 6), xytext=(110, 38), arrowprops=dict(color=DQ, **ARR), zorder=6)
-ax2.annotate("", xy=(142, 6), xytext=(142, 38), arrowprops=dict(color=TBZ, **ARR), zorder=6)
-ax2.text(235, 72, "competitive\nadsorption", fontsize=PT, color=INK, ha="center",
-         va="center", linespacing=1.15)
+ax2.annotate("", xy=(110, 5), xytext=(110, 29), arrowprops=dict(color=DQ, **ARR), zorder=6)
+ax2.annotate("", xy=(142, 5), xytext=(142, 29), arrowprops=dict(color=TBZ, **ARR), zorder=6)
 
 ax2.set_xscale("log")
 ax2.set_xlim(8, 400); ax2.set_ylim(-3, 105)

@@ -37,10 +37,11 @@ maximum, which is why 100 and 300 µM sit *on* that ceiling rather than merely n
 
 Panel **a** carries an arrowhead along the drift (direction of rising concentration) and
 panel **b** the two halves of the competition — THI up, DQ and TBZ to zero, at the same
-step. The label reads "competitive adsorption"; note that this dataset alone cannot
-separate competitive displacement from a loss of enhancement (the same caveat recorded in
-`analysis/trio-260812-concentration/README.md`). If the paper needs the weaker claim,
-change that one string to "surface competition" or "response suppression".
+step. The arrows carry the claim on their own — no label in the plot — so the wording lives in
+the caption. Note that this dataset alone cannot separate competitive displacement from a
+loss of enhancement (the same caveat recorded in
+`analysis/trio-260812-concentration/README.md`), so "surface competition" or "response
+suppression" is the weaker phrasing if the paper needs it. Panel b is a square axes.
 
 **The numbers in `DATA` were read off the stacked-bar chart** (10 µM → 30/23/47,
 30 µM → 18/34/48, 100 and 300 µM → 0/0/100). Point `DATA` at the per-map export to
