@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1380 400" width="1380" height="400" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+<defs><marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 1 L9 5 L0 9 z" fill="#2b3b4d"/></marker></defs>
+<rect width="1380" height="400" fill="#ffffff"/>
+<text x="22" y="40" font-size="14.5" fill="#12202e" text-anchor="start" font-weight="700" letter-spacing="0" style="">a</text>
+<text x="39" y="40" font-size="11" fill="#12202e" text-anchor="start" font-weight="700" letter-spacing="1.2" style="">SPECTRA</text>
+<rect x="36" y="150" width="64" height="64" fill="#f4f8fd" stroke="#a9c6ec" stroke-width="1"/>
+<rect x="31" y="155" width="64" height="64" fill="#f4f8fd" stroke="#a9c6ec" stroke-width="1"/>
+<rect x="26.0" y="160.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.15"/>
+<rect x="36.7" y="160.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.55"/>
+<rect x="47.3" y="160.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.3"/>
+<rect x="58.0" y="160.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.85"/>
+<rect x="68.7" y="160.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.2"/>
+<rect x="79.3" y="160.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.45"/>
+<rect x="26.0" y="170.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.6"/>
+<rect x="36.7" y="170.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.25"/>
+<rect x="47.3" y="170.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.75"/>
+<rect x="58.0" y="170.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.35"/>
+<rect x="68.7" y="170.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.9"/>
+<rect x="79.3" y="170.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.15"/>
+<rect x="26.0" y="181.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.3"/>
+<rect x="36.7" y="181.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.8"/>
+<rect x="47.3" y="181.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.4"/>
+<rect x="58.0" y="181.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.2"/>
+<rect x="68.7" y="181.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.55"/>
+<rect x="79.3" y="181.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.7"/>
+<rect x="26.0" y="192.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.85"/>
+<rect x="36.7" y="192.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.35"/>
+<rect x="47.3" y="192.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.6"/>
+<rect x="58.0" y="192.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.45"/>
+<rect x="68.7" y="192.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.25"/>
+<rect x="79.3" y="192.0" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.3"/>
+<rect x="26.0" y="202.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.2"/>
+<rect x="36.7" y="202.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.65"/>
+<rect x="47.3" y="202.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.35"/>
+<rect x="58.0" y="202.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.75"/>
+<rect x="68.7" y="202.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.4"/>
+<rect x="79.3" y="202.7" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.55"/>
+<rect x="26.0" y="213.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.5"/>
+<rect x="36.7" y="213.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.3"/>
+<rect x="47.3" y="213.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.85"/>
+<rect x="58.0" y="213.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.25"/>
+<rect x="68.7" y="213.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.6"/>
+<rect x="79.3" y="213.3" width="10.7" height="10.7" fill="#1a73e8" fill-opacity="0.2"/>
+<rect x="26" y="160" width="64" height="64" fill="none" stroke="#2b3b4d" stroke-width="1.2"/>
+<text x="58.0" y="244" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="600" letter-spacing="0" style="">109 maps</text>
+<text x="58.0" y="257" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">10×10–20×20 px</text>
+<polyline points="116.0,197.8 116.6,197.8 117.3,197.6 117.9,195.0 118.6,181.7 119.2,151.6 119.9,131.6 120.5,150.2 121.2,180.6 121.8,194.7 122.5,197.6 123.1,197.8 123.8,197.8 124.4,197.8 125.1,197.8 125.7,197.8 126.4,197.8 127.0,197.8 127.7,197.8 128.3,197.8 129.0,197.5 129.6,196.5 130.3,193.7 130.9,189.6 131.6,187.3 132.2,189.0 132.9,193.0 133.5,196.1 134.2,197.4 134.8,197.8 135.5,197.8 136.1,197.8 136.7,197.8 137.4,197.8 138.0,197.8 138.7,197.8 139.3,197.8 140.0,197.8 140.6,197.8 141.3,197.8 141.9,197.8 142.6,197.8 143.2,197.8 143.9,197.8 144.5,197.6 145.2,196.7 145.8,193.9 146.5,188.1 147.1,180.6 147.8,175.6 148.4,177.2 149.1,184.0 149.7,191.1 150.4,195.5 151.0,197.2 151.7,197.7 152.3,197.8 153.0,197.8 153.6,197.8 154.3,197.8 154.9,197.8 155.6,197.8 156.2,197.8 156.8,197.8 157.5,197.8 158.1,197.7 158.8,197.1 159.4,194.3 160.1,187.3 160.7,177.2 161.4,171.4 162.0,175.7 162.7,185.7 163.3,193.5 164.0,196.8 164.6,197.7 165.3,197.8 165.9,197.8 166.6,197.7 167.2,196.7 167.9,192.5 168.5,184.1 169.2,178.1 169.8,181.9 170.5,190.7 171.1,196.0 171.8,197.6 172.4,197.8 173.1,197.8 173.7,197.8 174.4,197.8 175.0,197.8 175.7,197.8 176.3,197.4 176.9,192.8 177.6,173.9 178.2,148.9 178.9,154.3 179.5,181.0 180.2,195.0 180.8,197.6 181.5,197.8 182.1,197.7 182.8,196.7 183.4,192.4 184.1,183.2 184.7,175.6 185.4,179.0 186.0,188.9 186.7,195.5 187.3,197.5 188.0,197.8 188.6,197.8 189.3,197.8 189.9,197.8 190.6,197.7 191.2,197.3 191.9,195.9 192.5,192.9 193.2,188.4 193.8,185.0 194.5,185.2 195.1,188.9 195.8,193.2 196.4,196.1 197.1,197.4 197.7,197.8 198.3,197.8 199.0,197.8 199.6,197.8 200.3,197.8 200.9,197.8 201.6,197.8 202.2,197.8 202.9,197.8 203.5,197.8 204.2,197.8 204.8,197.8 205.5,197.8 206.1,197.8 206.8,197.8 207.4,197.8 208.1,197.8 208.7,197.8 209.4,197.8 210.0,197.8 210.7,197.8 211.3,197.8 212.0,197.8 212.6,197.8 213.3,197.8 213.9,197.8 214.6,197.8 215.2,197.8 215.9,197.8 216.5,197.8 217.2,197.8 217.8,197.8 218.4,197.8 219.1,197.8 219.7,197.8 220.4,197.8 221.0,197.8 221.7,197.8 222.3,197.8 223.0,197.8 223.6,197.8 224.3,197.7 224.9,197.5 225.6,197.3 226.2,196.9 226.9,196.4 227.5,195.8 228.2,195.2 228.8,194.7 229.5,194.5 230.1,194.6 230.8,195.0 231.4,195.5 232.1,196.1 232.7,196.7 233.4,197.1 234.0,197.5 234.7,197.6 235.3,197.7 236.0,197.8 236.6,197.8 237.3,197.8 237.9,197.8 238.5,197.7 239.2,197.6 239.8,197.4 240.5,197.0 241.1,196.6 241.8,196.1 242.4,195.7 243.1,195.3 243.7,195.2 244.4,195.3 245.0,195.6 245.7,196.0 246.3,196.5 247.0,197.0 247.6,197.3 248.3,197.5 248.9,197.7 249.6,197.8 250.2,197.8 250.9,197.8 251.5,197.8 252.2,197.8 252.8,197.8 253.5,197.8 254.1,197.8 254.8,197.8 255.4,197.8 256.1,197.8 256.7,197.8 257.4,197.8 258.0,197.8" fill="none" stroke="#12202e" stroke-width="1.1"/>
+<line x1="116" y1="200" x2="258" y2="200" stroke="#7b8a9b" stroke-width="0.9"/>
+<text x="187.0" y="220" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="600" letter-spacing="0" style="">1,290 channels</text>
+<text x="187.0" y="233" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">500–2500 cm⁻¹</text>
+<text x="317.0" y="174" font-size="10" fill="#12202e" text-anchor="middle" font-weight="600" letter-spacing="0" style="">log(1 + x)</text>
+<text x="317.0" y="187" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">NNLS gate ≥ 0.15</text>
+<line x1="278" y1="200" x2="356" y2="200" stroke="#2b3b4d" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="317.0" y="220" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">23,125 hit pixels</text>
+<text x="317.0" y="232" font-size="9" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="font-style:italic">the gate never becomes a feature</text>
+<text x="380" y="40" font-size="14.5" fill="#12202e" text-anchor="start" font-weight="700" letter-spacing="0" style="">b</text>
+<text x="397" y="40" font-size="11" fill="#12202e" text-anchor="start" font-weight="700" letter-spacing="1.2" style="">COMPOSITION HEAD</text>
+<text x="397" y="55" font-size="9.5" fill="#7b8a9b" text-anchor="start" font-weight="400" letter-spacing="0" style="font-style:italic">one prediction per pixel</text>
+<rect x="395.0" y="115.0" width="32" height="156" rx="3" fill="#eaf1fb" fill-opacity="0.5" stroke="#a9c6ec" stroke-width="1"/>
+<rect x="391.5" y="118.5" width="32" height="156" rx="3" fill="#eaf1fb" fill-opacity="0.5" stroke="#a9c6ec" stroke-width="1"/>
+<rect x="388" y="122.0" width="32" height="156" rx="3" fill="#eaf1fb" stroke="#a9c6ec" stroke-width="1.4"/>
+<text x="407.5" y="296" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="700" letter-spacing="0" style="">1,290</text>
+<rect x="471.0" y="136.0" width="28" height="114" rx="3" fill="#eaf1fb" fill-opacity="0.5" stroke="#a9c6ec" stroke-width="1"/>
+<rect x="467.5" y="139.5" width="28" height="114" rx="3" fill="#eaf1fb" fill-opacity="0.5" stroke="#a9c6ec" stroke-width="1"/>
+<rect x="464" y="143.0" width="28" height="114" rx="3" fill="#eaf1fb" stroke="#a9c6ec" stroke-width="1.4"/>
+<text x="481.5" y="296" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="700" letter-spacing="0" style="">256</text>
+<rect x="539.0" y="152.0" width="24" height="82" rx="3" fill="#eaf1fb" fill-opacity="0.5" stroke="#a9c6ec" stroke-width="1"/>
+<rect x="535.5" y="155.5" width="24" height="82" rx="3" fill="#eaf1fb" fill-opacity="0.5" stroke="#a9c6ec" stroke-width="1"/>
+<rect x="532" y="159.0" width="24" height="82" rx="3" fill="#eaf1fb" stroke="#a9c6ec" stroke-width="1.4"/>
+<text x="547.5" y="296" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="700" letter-spacing="0" style="">64</text>
+<line x1="424" y1="200" x2="460" y2="200" stroke="#2b3b4d" stroke-width="1.4" marker-end="url(#ah)"/>
+<line x1="496" y1="200" x2="528" y2="200" stroke="#2b3b4d" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="480" y="100" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">BN · ReLU · dropout 0.15</text>
+<rect x="596" y="154.0" width="38" height="92" rx="3" fill="#fff" stroke="#2b3b4d" stroke-width="1.2"/>
+<rect x="597" y="155.0" width="36" height="22.5" fill="#1a73e8"/>
+<text x="615.0" y="170.0" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="700" letter-spacing="0" style="">DQ</text>
+<rect x="597" y="177.5" width="36" height="22.5" fill="#27a679"/>
+<text x="615.0" y="192.5" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="700" letter-spacing="0" style="">TBZ</text>
+<rect x="597" y="200.0" width="36" height="22.5" fill="#e8467c"/>
+<text x="615.0" y="215.0" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="700" letter-spacing="0" style="">THI</text>
+<rect x="597" y="222.5" width="36" height="22.5" fill="#98a2b0"/>
+<text x="615.0" y="237.5" font-size="9" fill="#ffffff" text-anchor="middle" font-weight="700" letter-spacing="0" style="">BLK</text>
+<line x1="564" y1="200" x2="592" y2="200" stroke="#2b3b4d" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="615.0" y="296" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="700" letter-spacing="0" style="">softmax 4</text>
+<text x="500" y="322" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">L1 per pixel against the map's label ratio · minor components ×3</text>
+<path d="M615.0 150.0 V128 H656" fill="none" stroke="#2b3b4d" stroke-width="1.4" marker-end="url(#ah)"/>
+<rect x="662.0" y="118" width="35.4" height="20" fill="#1a73e8"/>
+<rect x="697.4" y="118" width="30.2" height="20" fill="#27a679"/>
+<rect x="727.5" y="118" width="34.3" height="20" fill="#e8467c"/>
+<rect x="761.8" y="118" width="4.2" height="20" fill="#98a2b0"/>
+<rect x="662" y="118" width="104" height="20" fill="none" stroke="#2b3b4d" stroke-width="1"/>
+<text x="714.0" y="110" font-size="10" fill="#12202e" text-anchor="middle" font-weight="600" letter-spacing="0" style="">mean pool → composition (%)</text>
+<text x="714.0" y="152" font-size="9" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="font-style:italic">map-level readout, not in the loss</text>
+<text x="812" y="40" font-size="14.5" fill="#12202e" text-anchor="start" font-weight="700" letter-spacing="0" style="">c</text>
+<text x="827" y="40" font-size="11" fill="#12202e" text-anchor="start" font-weight="700" letter-spacing="1.2" style="">CONCENTRATION HEAD</text>
+<text x="827" y="55" font-size="9.5" fill="#7b8a9b" text-anchor="start" font-weight="400" letter-spacing="0" style="font-style:italic">one prediction per map</text>
+<line x1="640" y1="200" x2="816" y2="200" stroke="#2b3b4d" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="727.0" y="187" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">the 3 compound ratios, renormalised</text>
+<rect x="822" y="132.0" width="28" height="136" rx="3" fill="#e9f5ef" stroke="#a4d5bf" stroke-width="1.4"/>
+<line x1="822" y1="157.5" x2="850" y2="157.5" stroke="#a4d5bf" stroke-width="1"/>
+<line x1="822" y1="166.0" x2="850" y2="166.0" stroke="#a4d5bf" stroke-width="1"/>
+<line x1="822" y1="242.5" x2="850" y2="242.5" stroke="#a4d5bf" stroke-width="1"/>
+<text x="836.0" y="296" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="700" letter-spacing="0" style="">16-D context</text>
+<text x="818" y="310" font-size="9.5" fill="#7b8a9b" text-anchor="start" font-weight="400" letter-spacing="0" style="">3 ratios · 1 intensity · 9 + 3 map quantiles (P10/50/90)</text>
+<rect x="921.0" y="137.0" width="26" height="112" rx="3" fill="#e9f5ef" fill-opacity="0.5" stroke="#a4d5bf" stroke-width="1"/>
+<rect x="917.5" y="140.5" width="26" height="112" rx="3" fill="#e9f5ef" fill-opacity="0.5" stroke="#a4d5bf" stroke-width="1"/>
+<rect x="914" y="144.0" width="26" height="112" rx="3" fill="#e9f5ef" stroke="#a4d5bf" stroke-width="1.4"/>
+<text x="930.5" y="296" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="700" letter-spacing="0" style="">128</text>
+<rect x="991.0" y="154.0" width="22" height="78" rx="3" fill="#e9f5ef" fill-opacity="0.5" stroke="#a4d5bf" stroke-width="1"/>
+<rect x="987.5" y="157.5" width="22" height="78" rx="3" fill="#e9f5ef" fill-opacity="0.5" stroke="#a4d5bf" stroke-width="1"/>
+<rect x="984" y="161.0" width="22" height="78" rx="3" fill="#e9f5ef" stroke="#a4d5bf" stroke-width="1.4"/>
+<text x="998" y="296" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="700" letter-spacing="0" style="">32</text>
+<line x1="856" y1="200" x2="910" y2="200" stroke="#2b3b4d" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="880" y="187" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">z-score</text>
+<line x1="948" y1="200" x2="980" y2="200" stroke="#2b3b4d" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="960" y="122" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">BN · ReLU · dropout 0.25</text>
+<rect x="1036" y="165.0" width="30" height="70" fill="#1a73e8"/>
+<rect x="1069" y="165.0" width="30" height="70" fill="#27a679"/>
+<rect x="1102" y="165.0" width="30" height="70" fill="#e8467c"/>
+<line x1="1010" y1="200" x2="1032" y2="200" stroke="#2b3b4d" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="1084.0" y="296" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="700" letter-spacing="0" style="">log₁₀(µM) × 3</text>
+<text x="1084.0" y="322" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">smooth-L1 on the per-map median</text>
+<line x1="1138" y1="200" x2="1198" y2="200" stroke="#2b3b4d" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="1168.0" y="187" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">median pool</text>
+<rect x="1208" y="183.2" width="18" height="46.8" fill="#1a73e8"/>
+<text x="1217" y="243" font-size="9" fill="#12202e" text-anchor="middle" font-weight="600" letter-spacing="0" style="">DQ</text>
+<rect x="1233" y="198.8" width="18" height="31.2" fill="#27a679"/>
+<text x="1242" y="243" font-size="9" fill="#12202e" text-anchor="middle" font-weight="600" letter-spacing="0" style="">TBZ</text>
+<rect x="1258" y="170.0" width="18" height="60.0" fill="#e8467c"/>
+<text x="1267" y="243" font-size="9" fill="#12202e" text-anchor="middle" font-weight="600" letter-spacing="0" style="">THI</text>
+<line x1="1204" y1="230" x2="1283" y2="230" stroke="#7b8a9b" stroke-width="0.9"/>
+<text x="1242" y="154" font-size="10" fill="#12202e" text-anchor="middle" font-weight="600" letter-spacing="0" style="">µM per map</text>
+<line x1="24" y1="356" x2="1356" y2="356" stroke="#d7dee6" stroke-width="1"/>
+<text x="690.0" y="374" font-size="10.5" fill="#12202e" text-anchor="middle" font-weight="600" letter-spacing="0" style="">Leave-one-condition-out · 71 distinct compositions, the model refit once for each</text>
+<text x="690.0" y="388" font-size="9.5" fill="#7b8a9b" text-anchor="middle" font-weight="400" letter-spacing="0" style="">every map of a held-out composition leaves together, so a repeat measurement is never scored against its own twin</text>
+</svg>
