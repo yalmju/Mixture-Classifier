@@ -7,7 +7,8 @@ figures build anywhere.
 | figure | script | what it says |
 |---|---|---|
 | `fig1_architecture` | `fig1_architecture.py` | the two-head pipeline as one horizontal row: spectra → composition head → concentration head |
-| `fig2_simplex_drift` | `fig2_simplex_drift.py` | where the measured composition lands relative to the 1:1:1 truth line, in DQ/TBZ/THI space |
+| `fig2a_simplex` | `fig2a_simplex.py` | where the measured composition lands relative to the 1:1:1 truth line, in DQ/TBZ/THI space |
+| `fig2b_competition` | `fig2b_competition.py` | the same story as three shares against 33.3 %, one square panel |
 
 ## fig1 — architecture
 
@@ -26,18 +27,19 @@ The numbers on it come from `dl_model.py`: 1,290 → 256 → 64 → softmax 4 (B
 the concentration head, and the 16-D context = 3 ratios + 1 log intensity + 9 ratio
 quantiles + 3 intensity quantiles (P10/50/90 over the pixel's own map).
 
-## fig2 — the 1:1:1 truth line
+## fig2a / fig2b — the 1:1:1 truth line
 
 A composition is a point in DQ/TBZ/THI space; the dispensed 1:1:1 truth is the *ray*
 x = y = z. Because every composition is normalised to sum 1, all of them land on the
 simplex plane and project onto that ray at the same place — the centroid — so the dotted
-drop-line in panel **a** is exactly the perpendicular distance to the truth line, and the
-angle in panel **b** is what it subtends. 54.7° (one pure compound) is the geometric
-maximum, which is why 100 and 300 µM sit *on* that ceiling rather than merely near it.
+drop-line in `fig2a` is exactly the perpendicular distance to the truth line. 54.7°
+(one pure compound) is the geometric maximum, which is why 100 and 300 µM sit *on* that
+ceiling rather than merely near it; the script prints the angles and distances when it runs.
 
-Panel **a** carries an arrowhead along the drift (direction of rising concentration) and
-panel **b** the two halves of the competition — THI up, DQ and TBZ to zero, at the same
-step. The arrows carry the claim on their own — no label in the plot — so the wording lives in
+`fig2a` carries an arrowhead along the drift (direction of rising concentration) and
+`fig2b` the two halves of the competition — THI up, DQ and TBZ to zero, at the same step.
+`fig2b` is a square axes with the four concentrations as four evenly spaced categories,
+not a log axis. The arrows carry the claim on their own — no label in the plot — so the wording lives in
 the caption. Note that this dataset alone cannot separate competitive displacement from a
 loss of enhancement (the same caveat recorded in
 `analysis/trio-260812-concentration/README.md`), so "surface competition" or "response
