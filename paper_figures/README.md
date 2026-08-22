@@ -35,6 +35,13 @@ drop-line in panel **a** is exactly the perpendicular distance to the truth line
 angle in panel **b** is what it subtends. 54.7° (one pure compound) is the geometric
 maximum, which is why 100 and 300 µM sit *on* that ceiling rather than merely near it.
 
+Panel **a** carries an arrowhead along the drift (direction of rising concentration) and
+panel **b** the two halves of the competition — THI up, DQ and TBZ to zero, at the same
+step. The label reads "competitive adsorption"; note that this dataset alone cannot
+separate competitive displacement from a loss of enhancement (the same caveat recorded in
+`analysis/trio-260812-concentration/README.md`). If the paper needs the weaker claim,
+change that one string to "surface competition" or "response suppression".
+
 **The numbers in `DATA` were read off the stacked-bar chart** (10 µM → 30/23/47,
 30 µM → 18/34/48, 100 and 300 µM → 0/0/100). Point `DATA` at the per-map export to
 regenerate the figure from source values.

@@ -19,7 +19,9 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import FancyArrowPatch
 from matplotlib.ticker import LogLocator, MultipleLocator, NullFormatter
+from mpl_toolkits.mplot3d.proj3d import proj_transform
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 OUT = Path(__file__).resolve().parent
@@ -37,6 +39,20 @@ plt.rcParams.update({
     "xtick.color": INK, "ytick.color": INK, "xtick.labelsize": PT, "ytick.labelsize": PT,
     "xtick.major.width": 1.6, "ytick.major.width": 1.6, "savefig.facecolor": "white",
 })
+
+class Arrow3D(FancyArrowPatch):
+    """A real filled arrowhead in 3-D — mplot3d's quiver head vanishes at this scale."""
+
+    def __init__(self, xyz0, xyz1, **kw):
+        super().__init__((0, 0), (0, 0), **kw)
+        self._ends = (np.asarray(xyz0, float), np.asarray(xyz1, float))
+
+    def do_3d_projection(self, renderer=None):
+        a, b = self._ends
+        xs, ys, zs = proj_transform(*np.column_stack([a, b]), self.axes.M)
+        self.set_positions((xs[0], ys[0]), (xs[1], ys[1]))
+        return float(np.min(zs))
+
 
 P = np.array([np.array(c, float) / sum(c) for _, c in DATA])
 conc = np.array([c for c, _ in DATA], float)
@@ -82,6 +98,10 @@ ax.text(0.98, 0.98, 0.94, "1:1:1 truth line", color=INK, fontsize=PT, weight="bo
 for q in Q:                                              # perpendicular offsets
     ax.plot(*np.array([truth, q]).T, ls=":", color=INK, lw=2.0, zorder=8)
 ax.plot(Q[:, 0], Q[:, 1], Q[:, 2], color=THI, lw=3.0, zorder=9)
+seg = Q[2] - Q[1]                                        # where the drift is heading
+ax.add_artist(Arrow3D(Q[1] + 0.10 * seg, Q[1] + 0.72 * seg, color=THI, lw=3.0,
+                      arrowstyle="-|>,head_width=0.34,head_length=0.68",
+                      mutation_scale=26, shrinkA=0, shrinkB=0, zorder=11))
 ax.scatter(Q[:, 0], Q[:, 1], Q[:, 2], s=170, color=THI, depthshade=False, zorder=10)
 
 LAB = {10: ("10 µM", (-0.06, 0.18, -0.03), "left"),
@@ -99,12 +119,19 @@ fig.text(0.012, 0.945, "(a)", fontsize=PT, weight="bold", color=INK)
 ax2 = fig.add_subplot(gs[1])
 ax2.set_position([0.665, 0.17, 0.315, 0.71])
 ax2.axhline(100 / 3, ls=(0, (6, 4)), color=GUIDE, lw=2.0, zorder=1)
-ax2.text(360, 37, "1:1:1  (33.3 %)", fontsize=PT, color=INK, ha="right")
+ax2.text(48, 37.5, "1:1:1  (33.3 %)", fontsize=PT, color=INK, ha="center")
 for j, (lab, col, dy) in enumerate((("DQ", DQ, 16), ("TBZ", TBZ, -32), ("THI", THI, 14))):
     y = np.array([c[j] for _, c in DATA], float)
     ax2.plot(conc, y, color=col, lw=3.0, marker="o", ms=12, zorder=5, clip_on=False)
     ax2.annotate(lab, (conc[0], y[0]), textcoords="offset points", xytext=(14, dy),
                  ha="left", fontsize=PT, weight="bold", color=col)
+
+ARR = dict(arrowstyle="-|>,head_width=0.32,head_length=0.6", lw=3.0, shrinkA=0, shrinkB=0)
+ax2.annotate("", xy=(110, 94), xytext=(110, 62), arrowprops=dict(color=THI, **ARR), zorder=6)
+ax2.annotate("", xy=(110, 6), xytext=(110, 38), arrowprops=dict(color=DQ, **ARR), zorder=6)
+ax2.annotate("", xy=(142, 6), xytext=(142, 38), arrowprops=dict(color=TBZ, **ARR), zorder=6)
+ax2.text(235, 72, "competitive\nadsorption", fontsize=PT, color=INK, ha="center",
+         va="center", linespacing=1.15)
 
 ax2.set_xscale("log")
 ax2.set_xlim(8, 400); ax2.set_ylim(-3, 105)
