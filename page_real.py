@@ -371,6 +371,19 @@ class RealDataPage(QWidget):
         self.true_edit.editingFinished.connect(
             lambda: self._plot_conc(self._res) if self._res is not None else None)
         vrow.addWidget(_tl); vrow.addWidget(self.true_edit)
+        _ktl = QLabel("known total µM — blank = off"); _ktl.setObjectName("field")
+        self.total_edit = QLineEdit(); self.total_edit.setFixedWidth(64)
+        self.total_edit.setPlaceholderText("60")
+        self.total_edit.setToolTip(
+            "sample-prep metadata: the KNOWN summed analyte concentration. When set, "
+            "the panel adds the known-total reconstruction (composition × total, "
+            "held-out ≤100 µM: within-2× 78→91%) and caps the spectrum-only µM at "
+            "the total. Both are CONSTRAINED numbers — the improvement comes from "
+            "the added information, not the model — and the export flags them so. "
+            "Unknown field samples: leave blank, spectrum-only reporting stands.")
+        self.total_edit.editingFinished.connect(
+            lambda: self._plot_conc(self._res) if self._res is not None else None)
+        vrow.addWidget(_ktl); vrow.addWidget(self.total_edit)
         # the reportable window is NOT typed here — the model file carries it
         # (validated_ranges_M: levels recovered within 2-fold on a held-out split),
         # and the summary shows which window it used
@@ -1156,6 +1169,35 @@ class RealDataPage(QWidget):
         if self._res is not None:
             self._apply(self._res)              # recompute ratio/dominant + redraw
 
+    def _known_total_uM(self):
+        """User-declared summed analyte concentration (µM), or None when blank.
+        Sample-prep metadata, NOT read from any label file — real unknowns leave it
+        blank and the spectrum-only numbers stand."""
+        txt = self.total_edit.text().strip() if hasattr(self, "total_edit") else ""
+        if not txt:
+            return None
+        try:
+            v = float(txt.replace(",", ""))
+        except ValueError:
+            return None
+        return v if v > 0 else None
+
+    def _known_total_vec(self, r):
+        """Known-total reconstruction Ci = pi × Ctotal over the non-bg substances,
+        using the SAME pooled composition the pie reports. None when no total set."""
+        total = self._known_total_uM()
+        if total is None:
+            return None
+        ratio = self._ratio_nb(r)
+        sel = self._hit(r)
+        if not sel.any():
+            sel = np.ones(r.n_pixels, bool)
+        comp_mean = np.nanmean(ratio[sel], axis=0)
+        s = float(np.nansum(comp_mean))
+        if not np.isfinite(s) or s <= 0:
+            return None
+        return comp_mean / s * total
+
     def _rf_vec(self, r):
         """Response-factor vector aligned to the non-bg substances, or None when the
         solution-ratio correction is off / unavailable."""
@@ -1702,10 +1744,23 @@ class RealDataPage(QWidget):
         if tv is not None:                                 # red tick = dispensed truth
             axb.plot(xs, tv, ls="none", marker="_", ms=16, mew=1.8, color=RED,
                      zorder=5)
+        # known-total reconstruction: Ci = pi × Ctotal from the SAME pooled
+        # composition the pie reports. A CONSTRAINED number (the total is declared
+        # sample-prep metadata) — held-out it lifts within-2× from 78% to 91% on
+        # ≤100 µM maps, but the lift comes from the added information, not the model.
+        kt = self._known_total_vec(r)
+        total_uM = self._known_total_uM()
+        if kt is not None:                                 # blue tick = known-total
+            axb.plot(xs, kt, ls="none", marker="_", ms=16, mew=1.8, color=BLUE,
+                     zorder=5)
         for i in np.where(ok)[0]:
             lab = f"{med[i]:.1f} µM\nn={valid_n[i]}/{total_n[i]}"
             if lo_um is not None and np.isfinite(med[i]) and med[i] < lo_um[i]:
                 lab = f"< {lo_um[i]:g} µM\nn={valid_n[i]}/{total_n[i]}"
+            if kt is not None:
+                lab += f"\nKT {kt[i]:.1f} µM"
+                if total_uM is not None and np.isfinite(med[i]) and med[i] > total_uM:
+                    lab += f" · capped {total_uM:g}"
             if vol > 0:                                    # µM × µL = pmol
                 lab += f"\n≈{med[i] * vol:.0f} pmol"
             n_above = total_n[i] - valid_n[i]
@@ -1729,7 +1784,9 @@ class RealDataPage(QWidget):
               if tv is not None else nb)
         axb.set_xticklabels(xt, fontsize=7)
         axb.set_title(f"Pixel µM distribution · maps share 0–{vmax:.1f} µM"
-                      + (" · red = filename truth" if tv is not None else ""),
+                      + (" · red = filename truth" if tv is not None else "")
+                      + (" · blue = known-total (comp × total, constrained)"
+                         if kt is not None else ""),
                       fontsize=7)
         axb.set_ylabel("µM per pixel", fontsize=7)
         axb.tick_params(labelsize=8)
@@ -2034,12 +2091,17 @@ class RealDataPage(QWidget):
                 except ValueError:
                     _tv = None
             _vol = float(self.vol_spin.value()) if hasattr(self, "vol_spin") else 0.0
+            # known-total columns are CONSTRAINED numbers (declared total × pooled
+            # composition; cap at the total) — flagged so no reader mistakes them
+            # for the spectrum-only prediction.
+            _kt = self._known_total_vec(r)
+            _tot = self._known_total_uM()
             _sr = []
             for i, nm in enumerate(nb):
                 v = _um[_hit, i] if _hit.any() else _um[:, i]
                 v = v[np.isfinite(v) & (v > 0)]
                 if not v.size:
-                    _sr.append([nm, "0", "", "", "", "", "", ""])
+                    _sr.append([nm, "0", "", "", "", "", "", "", "", "", ""])
                     continue
                 med = float(np.median(v))
                 _sr.append([nm, str(int(v.size)), f"{med:.4f}",
@@ -2047,10 +2109,15 @@ class RealDataPage(QWidget):
                             f"{float(np.quantile(v, 0.75)):.4f}",
                             f"{_tv[i]:g}" if _tv else "",
                             f"{100 * med / _tv[i]:.1f}" if _tv else "",
-                            f"{med * _vol:.2f}" if _vol > 0 else ""])
+                            f"{med * _vol:.2f}" if _vol > 0 else "",
+                            f"{_kt[i]:.4f}" if _kt is not None else "",
+                            f"{min(med, _tot):.4f}" if _tot is not None else "",
+                            ("known-total capped" if _tot is not None and med > _tot
+                             else "known-total" if _tot is not None else "")])
             write_csv(os.path.join(d, "um_summary.csv"),
                       ["substance", "n_hit_px", "median_uM", "q1_uM", "q3_uM",
-                       "true_uM", "recovery_pct", "apparent_amount_pmol"], _sr)
+                       "true_uM", "recovery_pct", "apparent_amount_pmol",
+                       "known_total_uM", "median_capped_uM", "constraint_flag"], _sr)
             ncsv += 1
         # figures export WITHOUT the selection ring — the clicked-pixel highlight
         # is a working aid, not figure content. Redraw clean, save, then restore.
