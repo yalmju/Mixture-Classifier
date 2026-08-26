@@ -607,13 +607,21 @@ class QuantifyPage(QWidget):
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
 
-        ctl = QHBoxLayout(); ctl.setSpacing(10)
+        content = QHBoxLayout(); content.setSpacing(14)
+        left_body = QWidget(); left = QVBoxLayout(left_body)
+        left.setContentsMargins(0, 0, 6, 0); left.setSpacing(8)
+        left_body.setFixedWidth(320)
+        content.addWidget(left_body)
+        right_body = QWidget(); right = QVBoxLayout(right_body)
+        right.setContentsMargins(0, 0, 0, 0); right.setSpacing(10)
+        content.addWidget(right_body, 1)
+        root.addLayout(content, 1)
         self.sp_peak = self._spin(QSpinBox(), 0, 4000, 0, "peak cm⁻¹ (0=whole)")
         self.sp_peak.itemAt(1).widget().setSingleStep(10)
         self.sp_peak.itemAt(1).widget().setToolTip(
             "0 = signal is the whole-fingerprint projection (robust). Set a "
             "wavenumber to calibrate on that single marker band's intensity instead.")
-        ctl.addLayout(self.sp_peak)
+        left.addLayout(self.sp_peak)
         frcol = QVBoxLayout(); frcol.setSpacing(2)
         _fr = QLabel("fit window µM (0–0 = all)"); _fr.setObjectName("field")
         frcol.addWidget(_fr)
@@ -629,14 +637,14 @@ class QuantifyPage(QWidget):
                             "plot; the fitted line spans the window. LOD/LOQ keep "
                             "using the full series.")
             _frrow.addWidget(_spw)
-        frcol.addLayout(_frrow); ctl.addLayout(frcol)
+        frcol.addLayout(_frrow); left.addLayout(frcol)
         lcol = QVBoxLayout(); lcol.setSpacing(2)
         _ll = QLabel("fit"); _ll.setObjectName("field"); lcol.addWidget(_ll)
         self.chk_linear = QCheckBox("linear")
         self.chk_linear.setToolTip("fit a straight line B = m·C + b instead of the "
                                    "Langmuir isotherm (LOD/LOQ use a linear low-range "
                                    "fit either way)")
-        lcol.addWidget(self.chk_linear); ctl.addLayout(lcol)
+        lcol.addWidget(self.chk_linear); left.addLayout(lcol)
         lbcol = QVBoxLayout(); lbcol.setSpacing(2)
         _lb = QLabel("peak height"); _lb.setObjectName("field"); lbcol.addWidget(_lb)
         self.chk_localbase = QCheckBox("above local base")
@@ -646,16 +654,16 @@ class QuantifyPage(QWidget):
             "constant background riding on the band (DQ@1572 sat ~3000 counts high "
             "at 0.1 µM) does not bury the low-concentration slope. Untick for the "
             "raw window maximum.")
-        lbcol.addWidget(self.chk_localbase); ctl.addLayout(lbcol)
+        lbcol.addWidget(self.chk_localbase); left.addLayout(lbcol)
         bcol = QVBoxLayout(); bcol.setSpacing(2)
         _bl = QLabel("baseline"); _bl.setObjectName("field"); bcol.addWidget(_bl)
         self.chk_baselined = QCheckBox("already corrected")
         self.chk_baselined.setToolTip("your CSVs are already baseline-corrected — skip "
                                       "the app's internal ALS baseline so it isn't "
                                       "applied twice")
-        bcol.addWidget(self.chk_baselined); ctl.addLayout(bcol)
+        bcol.addWidget(self.chk_baselined); left.addLayout(bcol)
         self.src = QLabel("no calibration loaded"); self.src.setObjectName("field")
-        ctl.addWidget(self.src); ctl.addStretch(1)
+        self.src.setWordWrap(True); left.addWidget(self.src)
         fold_b = QPushButton("Load conc. folder…"); fold_b.setObjectName("ghost")
         fold_b.clicked.connect(self._load_cal_folder)
         fold_b.setToolTip("A folder of per-concentration map CSVs (1nM/10uM/1mM…) "
@@ -668,12 +676,15 @@ class QuantifyPage(QWidget):
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Fit isotherm"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
-        ctl.addWidget(fold_b); ctl.addWidget(load_b); ctl.addWidget(clr_b)
-        ctl.addWidget(exp_b); ctl.addWidget(self.btn)
-        root.addLayout(ctl)
+        left.addWidget(fold_b); left.addWidget(load_b)
+        file_row = QHBoxLayout(); file_row.setSpacing(6)
+        file_row.addWidget(clr_b)
+        file_row.addWidget(exp_b, 1)
+        left.addLayout(file_row); left.addWidget(self.btn)
+
 
         # per-compound marker peaks — auto-fills from 'auto peak', fully editable
-        ctl2 = QHBoxLayout(); ctl2.setSpacing(8)
+        ctl2 = QVBoxLayout(); ctl2.setSpacing(5)
         pl = QLabel("per-compound peaks (cm⁻¹):"); pl.setObjectName("field")
         self.peaks_txt = QLineEdit()
         self.peaks_txt.setPlaceholderText("e.g.  DQ:610, TBZ:1000, THI:1370   "
@@ -695,16 +706,17 @@ class QuantifyPage(QWidget):
         pick_b.setToolTip("open the learned calibration spectra and click each "
                           "compound's peak instead of typing it")
         pick_b.clicked.connect(self._pick_peaks)
-        ctl2.addWidget(pl); ctl2.addWidget(self.peaks_txt, 1)
+        ctl2.addWidget(pl); ctl2.addWidget(self.peaks_txt)
         ctl2.addWidget(vip_b); ctl2.addWidget(best_b); ctl2.addWidget(pick_b)
-        root.addLayout(ctl2)
+        left.addLayout(ctl2)
+        left.addStretch(1)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
         self.k_ncmp = Kpi("compounds"); self.k_npts = Kpi("points / compound")
         self.k_r2 = Kpi("mean fit R²"); self.k_range = Kpi("concentration range")
         for k in (self.k_ncmp, self.k_npts, self.k_r2, self.k_range):
             kpis.addWidget(k)
-        root.addLayout(kpis)
+        right.addLayout(kpis)
 
         grid = QGridLayout(); grid.setSpacing(12)
         self.c_iso = Canvas()
@@ -718,7 +730,7 @@ class QuantifyPage(QWidget):
         rlay.addWidget(self.readout); rlay.addStretch(1)
         grid.addWidget(rcard, 0, 1)
         grid.setColumnStretch(0, 3); grid.setColumnStretch(1, 2); grid.setRowStretch(0, 1)
-        root.addLayout(grid, 1)
+        right.addLayout(grid, 1)
         self.c_iso.placeholder("Load a dilution series, then Calibrate")
 
     def _spin(self, spin, lo, hi, val, label):

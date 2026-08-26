@@ -73,8 +73,68 @@ def _cnn(n_feat, n_comp):
     return C()
 
 
+def _fit_torch_bag(method, Xtr, Ytr, train_maps, Xte, *, pre=None, epochs=350,
+                   seed=0, predict_batch=256, pixels_per_map_step=32,
+                   return_net=False, progress=None):
+    """Train a spectrum head with map-pooled supervision and predict test pixels."""
+    import torch
+    from torch.utils.data import TensorDataset, DataLoader
+    from dl_quantify import _spec_net
+    Xtr = np.asarray(Xtr, np.float32); Ytr = np.asarray(Ytr, np.float32)
+    Xte = np.atleast_2d(np.asarray(Xte, np.float32)); maps = np.asarray(train_maps, object)
+    n_comp = Ytr.shape[1]; torch.manual_seed(int(seed))
+    net = _cnn(Xtr.shape[1], n_comp) if method == "cnn" else _spec_net(Xtr.shape[1], n_comp)
+
+    def weighted_l1(pred, target):
+        w = 1.0 + 2.0 * (1.0 - target)
+        return (w * (pred - target).abs()).sum(1).mean()
+
+    if pre is not None and len(pre[0]):
+        xp = torch.tensor(np.asarray(pre[0], np.float32)); yp = torch.tensor(np.asarray(pre[1], np.float32))
+        op = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=1e-4)
+        dl = DataLoader(TensorDataset(xp, yp), batch_size=256, shuffle=True)
+        for _ in range(25):
+            net.train()
+            for xb, yb in dl:
+                op.zero_grad(); weighted_l1(torch.softmax(net(xb), 1), yb).backward(); op.step()
+
+    by_map = [np.where(maps == mp)[0] for mp in dict.fromkeys(maps.tolist())]
+    rng = np.random.default_rng(int(seed)); op = torch.optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-3)
+    map_batch = 1 if method == "cnn" else 4
+    for _ep in range(int(epochs)):
+        order = rng.permutation(len(by_map)); net.train()
+        for start in range(0, len(order), map_batch):
+            groups = []
+            for i in order[start:start + map_batch]:
+                g = by_map[i]
+                # Rotate through a large map instead of forwarding all 400 spectra at
+                # every gradient step. Across epochs every pixel participates; held-out
+                # scoring below still pools every available test pixel.
+                if len(g) > int(pixels_per_map_step):
+                    g = rng.choice(g, size=int(pixels_per_map_step), replace=False)
+                groups.append(g)
+            idx = np.concatenate(groups)
+            prob = torch.softmax(net(torch.tensor(Xtr[idx])), 1); pooled = []; targets = []; pos = 0
+            for g in groups:
+                pooled.append(prob[pos:pos + len(g)].mean(0)); targets.append(Ytr[g[0]]); pos += len(g)
+            pm = torch.stack(pooled); yt = torch.tensor(np.asarray(targets, np.float32))
+            loss = weighted_l1(pm, yt) + 0.05 * weighted_l1(prob, torch.tensor(Ytr[idx]))
+            op.zero_grad(); loss.backward(); op.step()
+        if progress and (_ep % 10 == 0 or _ep == int(epochs) - 1):
+            progress(f"map-pooled epoch {_ep + 1}/{int(epochs)}  "
+                     f"loss {float(loss.detach()):.3f}")
+
+    net.eval(); out = []; bs = 64 if method == "cnn" else int(predict_batch)
+    with torch.no_grad():
+        for start in range(0, len(Xte), bs):
+            out.append(torch.softmax(net(torch.tensor(Xte[start:start + bs])), 1).numpy())
+    result = np.vstack(out)
+    return (result, net) if return_net else result
+
+
 def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
-                 n_components=8, n_trees=300, P_ref=None, rf_max_features=None):
+                 n_components=8, n_trees=300, P_ref=None, rf_max_features=None,
+                 band_mask=None, mcr_iter=6, train_maps=None):
     """Fit ``method`` on (Xtr, Ytr) and return composition predictions for Xte, rows
     summing to 1. Shared by the full-data fit and each leave-one-out fold so both use
     exactly the same estimator."""
@@ -83,6 +143,56 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
         from dl_quantify import surface_composition
         raw = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
         p = surface_composition(_composition_features(raw, "legacy_l2"), P_ref)
+    elif method == "band":                     # VIP-band NNLS: no training either — the
+        # same NNLS, but fit only on each compound's least-cross-talk marker windows
+        # (``band_mask``, computed once by the caller from the pure templates). This is
+        # the Validate tab's VIP-band decomposition, scored on the benchmark's terms.
+        from dl_quantify import surface_composition
+        raw = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        if band_mask is not None and np.asarray(band_mask, bool).any():
+            bm = np.asarray(band_mask, bool)
+            raw = raw[:, bm]
+            Pm = np.asarray(P_ref, float)[:, bm]
+            Pm = Pm / (np.linalg.norm(Pm, axis=1, keepdims=True) + 1e-12)
+        else:                                  # no usable bands → plain NNLS, honestly
+            Pm = P_ref
+        p = surface_composition(_composition_features(raw, "legacy_l2"), Pm)
+    elif method == "null":
+        # The floor: always answer with the mean composition of the TRAINING conditions.
+        # A method that cannot beat this has learned nothing from the spectrum. Honest by
+        # construction here — Ytr already excludes the held-out condition.
+        if train_maps is None:
+            centre = np.asarray(Ytr, float).mean(axis=0, keepdims=True)
+        else:
+            tm = np.asarray(train_maps, object)
+            centre = np.asarray([Ytr[np.where(tm == mk)[0][0]]
+                                 for mk in dict.fromkeys(tm.tolist())], float).mean(
+                                     axis=0, keepdims=True)
+        p = np.repeat(centre, len(np.atleast_2d(Xte)), axis=0)
+    elif method == "nnls_rf":
+        # NNLS, then ONE response factor per substance (dl_quantify.fit_response_factors),
+        # fitted on the training conditions only. The control for the paper's claim: if
+        # three numbers close most of the NNLS-to-learned gap, that gap was response
+        # factors, not spectral learning.
+        from dl_quantify import (surface_composition, fit_response_factors,
+                                 apply_response_factors)
+        raw_tr = np.expm1(np.clip(Xtr, 0, None))
+        raw_te = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        s_tr = surface_composition(_composition_features(raw_tr, "legacy_l2"), P_ref)
+        r = fit_response_factors(s_tr, np.asarray(Ytr, float))
+        s_te = surface_composition(_composition_features(raw_te, "legacy_l2"), P_ref)
+        p = apply_response_factors(s_te, r)
+    elif method == "mcr":
+        # MCR-ALS refines the component SPECTRA from the data (seeded by the pure
+        # templates), then decomposes the held-out spectrum on the refined ones — the
+        # answer to "your templates are not the real surface spectra". Uses no labels at
+        # all, and refines on the training rows only, so nothing leaks.
+        from unmix import _mcr_als, _l2
+        from dl_quantify import surface_composition
+        raw_tr = np.expm1(np.clip(Xtr, 0, None))
+        raw_te = np.expm1(np.clip(np.atleast_2d(Xte), 0, None))
+        _C, S = _mcr_als(_l2(raw_tr), np.asarray(P_ref, float), n_iter=int(mcr_iter))
+        p = surface_composition(_l2(raw_te), S)
     elif method == "pls":
         from sklearn.cross_decomposition import PLSRegression
         nc = max(1, min(int(n_components), len(Xtr) - 1, Xtr.shape[1]))
@@ -96,6 +206,9 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
         kw = {} if rf_max_features is None else {"max_features": rf_max_features}
         p = RandomForestRegressor(n_estimators=int(n_trees), random_state=int(seed),
                                   **kw).fit(Xtr, Ytr).predict(np.atleast_2d(Xte))
+    elif method in ("cnn", "mlp") and train_maps is not None:
+        return _fit_torch_bag(method, Xtr, Ytr, train_maps, Xte, pre=pre,
+                              epochs=epochs, seed=seed)
     elif method == "cnn":
         import torch
         torch.manual_seed(int(seed)); net = _cnn(Xtr.shape[1], n_comp)
@@ -116,7 +229,57 @@ def _fit_predict(method, Xtr, Ytr, Xte, *, pre=None, epochs=350, seed=0,
     return p / (p.sum(1, keepdims=True) + 1e-12)
 
 
-def _map_spectra(cube, mask, n_px=0, spread=False, baseline_correct=True):
+def _representative_indices(cube, n_px, seed=0):
+    """Choose measured medoids from shape + log-intensity clusters."""
+    cube = np.asarray(cube, float)
+    n = len(cube); k = min(max(1, int(n_px)), n)
+    if k >= n:
+        return np.arange(n, dtype=int)
+    bins = np.array_split(np.arange(cube.shape[1]), min(32, cube.shape[1]))
+    shape = np.column_stack([cube[:, b].mean(axis=1) for b in bins])
+    total = np.log1p(np.clip(cube.sum(axis=1), 0, None))
+    shape /= np.linalg.norm(shape, axis=1, keepdims=True) + 1e-12
+    iz = (total - np.median(total)) / (np.std(total) + 1e-12)
+    feat = np.column_stack([shape, 0.35 * iz])
+    from sklearn.cluster import MiniBatchKMeans
+    km = MiniBatchKMeans(n_clusters=k, random_state=int(seed), n_init=3,
+                         batch_size=min(512, n), max_iter=100,
+                         reassignment_ratio=0.0)
+    labels = km.fit_predict(feat)
+    chosen = []
+    for j in range(k):
+        idx = np.where(labels == j)[0]
+        if not len(idx):
+            continue
+        d2 = np.sum((feat[idx] - km.cluster_centers_[j]) ** 2, axis=1)
+        chosen.append(int(idx[int(np.argmin(d2))]))
+    chosen = list(dict.fromkeys(chosen))
+    while len(chosen) < k:
+        remaining = np.setdiff1d(np.arange(n), np.asarray(chosen, int),
+                                 assume_unique=False)
+        if not len(remaining):
+            break
+        if chosen:
+            d2 = np.min(np.sum((feat[remaining, None, :] -
+                                feat[np.asarray(chosen), :][None, :, :]) ** 2,
+                               axis=2), axis=1)
+            chosen.append(int(remaining[int(np.argmax(d2))]))
+        else:
+            chosen.append(int(remaining[0]))
+    return np.asarray(sorted(chosen, key=lambda i: (-total[i], i)), int)
+
+
+def _stable_sampling_seed(map_id, seed=0):
+    """Same map + configured seed gives the same representatives in every run."""
+    import hashlib
+    key = os.path.normcase(os.path.normpath(str(map_id or "map"))).encode(
+        "utf-8", "replace")
+    return int(seed) ^ int.from_bytes(
+        hashlib.blake2s(key, digest_size=4).digest(), "little")
+
+
+def _map_spectra(cube, mask, n_px=0, spread=False, baseline_correct=True,
+                 sampling="legacy", sampling_seed=0, map_id=None):
     """Return representative spectra from one map.
 
     ``n_px=0`` returns one intensity-weighted mean spectrum. ``n_px>0`` returns
@@ -135,10 +298,14 @@ def _map_spectra(cube, mask, n_px=0, spread=False, baseline_correct=True):
            [np.clip(mean - als_baseline(mean), 0, None) if baseline_correct
             else np.clip(mean, 0, None)])
     if n_px and len(cube) > 1:
-        order = np.argsort(-w)                       # brightest first
-        if spread:                                   # background: sample the WHOLE intensity
-            k = max(1, len(order) // int(n_px))       # range, or the model only ever sees
-            order = order[::k][:int(n_px)]            # bright substrate and never dim pixels
+        if str(sampling).lower() == "representative":
+            order = _representative_indices(
+                cube, int(n_px), _stable_sampling_seed(map_id, sampling_seed))
+        else:
+            order = np.argsort(-w)
+            if spread:
+                k = max(1, len(order) // int(n_px))
+                order = order[::k][:int(n_px)]
         for i in order[:int(n_px)]:
             y = cube[i]
             out.append(np.clip(y - als_baseline(y), 0, None) if baseline_correct
@@ -198,14 +365,14 @@ def _noisy_copies(y, k, rng, lo=0.25, hi=1.0):
 def _concentration_context_features(X, groups=None, ratios=None):
     """Low-dimensional competitive-adsorption features for each hit pixel.
 
-    The concentration inverse sees the local NNLS surface composition and signal size,
+    The concentration inverse sees the local composition-head ratio and signal size,
     plus P10/median/P90 summaries of those quantities over the same experimental map.
     It therefore learns the applied-concentration relation without memorising thousands
     of wavelength channels from only a few dozen maps.
     """
     X = np.clip(np.asarray(X, float), 0, None)
     if ratios is None:
-        raise ValueError("NNLS composition ratios are required for concentration context")
+        raise ValueError("composition ratios are required for concentration context")
     R = np.asarray(ratios, float)
     if groups is None:
         groups = np.zeros(len(X), int)
@@ -241,7 +408,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                 n_components=8, n_trees=300, loo=False, test_items=None, px_per_map=0,
                 include_blank=False, noise_aug=0, nnls_screen=True,
                 screen_min_frac=0.15, equal_volume_mix=False, sim_nuisance=True,
-                sim_iso=None):
+                sim_iso=None, pixel_sampling="legacy", sampling_seed=0):
     """Train a composition model (+ µM if absolute concentrations given) on ALL mixtures.
     items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
 
@@ -289,7 +456,10 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         # while for composition they are the same one.
         akey = ckey + "|c:" + (",".join(f"{float(conc.get(s, 0.0)):.12g}" for s in subs)
                                if conc else "none")
-        for j, ya in enumerate(_map_spectra(cube, local_mask, px_per_map, baseline_correct=not nnls_screen)):
+        for j, ya in enumerate(_map_spectra(
+                cube, local_mask, px_per_map, baseline_correct=not nnls_screen,
+                sampling=pixel_sampling, sampling_seed=sampling_seed,
+                map_id=it[0])):
             X.append(_composition_features(ya)); Y.append(vec)
             paths.append(it[0]); conds.append(ckey)   # map for pooling, condition for splits
             for yn in (_noisy_copies(ya, noise_aug, aug_rng) if (noise_aug and j) else ()):
@@ -312,9 +482,64 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                 Cabs.append([v / dilution for v in stock])
             else:
                 Cabs.append(None)
+    # The PURE references are the vertices of the composition simplex, and until now the
+    # learned heads never saw them: `_refs` folds them into the NNLS template matrix P,
+    # which only the classical methods read. The mixtures alone cover the middle of the
+    # simplex — nothing sits at a true (1,0,0) — so held-out predictions came back shrunk
+    # toward the centroid (slope 0.48-0.82) with a +0.13 intercept: a genuinely absent
+    # compound was reported at ~13%. It costs DQ and TBZ the most, whose unit templates
+    # have cosine 0.68 — the pure maps are the examples that separate them (they do have
+    # exclusive bands: DQ 1167-1184 / 1375-1381, TBZ 626-641 / 753-756 / 1246-1273 cm-1).
+    # Feeding them in also puts the MLP on the same footing as NNLS/MCR-ALS, which are
+    # handed those same spectra as templates.
+    #
+    # Only the composition head is affected: pure maps carry no mixture µM label, so they
+    # are not appended to Xabs/Cabs and the concentration head is untouched.
+    from dataset import discover_references, is_blank, base_and_batch, load_manifest
+    manifest = load_manifest(data_dir) or {}
+    for c_, pth in discover_references(data_dir):
+        name = base_and_batch(c_)[0]
+        if is_blank(name) or name not in subs:
+            continue
+        # Honour samples.csv: '-3' is marked test and stays out, so it remains a genuine
+        # external check. (The blank branch below still ignores these roles — see TODO.)
+        if manifest.get(os.path.abspath(pth), (None, None, "train"))[2] != "train":
+            continue
+        try:
+            if nnls_screen:
+                _w, cube, smeta = nnls_hit_spectra(
+                    data_dir, pth, baseline=baseline, trim=trim,
+                    min_frac=screen_min_frac, progress=None)
+                local_mask = np.ones(cube.shape[1], bool)
+                screen_stats.append({"path": pth, **smeta})
+            else:
+                _w, cube, _m, _c = load_map(pth); local_mask = mask
+        except Exception:
+            continue
+        vec = _ratio([1.0 if s == name else 0.0 for s in subs])
+        # Pure references keep the MAP as their split group, like the blanks below: they
+        # are reference material rather than a test condition, and grouping all of one
+        # compound together would leave that fold with no vertex at all — the very thing
+        # this block exists to supply. No mixture condition shares this key, so nothing
+        # held out can be recited back.
+        if progress:
+            progress(f"adding pure reference {os.path.basename(pth)}")
+        for j, ya in enumerate(_map_spectra(
+                cube, local_mask, px_per_map, baseline_correct=not nnls_screen,
+                sampling=pixel_sampling, sampling_seed=sampling_seed,
+                map_id=pth)):
+            X.append(_composition_features(ya)); Y.append(vec)
+            paths.append(pth); conds.append(pth)
+            for yn in (_noisy_copies(ya, noise_aug, aug_rng) if (noise_aug and j) else ()):
+                X.append(_composition_features(yn)); Y.append(vec)
+                paths.append(pth); conds.append(pth)
+
     # Optionally learn BACKGROUND as its own class: pixels from the blank reference map
     # labelled "100% blank". Without it the model must spread every spectrum — even bare
     # substrate — across the substances, so it can never say "nothing here".
+    # TODO: this branch ignores samples.csv roles — BLK-1 is marked 'exclude' and BLK-4 /
+    # INK-3 'test', yet all of them train. Left as-is so this retrain changes exactly one
+    # thing; worth fixing separately.
     blank_name = None
     if include_blank:
         from dataset import discover_references, is_blank, base_and_batch
@@ -331,7 +556,9 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                 # Blanks keep the MAP as their split group. Grouping every blank into one
                 # "blank condition" would make a fold that holds it out train with no
                 # background examples at all.
-                for ya in _map_spectra(cube, mask, px_per_map or 60, spread=True):
+                for ya in _map_spectra(
+                        cube, mask, px_per_map or 60, spread=True,
+                        sampling=pixel_sampling, sampling_seed=sampling_seed, map_id=pth):
                     X.append(_composition_features(ya))
                     Y.append([0.0] * len(subs) + [1.0])
                     paths.append(pth); conds.append(pth)
@@ -410,55 +637,21 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         from sklearn.ensemble import RandomForestRegressor
         sk = RandomForestRegressor(n_estimators=int(n_trees), random_state=int(seed)).fit(X, Y)
         comp_store = {"method": "rf", "sk": sk}; tp = _norm_rows(sk.predict(X))
-    elif method == "cnn":
-        import torch
-        torch.manual_seed(int(seed)); net = _cnn(X.shape[1], len(subs))
-        sm = torch.nn.LogSoftmax(dim=1)
-        op = torch.optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-3)
-        Xt = torch.tensor(X); Yt = torch.tensor(Y); w = 1.0 + 2.0 * (1.0 - Yt)   # up-weight buried
-        for ep in range(int(epochs)):
-            net.train(); op.zero_grad()
-            l = (w * (sm(net(Xt)).exp() - Yt).abs()).sum(1).mean(); l.backward(); op.step()
-            loss_curve.append(float(l.detach()))
-            if progress and (ep % 10 == 0 or ep == int(epochs) - 1):
-                progress(f"epoch {ep + 1}/{int(epochs)}  loss {loss_curve[-1]:.3f}")
-        net.eval()
-        with torch.no_grad():
-            tp = torch.softmax(net(Xt), 1).numpy()
-        comp_store = {"method": "cnn",
-                      "comp_state": {k: v.detach().numpy() for k, v in net.state_dict().items()}}
+    elif method in ("cnn", "mlp"):
+        # The filename label belongs to the MAP. Train on its pixel distribution, but
+        # optimise the mean prediction of each map; this is the same estimator used by
+        # Benchmark and prevents 400 correlated pixels becoming 400 fake labels.
+        tp, comp = _fit_torch_bag(method, X, Y, paths, X, pre=pre, epochs=epochs,
+                                  seed=seed, return_net=True, progress=progress)
+        comp_store = {"method": method,
+                      "comp_state": {k: v.detach().cpu().numpy()
+                                     for k, v in comp.state_dict().items()},
+                      "selected_epochs": int(epochs), "epoch_rule": "fixed-map-pooled",
+                      "selection_level": "map"}
+        if method == "mlp":
+            comp_store["comp_hidden"] = (256, 64)
     else:
-        method = "mlp"
-        # Train for a FIXED number of epochs. Choosing the epoch on held-out maps was
-        # tried and does not work at this dataset size: with 34 maps the 20% group split
-        # leaves 7 validation maps, and the validation curve is noise rather than a
-        # descent-then-rise. Three seeds picked epoch 75, 2 and 61, and after the "best"
-        # epoch the curve keeps oscillating (seed 1: 0.53 at ep2, 1.17 at ep10, 0.75 at
-        # ep100). Leave-one-map-out confirms the selection was costing accuracy --
-        # 19.1% composition error training the full 350 against 22.8% at the selected 6.
-        # A fixed budget is both better and reproducible; revisit when there are enough
-        # maps for a validation split to mean something.
-        selection = None
-        selected_epochs = int(epochs)
-        if len(va_sel_diag := _group_validation_indices(conds, seed=seed)[1]) and epoch_diagnostics:
-            if progress:
-                progress("recording the held-out epoch curve (diagnostic only)")
-            tr_sel = _group_validation_indices(conds, seed=seed)[0]
-            selection = train_composition(
-                X[tr_sel], Y[tr_sel], len(subs), pretrain=pre, seed=seed,
-                epochs_ft=epochs, X_val=X[va_sel_diag], Y_val=Y[va_sel_diag], progress=progress)
-        comp = train_composition(X, Y, len(subs), pretrain=pre, seed=seed,
-                                 epochs_ft=selected_epochs, progress=progress)
-        comp_store = {"method": "mlp",
-                      "comp_state": {k: v.cpu().numpy() for k, v in comp["state"].items()},
-                      "comp_hidden": (256, 64),
-                      "selected_epochs": selected_epochs,
-                      "epoch_rule": "fixed",
-                      "selection_val_loss": (selection.get("best_val") if selection else None),
-                      "selection_val_history": (selection.get("val_hist", []) if selection else []),
-                      "selection_level": "diagnostic" if selection else None}
-        from dl_quantify import predict_composition
-        tp = predict_composition(comp, X); loss_curve = comp.get("hist", [])
+        raise ValueError(f"unknown composition method: {method}")
     train_eval = {"true": np.asarray(Y, float).tolist(), "pred": np.asarray(tp, float).tolist(),
                   "loss": loss_curve}
 
@@ -481,7 +674,9 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             else:
                 _w, cube, _m, _c = load_map(it[0]); local_mask = mask
             specs = _map_spectra(cube, local_mask, px_per_map,
-                                 baseline_correct=not nnls_screen)
+                                 baseline_correct=not nnls_screen,
+                                 sampling=pixel_sampling, sampling_seed=sampling_seed,
+                                 map_id=it[0])
             truth_by_map[it[0]] = vec
             for ya in specs:
                 Xt_.append(_composition_features(ya))
@@ -489,7 +684,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         if Xt_:
             Pt = _fit_predict(method, X, Y, np.array(Xt_, np.float32), pre=pre,
                               epochs=epochs, seed=seed, n_components=n_components,
-                              n_trees=n_trees, P_ref=P)
+                              n_trees=n_trees, P_ref=P, train_maps=paths)
             ordered = list(dict.fromkeys(row_paths))
             test_eval = {
                 "true": [truth_by_map[p].tolist() for p in ordered],
@@ -512,7 +707,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                 continue
             pred = _fit_predict(method, X[tr], Y[tr], X[te], pre=pre, epochs=epochs,
                                 seed=seed + i, n_components=n_components,
-                                n_trees=n_trees, P_ref=P)
+                                n_trees=n_trees, P_ref=P, train_maps=paths[tr])
             pred = np.asarray(pred, float)
             # Report one row per held-out MAP — downstream (_annotate, Recovery) looks
             # these up by file path, and a per-map number is also what the user reads.
@@ -550,14 +745,15 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         # the projection for non-torch composition heads.
         uM_input_mode = "nnls_ratio+intensity_quantiles_v1"
         Rabs = None
-        if method == "mlp" and comp is not None:
-            from dl_quantify import predict_composition
-            feats_abs = np.stack([_composition_features(y) for y in Xabs[hv]])
-            pk = np.clip(np.asarray(predict_composition(comp, feats_abs), float), 0, None)
+        if method in ("mlp", "cnn") and comp is not None:
+            feats_abs = np.stack([_composition_features(y) for y in Xabs[hv]]).astype(np.float32)
+            comp.eval()
+            with torch.no_grad():
+                pk = torch.softmax(comp(torch.tensor(feats_abs)), 1).numpy()
             cols = [subs.index(s_) for s_ in conc_subs]
-            R_ = pk[:, cols]
+            R_ = np.clip(pk[:, cols], 0, None)
             Rabs = R_ / (R_.sum(axis=1, keepdims=True) + 1e-12)
-            uM_input_mode = "mlp_ratio+intensity_quantiles_v1"
+            uM_input_mode = f"{method}_ratio+intensity_quantiles_v1"
         if Rabs is None:
             from dl_quantify import surface_composition
             Rabs = surface_composition(_composition_features(Xabs[hv], 'legacy_l2'), P)
@@ -760,6 +956,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
             "uM": uM, "n_train": int(len(X)), "has_uM": uM is not None,
             "n_maps": int(len(set(paths.tolist()))),
             "px_per_map": int(px_per_map),
+            "pixel_sampling": str(pixel_sampling), "sampling_seed": int(sampling_seed),
             "training_level": "map_mean" if int(px_per_map) == 0 else "pixels",
             "nnls_screen": bool(nnls_screen), "screen_min_frac": float(screen_min_frac),
             "equal_volume_mix": bool(equal_volume_mix),
@@ -862,33 +1059,172 @@ def kfold_stability(data_dir, items, method="mlp", folds=5, progress=None, seed=
             "sd": float(np.std(errs)) if errs else float("nan")}
 
 
+def _grouped_map_folds(group_keys, map_keys, n_folds=5, seed=0):
+    """Assign whole composition groups to folds while balancing the number of maps."""
+    g = np.asarray(group_keys, object); m = np.asarray(map_keys, object)
+    groups = list(dict.fromkeys(g.tolist()))
+    if len(groups) < 2:
+        raise ValueError("benchmark needs at least two distinct composition ratios")
+    n_folds = min(max(2, int(n_folds)), len(groups))
+    counts = {key: len(set(m[g == key].tolist())) for key in groups}
+    rng = np.random.default_rng(int(seed))
+    ordered = [groups[i] for i in rng.permutation(len(groups))]
+    ordered.sort(key=lambda key: counts[key], reverse=True)  # random tie order stays stable
+    bins = [set() for _ in range(n_folds)]; loads = [0] * n_folds
+    for key in ordered:
+        j = int(np.argmin(loads)); bins[j].add(key); loads[j] += counts[key]
+    return bins
+
+
+def _pool_predictions_by_map(pred, true, map_keys, names):
+    """Pool every pixel prediction once, returning one auditable row per held-out map."""
+    pred = np.asarray(pred, float); true = np.asarray(true, float)
+    maps = np.asarray(map_keys, object); names = np.asarray(names, object)
+    tv, pv, out_names, n_pixels = [], [], [], []
+    for mk in dict.fromkeys(maps.tolist()):
+        sel = maps == mk; first = int(np.where(sel)[0][0])
+        tv.append(true[first].tolist()); pv.append(pred[sel].mean(0).tolist())
+        out_names.append(str(names[first])); n_pixels.append(int(sel.sum()))
+    return tv, pv, out_names, n_pixels
+
+def _pool_concentration_by_map(pred_uM, true_uM, map_keys, names):
+    """Median-pool pixel µM predictions to one auditable held-out row per map."""
+    pred_uM = np.asarray(pred_uM, float); true_uM = np.asarray(true_uM, float)
+    maps = np.asarray(map_keys, object); names = np.asarray(names, object)
+    tv, pv, out_names, n_pixels = [], [], [], []
+    for mk in dict.fromkeys(maps.tolist()):
+        sel = maps == mk; first = int(np.where(sel)[0][0])
+        tv.append(true_uM[first].tolist())
+        pv.append(np.median(pred_uM[sel], axis=0).tolist())
+        out_names.append(str(names[first])); n_pixels.append(int(sel.sum()))
+    return tv, pv, out_names, n_pixels
+
+
+def _fit_concentration_fold(Xtr, Ctr_uM, train_maps, Xte, epochs=100, seed=0):
+    """Fit the dedicated map-pooled µM head and predict held-out pixels."""
+    import torch
+    import torch.nn as nn
+    Xtr = np.asarray(Xtr, np.float32); Xte = np.asarray(Xte, np.float32)
+    Ctr_uM = np.asarray(Ctr_uM, np.float32)
+    train_maps = np.asarray(train_maps, object)
+    mu = Xtr.mean(0); sd = Xtr.std(0) + 1e-8
+    A = torch.tensor(((Xtr - mu) / sd).astype(np.float32))
+    B = torch.tensor(((Xte - mu) / sd).astype(np.float32))
+    Y = torch.tensor(np.log10(np.clip(Ctr_uM, 0.01, None)).astype(np.float32))
+    torch.manual_seed(int(seed))
+    net = nn.Sequential(nn.Linear(Xtr.shape[1], 128), nn.BatchNorm1d(128), nn.ReLU(),
+                        nn.Dropout(0.25), nn.Linear(128, 32), nn.ReLU(),
+                        nn.Linear(32, Ctr_uM.shape[1]))
+    groups = [np.where(train_maps == mp)[0]
+              for mp in dict.fromkeys(train_maps.tolist())]
+    op = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=3e-3)
+    for _ in range(int(epochs)):
+        net.train(); op.zero_grad(); pred = net(A); losses = []
+        for idx in groups:
+            ii = torch.as_tensor(idx, dtype=torch.long)
+            losses.append(torch.nn.functional.smooth_l1_loss(
+                torch.quantile(pred[ii], 0.5, dim=0), Y[ii[0]], beta=0.25))
+        loss = torch.stack(losses).mean()
+        loss = loss + 0.05 * torch.nn.functional.smooth_l1_loss(pred, Y, beta=0.5)
+        loss.backward(); op.step()
+    net.eval()
+    with torch.no_grad():
+        log_uM = net(B).numpy()
+    return 10.0 ** np.clip(log_uM, -2.0, 6.0)
+
+
+def _fit_mlp_ratio_fold(Xtr, Ytr, train_maps, Xte, *, epochs=100, seed=0, pre=None):
+    """Fit the composition MLP inside one outer fold and return train/test ratios.
+
+    The concentration head in a saved MLP model consumes ratios predicted by that
+    model's composition MLP, not NNLS ratios. Benchmarking must reproduce the same
+    dependency without letting held-out maps participate in fitting the composition
+    head. Training-set ratios are deliberately in-sample, matching train_model;
+    test ratios come from the same fitted head but are fully held out.
+    """
+    Xtr = np.asarray(Xtr, np.float32)
+    Xte = np.asarray(Xte, np.float32)
+    if not len(Xtr) or not len(Xte):
+        raise ValueError("composition-ratio fold needs non-empty train and test rows")
+    both = np.vstack([Xtr, Xte])
+    pred = _fit_torch_bag("mlp", Xtr, Ytr, train_maps, both, pre=pre,
+                          epochs=epochs, seed=seed)
+    pred = np.clip(np.asarray(pred, float), 0, None)
+    pred /= pred.sum(axis=1, keepdims=True) + 1e-12
+    return pred[:len(Xtr)], pred[len(Xtr):]
+
+
 def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
-                  methods=("nnls", "pls", "rf", "cnn", "mlp"), epochs=350, seed=0,
+                  methods=("null", "band", "nnls", "nnls_rf", "mcr", "pls", "rf",
+                           "cnn", "mlp"), epochs=350, seed=0,
                   use_pretrain=True,
-                  n_components=8, n_trees=300, px_per_map=0, rf_max_features=None,
-                  cnn_epochs=None):
-    """Leave-one-out comparison of the composition methods on the SAME mixtures — the
-    honest counterpart to the train-set numbers. Maps are loaded once, then every method
-    is refit per fold. Returns {method: {"true", "pred"}} plus "subs"."""
+                  n_components=8, n_trees=300, px_per_map=400, rf_max_features=None,
+                  cnn_epochs=None, band_window=10.0, mcr_iter=6, cv_folds=5,
+                  nnls_screen=True, screen_min_frac=0.15, equal_volume_mix=False,
+                  pixel_sampling="legacy", sampling_seed=0):
+    """Condition-grouped cross-validation using the pixel distribution of each map.
+
+    All pixels from a map stay in one fold. Methods predict held-out pixels, then every
+    map is scored once after mean-pooling its pixel predictions. ``cv_folds=None`` keeps
+    the legacy leave-one-ratio-group-out protocol for reproducibility.
+
+    The ladder, cheapest rung first — the four training-free ones cost almost nothing and
+    each answers a different objection:
+      null     always the mean training composition — the floor every method must clear
+      band     NNLS on each compound's least-cross-talk marker windows (± ``band_window``
+               cm⁻¹), the Validate tab's decomposition
+      nnls     NNLS on the whole spectrum, the classical baseline
+      nnls_rf  NNLS + one response factor per substance, fitted on the training fold —
+               the control that asks how much of the learned gain is just that
+      mcr      MCR-ALS: refine the component spectra from the data, then decompose —
+               the answer to "your templates are not the real surface spectra"
+    then pls / rf / cnn / mlp, which are refit per fold."""
     from real_data import load_map
     from dl_quantify import simulate_mixtures, _ratio
     subs, wn, mask, P, lo, hi = _refs(data_dir, baseline, trim)
-    X, Y, gkey = [], [], []
+    X, Y, Cabs, gkey, abskey, ekey, mapkey = [], [], [], [], [], [], []
     for k, it in enumerate(items):
         if progress:
             progress(f"loading maps {k + 1}/{len(items)}")
         vec = _ratio([float(it[1].get(s, 0.0)) for s in subs])
         if vec.sum() <= 0:
             continue
+        conc = it[2] if len(it) > 2 else None
+        if conc:
+            stock_uM = [float(conc.get(s, 0.0)) * 1e6 for s in subs]
+            dilution = (max(1, sum(v > 0 for v in stock_uM))
+                        if equal_volume_mix else 1)
+            cvec_uM = np.asarray([v / dilution for v in stock_uM], float)
+            abs_ckey = "c:" + ",".join(f"{v:.8g}" for v in cvec_uM)
+        else:
+            cvec_uM = np.full(len(subs), np.nan)
+            abs_ckey = "c:none"
         ckey = "r:" + ",".join(f"{v:.6f}" for v in vec)
-        _w, cube, _m, _c = load_map(it[0])
-        for ya in _map_spectra(cube, mask, px_per_map):
-            X.append(_composition_features(ya)); Y.append(vec)
-            gkey.append(ckey)                         # group = the CONDITION, not the map
+        if nnls_screen:
+            _w, cube, _sm = nnls_hit_spectra(
+                data_dir, it[0], baseline=baseline, trim=trim,
+                min_frac=screen_min_frac, progress=None)
+            local_mask = np.ones(cube.shape[1], bool); correct_again = False
+        else:
+            _w, cube, _m, _c = load_map(it[0])
+            local_mask = mask; correct_again = baseline
+        mk = os.path.normcase(os.path.normpath(it[0]))
+        ev = os.path.basename(it[0])
+        spectra = _map_spectra(cube, local_mask, px_per_map, spread=True,
+                               baseline_correct=correct_again,
+                               sampling=pixel_sampling, sampling_seed=sampling_seed,
+                               map_id=it[0])
+        if not spectra:
+            continue
+        for ya in spectra:
+            X.append(_composition_features(ya)); Y.append(vec); Cabs.append(cvec_uM)
+            gkey.append(ckey); abskey.append(abs_ckey); ekey.append(ev); mapkey.append(mk)
     X = np.array(X, np.float32); Y = np.array(Y, np.float32)
-    gkey = np.array(gkey, object)
+    Cabs = np.asarray(Cabs, float)
+    gkey = np.array(gkey, object); abskey = np.array(abskey, object); ekey = np.array(ekey, object)
+    mapkey = np.array(mapkey, object)
     if len(X) < 3:
-        raise ValueError("need ≥3 mixtures for a leave-one-out benchmark.")
+        raise ValueError("need ≥3 labelled maps for a grouped benchmark.")
 
     pre = None
     if calib_path and use_pretrain:
@@ -908,26 +1244,293 @@ def benchmark_loo(data_dir, items, calib_path=None, baseline=True, trim=None, pr
         except Exception:
             pre = None
 
-    out = {"subs": subs}
+    band_mask = None
+    if "band" in methods:
+        # VIP marker windows come from the PURE templates only — identical in every
+        # fold (no leakage), so the mask is computed once, not per condition.
+        from unmix import vip_bands, _vip_fit_mask
+        axis = np.asarray(wn, float)[mask]
+        band_mask = _vip_fit_mask(axis, vip_bands(axis, P, subs),
+                                  float(band_window), len(subs))
+        if progress and band_mask is not None:
+            progress(f"VIP bands — fitting on {int(band_mask.sum())}/{len(axis)} points")
+
+    uniq = np.asarray(list(dict.fromkeys(gkey.tolist())), object)
+    if cv_folds is not None and int(cv_folds) >= 2:
+        held_groups = _grouped_map_folds(gkey, mapkey, int(cv_folds), seed)
+        protocol = f"condition-grouped-{len(held_groups)}-fold-pixel-pooled"
+    else:
+        held_groups = [{g} for g in uniq.tolist()]
+        protocol = "leave-one-ratio-group-out-pixel-pooled"
+
+    out = {"subs": subs, "protocol": protocol, "cv_folds": len(held_groups),
+           "pixels_per_map": int(px_per_map), "scoring_unit": "held-out map",
+           "n_maps_loaded": int(len(set(mapkey.tolist()))),
+           "nnls_screen": bool(nnls_screen), "screen_min_frac": float(screen_min_frac),
+           "pixel_sampling": str(pixel_sampling), "sampling_seed": int(sampling_seed)}
     for mi, meth in enumerate(methods):
-        uniq = list(dict.fromkeys(gkey.tolist()))
-        tv, pv = [], []
-        for i, mp in enumerate(uniq):
+        tv, pv, conditions, n_maps, n_pixels, fold_ids = [], [], [], [], [], []
+        for i, held in enumerate(held_groups):
             if progress:
-                progress(f"{meth.upper()} leave-one-condition-out {i + 1}/{len(uniq)}  "
+                progress(f"{meth.upper()} grouped fold {i + 1}/{len(held_groups)}  "
                          f"[{mi + 1}/{len(methods)} methods]")
-            te = np.where(gkey == mp)[0]; tr = np.where(gkey != mp)[0]
-            # 1D-CNN 은 길이 2001 입력을 full-batch 로 도느라 fold 당 몇 분씩 걸린다.
-            # epoch 을 따로 줄일 수 있게 열어 둔다 — 기본값 None 이면 다른 방법과 같다.
-            # 줄이면 CNN 이 **덜 학습된 상태로** 채점되므로 캡션에 반드시 밝힐 것.
+            is_test = np.array([g in held for g in gkey], bool)
+            te = np.where(is_test)[0]; tr = np.where(~is_test)[0]
             ep = int(cnn_epochs) if (meth == "cnn" and cnn_epochs) else epochs
             pred = _fit_predict(meth, X[tr], Y[tr], X[te], pre=pre, epochs=ep,
                                 seed=seed + i, n_components=n_components,
                                 n_trees=n_trees, P_ref=P,
-                                rf_max_features=rf_max_features)
-            tv.append(Y[te[0]].tolist()); pv.append(np.asarray(pred, float).mean(0).tolist())
-        out[meth] = {"true": tv, "pred": pv}
+                                rf_max_features=rf_max_features, band_mask=band_mask,
+                                mcr_iter=mcr_iter,
+                                train_maps=(mapkey[tr] if int(px_per_map) > 0 else None))
+            a, b, c, d = _pool_predictions_by_map(
+                pred, Y[te], mapkey[te], ekey[te])
+            tv.extend(a); pv.extend(b); conditions.extend(c); n_pixels.extend(d)
+            n_maps.extend([1] * len(a))
+            fold_ids.extend([i + 1] * len(a))
+        out[meth] = {"true": tv, "pred": pv, "condition": conditions,
+                     "n_maps": n_maps, "n_pixels": n_pixels, "fold": fold_ids}
+    # Absolute concentration is a separate inverse problem from composition. Reproduce
+    # the saved pipeline inside each fold: NNLS-screened pixels -> composition-MLP ratio
+    # -> ratio/intensity quantiles -> concentration MLP. The composition head is refitted
+    # without the held-out conditions, and the null is scored on those same held-out maps.
+    # Composition-fraction recovery is never relabelled as absolute concentration.
+    have_uM = np.isfinite(Cabs).all(axis=1) & (Cabs.sum(axis=1) > 0)
+    if len(set(mapkey[have_uM].tolist())) >= 3:
+        raw_uM = np.expm1(np.clip(X[have_uM], 0, None))
+        comp_uM = X[have_uM]
+        comp_truth_uM = Y[have_uM]
+        maps_uM = mapkey[have_uM]; names_uM = ekey[have_uM]
+        truth_uM = Cabs[have_uM]; cond_uM = abskey[have_uM]
+        ufolds = _grouped_map_folds(
+            cond_uM, maps_uM, int(cv_folds or 5), int(seed) + 701)
+        scored = {
+            "head": {"true_uM": [], "pred_uM": [], "condition": [],
+                     "fold": [], "n_pixels": []},
+            "null": {"true_uM": [], "pred_uM": [], "condition": [],
+                     "fold": [], "n_pixels": []},
+        }
+        for fi, held in enumerate(ufolds):
+            if progress:
+                progress(f"uM pipeline grouped fold {fi + 1}/{len(ufolds)}  "
+                         "(composition MLP -> concentration MLP)")
+            is_test = np.array([g in held for g in cond_uM], bool)
+            te = np.where(is_test)[0]; tr = np.where(~is_test)[0]
+            ratio_tr, ratio_te = _fit_mlp_ratio_fold(
+                comp_uM[tr], comp_truth_uM[tr], maps_uM[tr], comp_uM[te],
+                epochs=epochs, seed=int(seed) + 1201 + fi, pre=pre)
+            ctx_tr = _concentration_context_features(
+                raw_uM[tr], groups=maps_uM[tr], ratios=ratio_tr)
+            ctx_te = _concentration_context_features(
+                raw_uM[te], groups=maps_uM[te], ratios=ratio_te)
+            pred_px = _fit_concentration_fold(
+                ctx_tr, truth_uM[tr], maps_uM[tr], ctx_te,
+                epochs=epochs, seed=int(seed) + 1701 + fi)
+            train_map_truth = np.asarray([
+                truth_uM[np.where(maps_uM == mk)[0][0]]
+                for mk in dict.fromkeys(maps_uM[tr].tolist())], float)
+            null_centre = np.median(train_map_truth, axis=0, keepdims=True)
+            null_px = np.repeat(null_centre, len(te), axis=0)
+            for key, pp in (("head", pred_px), ("null", null_px)):
+                a, b, c, d = _pool_concentration_by_map(
+                    pp, truth_uM[te], maps_uM[te], names_uM[te])
+                scored[key]["true_uM"].extend(a)
+                scored[key]["pred_uM"].extend(b)
+                scored[key]["condition"].extend(c)
+                scored[key]["n_pixels"].extend(d)
+                scored[key]["fold"].extend([fi + 1] * len(a))
+        out["uM"] = {
+            "subs": list(subs),
+            "protocol": f"absolute-condition-grouped-{len(ufolds)}-fold-map-pooled",
+            "scoring_unit": "held-out map",
+            "label_source": "filename absolute values (uM)",
+            "pipeline": (("nnls_screen" if nnls_screen else "all_valid_pixels")
+                         + "->mlp_composition_ratio->ratio+intensity_quantiles"
+                           "->mlp_concentration"),
+            "input_mode": "mlp_ratio+intensity_quantiles_v1",
+            "composition_hidden": [256, 64],
+            "concentration_hidden": [128, 32],
+            "epochs_per_fold": int(epochs),
+            **scored,
+        }
     return out
+
+
+def benchmark_summary(bench, cut_pp=None, ref="nnls"):
+    """The benchmark table's numbers, from a ``benchmark_loo`` result — computed in ONE
+    place so the UI table and the CSV export cannot drift apart. Returns
+    {method: {"n", "mean_dev_pp", "recovery", ["acc_at_cut"]}}.
+
+    mean_dev_pp — mean composition deviation in percentage points (%p):
+        0.5·Σ|pred−true|·100 per condition, averaged. The headline number; report it
+        NEXT TO the measured reproducibility floor rather than through an accuracy cut.
+    recovery — {substance: (mean %, SE %, n)} of pred/true·100 over the conditions where
+        the substance is actually present. true=0 conditions are excluded (recovery is
+        undefined there — detection is the ROC's job). Direction shows (over/under), but
+        over- and under-recovery CANCEL in the mean, so never read it without mean_dev_pp.
+    acc_at_cut — fraction of conditions with deviation ≤ ``cut_pp``. Only computed when a
+        cut is passed, and the cut must be DECLARED before looking at the results —
+        picking it afterwards is cherry-picking (see HANDOFF 2026-08-19 §3).
+    dev_by_k — {"pure"/"binary"/"ternary"/"mean": (mean %p, SE %p, n)} — the deviation
+        split by how many components the condition actually contains. "ternary" is k≥3;
+        groups with no conditions are absent; "mean" is over every condition, identical
+        to mean_dev_pp.
+    rmse_pp — (mean, SE, n) of the per-condition root-mean-square component error, in
+        percentage points. Same units as the deviation but squared-weighted, so one badly
+        missed component costs more than three small slips. Report alongside, not instead:
+        deviation is the number the reproducibility floor is measured in.
+    logratio — (mean, SE, n) of the Aitchison (centred-log-ratio) distance, the standard
+        distance for compositional data — it compares the RATIOS themselves, so being 2x
+        off on a minor component costs exactly what being 2x off on the major one costs.
+        The %p metrics cannot see that: on DQ24-TB12-TH6, predicting THI six times too
+        low is 11.6 %p (inside a 15 %p cut) while halving DQ is 17.1 %p (outside), even
+        though the second is the smaller ratio error. Dimensionless; 0 = exact, and ~0.57
+        is what a single 2-fold miss costs on a ternary mixture.
+    vs_ref — (median Δ %p, p, n) against method ``ref`` (default the classical NNLS
+        baseline), paired condition by condition since every method is scored on the same
+        folds. Negative Δ = better than the reference; p is a two-sided Wilcoxon
+        signed-rank. The pairing is what makes ~100 conditions enough to separate methods:
+        unpaired, the per-condition spread (sd ≈ 10 %p on this grid) swamps a few-%p
+        difference, while paired it resolves ~2 %p. Fix ``ref`` before the run — choosing
+        the comparator afterwards is the cherry-picking the declared cut avoids.
+    """
+    subs = list(bench.get("subs", []))
+    devs = {}                    # per-method, per-condition deviation — for the pairing
+    for m, r in bench.items():
+        if isinstance(r, dict) and "true" in r:
+            T_ = np.asarray(r["true"], float); P_ = np.asarray(r["pred"], float)
+            devs[m] = 0.5 * np.abs(P_ - T_).sum(1) * 100.0
+    out = {}
+    for m, r in bench.items():
+        if not isinstance(r, dict) or "true" not in r:
+            continue
+        T = np.asarray(r["true"], float); Pd = np.asarray(r["pred"], float)
+        dev = 0.5 * np.abs(Pd - T).sum(1) * 100.0
+        rec = {}
+        for j, s in enumerate(subs):
+            pres = T[:, j] > 0
+            n = int(pres.sum())
+            if n:
+                q = Pd[pres, j] / T[pres, j] * 100.0
+                se = float(q.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
+                rec[s] = (float(q.mean()), se, n)
+            else:
+                rec[s] = (float("nan"), float("nan"), 0)
+
+        def _stat(d):
+            n = int(len(d))
+            se = float(d.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
+            return (float(d.mean()), se, n) if n else (float("nan"), float("nan"), 0)
+
+        k = (T > 0).sum(axis=1)
+        by = {lab: _stat(dev[sel]) for lab, sel in
+              (("pure", k == 1), ("binary", k == 2), ("ternary", k >= 3))
+              if sel.any()}
+        by["mean"] = _stat(dev)
+        rmse = np.sqrt(((Pd - T) ** 2).mean(axis=1)) * 100.0
+        from composition import aitchison_distance
+        lr = np.array([aitchison_distance(T[i], Pd[i]) for i in range(len(T))])
+        abs_pp = np.abs(Pd - T) * 100.0
+        present = T > 0
+        fold_ratio = np.full_like(T, np.nan, dtype=float)
+        fold_ratio[present] = Pd[present] / T[present]
+        whole_pp = {cut: float(np.mean(np.all(abs_pp <= cut, axis=1)))
+                    for cut in (1.0, 3.0, 5.0)}
+        whole5 = np.all(abs_pp <= 5.0, axis=1)
+        whole2x = np.array([
+            bool(np.all((fold_ratio[i, present[i]] >= 0.5) &
+                        (fold_ratio[i, present[i]] <= 2.0)))
+            for i in range(len(T))], bool)
+        comp = {}
+        for j, s in enumerate(subs):
+            pres = present[:, j]
+            comp[s] = {
+                "bias_pp": float((Pd[:, j] - T[:, j]).mean() * 100.0),
+                "mae_pp": float(abs_pp[:, j].mean()),
+                "rmse_pp": float(np.sqrt(np.mean((Pd[:, j] - T[:, j]) ** 2)) * 100.0),
+                "within_1pp": float(np.mean(abs_pp[:, j] <= 1.0)),
+                "within_3pp": float(np.mean(abs_pp[:, j] <= 3.0)),
+                "within_5pp": float(np.mean(abs_pp[:, j] <= 5.0)),
+                "within_2fold": (float(np.mean((fold_ratio[pres, j] >= 0.5) &
+                                                (fold_ratio[pres, j] <= 2.0)))
+                                   if pres.any() else float("nan")),
+            }
+        entry = {"n": int(len(T)), "mean_dev_pp": float(dev.mean()), "recovery": rec,
+                 "dev_by_k": by, "rmse_pp": _stat(rmse), "logratio": _stat(lr),
+                 "whole_within_pp": whole_pp,
+                 "whole_within_5pp": float(whole5.mean()),
+                 "whole_within_2fold": float(whole2x.mean()),
+                 "component_metrics": comp}
+        dref = devs.get(ref)
+        if dref is not None and m != ref and len(dref) == len(dev):
+            d = dev - dref
+            try:
+                from scipy.stats import wilcoxon
+                p = float(wilcoxon(d).pvalue) if np.any(d != 0) else 1.0
+            except Exception:
+                p = float("nan")
+            entry["vs_ref"] = (float(np.median(d)), p, int(len(d)))
+        if cut_pp is not None:
+            entry["acc_at_cut"] = float((dev <= float(cut_pp)).mean()) if len(dev) else float("nan")
+        out[m] = entry
+    return out
+
+
+def concentration_summary(eval_result, subs):
+    """Summarise held-out concentration predictions without hiding multiplicative error.
+
+    Metrics are computed only where true_uM > 0. Zero-concentration components are
+    reported separately because recovery and fold error are undefined at zero.
+    """
+    T = np.asarray((eval_result or {}).get("true_uM", []), float)
+    P = np.asarray((eval_result or {}).get("pred_uM", []), float)
+    if T.ndim != 2 or P.shape != T.shape or not len(T):
+        return {}
+    names = list(subs)[:T.shape[1]]
+    factors = (1.25, 1.5, 2.0)
+
+    def stats(t, p):
+        ok = np.isfinite(t) & np.isfinite(p) & (t > 0) & (p > 0)
+        if not ok.any():
+            return {"n": 0}
+        fold = p[ok] / t[ok]
+        loge = np.log10(fold)
+        out = {
+            "n": int(ok.sum()),
+            "mean_recovery_pct": float(fold.mean() * 100.0),
+            "median_recovery_pct": float(np.median(fold) * 100.0),
+            "geometric_bias_fold": float(10.0 ** np.mean(loge)),
+            "median_abs_log10_error": float(np.median(np.abs(loge))),
+            "rmse_log10": float(np.sqrt(np.mean(loge ** 2))),
+        }
+        out["median_fold_error"] = float(10.0 ** out["median_abs_log10_error"])
+        for f in factors:
+            out[f"within_{str(f).replace('.', '_')}x"] = float(
+                np.mean((fold >= 1.0 / f) & (fold <= f)))
+        return out
+
+    present = T > 0
+    comp = {}
+    for j, name in enumerate(names):
+        entry = stats(T[:, j], P[:, j])
+        absent = (~present[:, j]) & np.isfinite(P[:, j])
+        entry["absent_n"] = int(absent.sum())
+        entry["absent_median_pred_uM"] = (float(np.median(P[absent, j]))
+                                           if absent.any() else float("nan"))
+        comp[name] = entry
+    whole = {}
+    for f in factors:
+        passed = []
+        for i in range(len(T)):
+            pr = present[i]
+            if not pr.any() or np.any(~np.isfinite(P[i, pr])) or np.any(P[i, pr] <= 0):
+                passed.append(False)
+            else:
+                fold = P[i, pr] / T[i, pr]
+                passed.append(bool(np.all((fold >= 1.0 / f) & (fold <= f))))
+        whole[f"all_present_within_{str(f).replace('.', '_')}x"] = float(np.mean(passed))
+    return {"n_conditions": int(len(T)), "overall": stats(T, P),
+            "whole_condition": whole, "component": comp}
 
 
 def apply_model_pixels(model, wn, spectra):
@@ -980,7 +1583,8 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
     X = np.asarray(spectra, float)
     if X.shape[1] == len(wn):
         X = X[:, mask]
-    if u.get("input_mode") == "mlp_ratio+intensity_quantiles_v1":
+    if u.get("input_mode") in ("mlp_ratio+intensity_quantiles_v1",
+                                  "cnn_ratio+intensity_quantiles_v1"):
         # the composition head's full-spectrum ratios — the same eyes that already
         # call this pixel right — normalised over the µM head's substances
         pk = np.clip(np.asarray(apply_model_pixels(model, wn, spectra), float), 0, None)

@@ -9,6 +9,22 @@ from __future__ import annotations
 
 import os
 import traceback
+import hashlib
+
+BUILD_TAG = "model-benchmark-v9-samples-representative-pixels-20260820"
+
+
+def _source_hash(path):
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:10]
+    except Exception:
+        return "unreadable"
+
+
+_SOURCE_FILES = {name: os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+                 for name in ("page_compose.py", "dl_model.py", "dataset.py")}
+_LOADED_SOURCE_HASHES = {name: _source_hash(path) for name, path in _SOURCE_FILES.items()}
 
 import matplotlib
 import numpy as np
@@ -16,7 +32,7 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QComboBox, QSpinBox, QDoubleSpinBox,
     QCheckBox, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QProgressBar, QGridLayout, QScrollArea, QFrame,
+    QAbstractItemView, QProgressBar, QGridLayout,
 )
 
 from ui_common import *
@@ -96,7 +112,37 @@ class TrainComposeWorker(QObject):
                     tag, payload = q.get(timeout=0.5)
                 except _queue.Empty:
                     if not proc.is_alive():               # killed (Cancel) or crashed child
-                        self.fail.emit("training stopped"); return
+                        # Drain first: a child that finished can exit while its result is
+                        # still in flight, and reporting failure then would throw away a
+                        # completed run. Only after the queue is dry is the run really dead.
+                        drained = []
+                        while True:
+                            try:
+                                drained.append(q.get_nowait())
+                            except Exception:
+                                break
+                        for tg, pl in drained:
+                            if tg in ("bench", "kfold"):
+                                self.done.emit((tg, pl)); return
+                            if tg == "error":
+                                self.fail.emit(pl); return
+                            if tg == "done":
+                                model = pl; break
+                        if model is None:
+                            # No message at all: the process was killed rather than raising,
+                            # so there is no traceback to show. The exit code is the only
+                            # evidence, and the usual cause is the OS reclaiming memory.
+                            code = proc.exitcode
+                            self.fail.emit(
+                                f"the worker process was killed (exit code {code}) without "
+                                "reporting an error.\nThis is almost always the operating "
+                                "system reclaiming memory, or Cancel.\nIf you did not press "
+                                "Cancel: close other applications and re-run, and check the "
+                                "status line says 'one mean spectrum per map' — if it does "
+                                "not, the app is still running the older code and needs a "
+                                "restart.")
+                            return
+                        break
                     continue
                 if tag == "progress":
                     self.progress.emit(payload)
@@ -115,9 +161,10 @@ class TrainComposeWorker(QObject):
             all_subs = list(model["subs"])
             subs = [s for s in all_subs if not is_blank(s)]
             sidx = {s: j for j, s in enumerate(all_subs)}
-            # prefer the leave-one-out predictions when they were computed — the honest number
-            te = (model.get("loo_eval") or model.get("test_eval")
-                  or model.get("train_eval", {}))
+            # Only genuinely unseen predictions may enter recovery/accuracy figures.
+            # Train-set predictions can be nearly decimal-perfect and are useful only
+            # for optimisation diagnostics, never as model validation.
+            te = model.get("loo_eval") or model.get("test_eval") or {}
             tvs = te.get("true", []); pvs = te.get("pred", [])
             errs = []; rows = []
             for i in range(len(tvs)):
@@ -178,11 +225,9 @@ class ComposePanel(QWidget):
         self._model = None
         root = QHBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(14)
 
-        # Compact control rail on the left; every plot gets the wide right side.
-        # The rail scrolls only when advanced options are opened on a short screen.
         left_body = QWidget(); left = QVBoxLayout(left_body)
         left.setContentsMargins(0, 0, 6, 0); left.setSpacing(9)
-        left_body.setFixedWidth(300)
+        left_body.setFixedWidth(320)
         root.addWidget(left_body)
 
         right_body = QWidget(); right = QVBoxLayout(right_body)
@@ -209,21 +254,22 @@ class ComposePanel(QWidget):
                            "run — train_model needs it to build the simulated mixtures.")
         calib_b.clicked.connect(self._browse_calib)
         self.calib_lbl = QLabel("no calibration"); self.calib_lbl.setObjectName("field")
-        self.ref_lbl.setWordWrap(True); self.calib_lbl.setWordWrap(True)
-        _pure_row = QHBoxLayout(); _pure_row.setSpacing(5)
-        _pure_row.addWidget(pure_b); _pure_row.addWidget(reload_b)
-        frow.addLayout(_pure_row); frow.addWidget(self.ref_lbl)
+        frow.addWidget(pure_b); frow.addWidget(self.ref_lbl, 1)
         frow.addWidget(calib_b); frow.addWidget(self.calib_lbl)
-        self.mix_lbl.setWordWrap(True); frow.addWidget(self.mix_lbl)
+        frow.addWidget(self.mix_lbl); frow.addWidget(reload_b)
         left.addLayout(frow)
 
         # ---- step 1: which method? (leave-one-out comparison, trains nothing) ----
         brow = QVBoxLayout(); brow.setSpacing(5)
         blbl = QLabel("1 · compare methods:"); blbl.setObjectName("field")
-        self.bench_b = QPushButton("Benchmark (LOO)"); self.bench_b.setObjectName("ghost")
-        self.bench_b.setToolTip("score NNLS / PLS / RF / 1D-CNN / MLP on the same mixtures "
-                                "with leave-one-out — composition error and detection ROC. "
-                                "Tells you which method to train; saves no model.")
+        self.bench_b = QPushButton("Benchmark (5-fold · pixels)"); self.bench_b.setObjectName("ghost")
+        self.bench_b.setToolTip("score VIP band / NNLS / PLS / RF / 1D-CNN / MLP on the "
+                                "same maps with condition-grouped 5-fold validation — mean deviation (%p), "
+                                "recovery %±SE per substance, detection ROC, and accuracy "
+                                "at the cut declared in advanced (if any). VIP band = NNLS "
+                                "restricted to each compound's marker windows, the simplest "
+                                "rung of the ladder. Tells you which method to train; "
+                                "saves no model.")
         self.bench_b.clicked.connect(self._benchmark)
         self.kfold_b = QPushButton("5-fold check"); self.kfold_b.setObjectName("ghost")
         self.kfold_b.setToolTip("repeat the held-out test over all 5 one-in-five splits for "
@@ -232,11 +278,11 @@ class ComposePanel(QWidget):
         self.kfold_b.clicked.connect(self._kfold)
         self.bench_lbl = QLabel("run this first to see which method fits your data")
         self.bench_lbl.setObjectName("field")
-        brow.addWidget(blbl)
-        _bench_row = QHBoxLayout(); _bench_row.setSpacing(5)
-        _bench_row.addWidget(self.bench_b); _bench_row.addWidget(self.kfold_b)
-        brow.addLayout(_bench_row)
-        self.bench_lbl.setWordWrap(True); brow.addWidget(self.bench_lbl)
+        # The nine-method benchmark is already grouped 5-fold. Keep the old selected-
+        # method checker alive for backward compatibility, but hide the duplicate button.
+        self.kfold_b.setVisible(False)
+        brow.addWidget(blbl); brow.addWidget(self.bench_b)
+        brow.addWidget(self.bench_lbl, 1)
         left.addLayout(brow)
 
         # ---- step 2: train the model that gets deployed ----
@@ -269,7 +315,9 @@ class ComposePanel(QWidget):
         self.sp_px.setToolTip("individual hit-pixel training rows per map: 0 = one mean spectrum per map "
                               "(one row per map), higher = use that many individual "
                               "individual pixels, all labelled with the map's ratio. More rows "
-                              "fight overfitting; splits stay grouped by map either way.")
+                              "fight overfitting; splits stay grouped by map either way. "
+                              "Benchmark also uses this many pixels per map. All pixels from a map stay "
+                              "in the same fold and their predictions are pooled into one map-level score.")
         # OFF by default (2026-08-19): defaulting ON cost two accidental all-day
         # runs — LOO refits once per condition (~100×, hours). Tick it exactly once,
         # for the final model whose held-out numbers go in the paper.
@@ -281,10 +329,10 @@ class ComposePanel(QWidget):
             "Tick for the FINAL model only; everyday retrains leave it off "
             "(the saved .dlm then carries train-set numbers only).")
         self.chk_screen = QCheckBox("NNLS-screen ink first")
-        self.chk_screen.setChecked(False); self.chk_screen.setObjectName("field")
-        self.chk_screen.setToolTip("Optional: remove background pixels before training. Leave off "
-                                   "when every mixture-map pixel is a measured hit (the current "
-                                   "102-map set); enable only for maps containing empty substrate.")
+        self.chk_screen.setChecked(True); self.chk_screen.setObjectName("field")
+        self.chk_screen.setToolTip("ON matches the saved final pipeline: apply the NNLS "
+                                   "hit/background gate before the composition MLP. OFF is an "
+                                   "all-valid-pixels ablation; CSV records the actual pixel count.")
         self.sp_hit = QDoubleSpinBox(); self.sp_hit.setRange(0.0, 1.0)
         self.sp_hit.setDecimals(3); self.sp_hit.setSingleStep(0.025); self.sp_hit.setValue(0.15)
         self.sp_hit.setPrefix("hit fraction "); self.sp_hit.setObjectName("field")
@@ -311,6 +359,7 @@ class ComposePanel(QWidget):
         self.cmb_rfmf.addItem("RF features: all", None)
         self.cmb_rfmf.addItem("RF features: sqrt", "sqrt")
         self.cmb_rfmf.addItem("RF features: log2", "log2")
+        self.cmb_rfmf.setCurrentIndex(1)
         self.cmb_rfmf.setToolTip("how many spectral channels each forest split may consider. "
                                  "sklearn's regressor default is ALL of them, which on ~2000 "
                                  "channels costs minutes per fit; 'sqrt' is the usual forest "
@@ -324,6 +373,21 @@ class ComposePanel(QWidget):
                                  "the honest comparison. Lower it only to get a run finished, "
                                  "and say so wherever the numbers are used: the CNN is then "
                                  "scored undertrained against the rest.")
+        # the accuracy cut is DECLARED here, before the run — picking it after seeing the
+        # results is cherry-picking (HANDOFF 2026-08-19 §3). Mean deviation (%p) and
+        # per-substance recovery are always reported regardless; the cut only adds an
+        # accuracy column. 15 %p ≈ reproducibility floor (11.6) + 3; set 0 for no cut.
+        self.sp_cut = QDoubleSpinBox(); self.sp_cut.setObjectName("field")
+        self.sp_cut.setRange(0.0, 50.0); self.sp_cut.setDecimals(1)
+        self.sp_cut.setSingleStep(0.5); self.sp_cut.setValue(15.0)
+        self.sp_cut.setPrefix("declared cut "); self.sp_cut.setSuffix(" %p")
+        self.sp_cut.setSpecialValueText("no accuracy cut")
+        self.sp_cut.setToolTip("Benchmark only: a condition counts as 'correct' when its "
+                               "composition deviation is within this many percentage "
+                               "points. DECLARE it before running — choosing a cut after "
+                               "seeing the results is cherry-picking. 15 %p ≈ the measured "
+                               "repeat-preparation floor (11.6 %p) + 3; set to 0 to report "
+                               "mean deviation and recovery only, with no cut at all.")
 
         # ---- physics pre-training. These were hardcoded off (use_pretrain=False, and
         # calib_path never set), so a model trained here could not be the one the
@@ -348,9 +412,7 @@ class ComposePanel(QWidget):
                                      "spectra. Tried on the 64-condition grid and it pushed TBZ "
                                      "and THI the wrong way — off is the adopted setting.")
 
-        mrow.addWidget(mlbl)
-        _method_row = QHBoxLayout(); _method_row.setSpacing(5)
-        _method_row.addWidget(self.cmb, 1)
+        mrow.addWidget(mlbl); mrow.addWidget(self.cmb)
         # every knob lives in a FOLDED advanced box — the defaults are the adopted
         # settings, so the normal run is: calibration arrives from Quantify, Train.
         self.adv_tgl = QPushButton("▸ advanced"); self.adv_tgl.setObjectName("ghost")
@@ -358,17 +420,18 @@ class ComposePanel(QWidget):
         self.adv_tgl.setToolTip("epochs/seed, NNLS screen, blank class, physics "
                                 "pre-training, benchmark knobs — defaults are the "
                                 "adopted settings; open only to deviate")
-        _method_row.addWidget(self.adv_tgl)
-        mrow.addLayout(_method_row)
+        mrow.addWidget(self.adv_tgl)
         self.advw = QWidget(); adv = QGridLayout(self.advw)
         adv.setContentsMargins(0, 0, 0, 0); adv.setSpacing(5)
         _advanced_widgets = (self.sp_ep, self.sp_seed, self.sp_nc, self.sp_nt,
                              self.sp_px, self.chk_screen, self.sp_hit, self.chk_loo,
                              self.chk_equal_volume, self.chk_blank, self.chk_pretrain,
-                             self.cmb_iso, self.chk_nuisance, self.cmb_rfmf, self.sp_cnnep)
+                             self.cmb_iso, self.chk_nuisance, self.cmb_rfmf,
+                             self.sp_cnnep, self.sp_cut)
         for _i, _w in enumerate(_advanced_widgets):
             adv.addWidget(_w, _i // 2, _i % 2)
         self.advw.setVisible(False)
+        mrow.addWidget(self.advw)  # expanded controls sit directly under the toggle
 
         def _adv_tgl(on):
             self.advw.setVisible(on)
@@ -397,21 +460,36 @@ class ComposePanel(QWidget):
         self.pix_b.setToolTip("after an Export, re-unmix every scored map and tile the "
                               "per-pixel composition maps into one figure. Slow — it runs "
                               "the Real-data path once per map.")
-        _actions = QGridLayout(); _actions.setSpacing(5)
-        _actions.addWidget(self.load_b, 0, 0); _actions.addWidget(self.save_b, 0, 1)
-        _actions.addWidget(self.export_b, 1, 0); _actions.addWidget(self.pix_b, 1, 1)
-        _actions.addWidget(self.cancel_b, 2, 0); _actions.addWidget(self.train_b, 2, 1)
-        mrow.addLayout(_actions)
+        # Primary workflow first. File/output actions are a separate collapsed utility
+        # group so they do not split the Advanced toggle from its controls.
+        mrow.addWidget(self.cancel_b); mrow.addWidget(self.train_b)
+        self.files_tgl = QPushButton("▸ model files & outputs")
+        self.files_tgl.setObjectName("ghost"); self.files_tgl.setCheckable(True)
+        self.files_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
+        self.filesw = QWidget(); files = QVBoxLayout(self.filesw)
+        files.setContentsMargins(0, 0, 0, 0); files.setSpacing(5)
+        files.addWidget(self.load_b); files.addWidget(self.save_b)
+        files.addWidget(self.export_b); files.addWidget(self.pix_b)
+        self.filesw.setVisible(False)
+
+        def _files_tgl(on):
+            self.filesw.setVisible(on)
+            self.files_tgl.setText(("▾ " if on else "▸ ") + "model files & outputs")
+
+        self.files_tgl.toggled.connect(_files_tgl)
+        mrow.addWidget(self.files_tgl); mrow.addWidget(self.filesw)
         left.addLayout(mrow)
-        left.addWidget(self.advw)                          # folded advanced knobs
         self._update_params()
 
         self.pbar = QProgressBar(); self.pbar.setTextVisible(False)
         self.pbar.setFixedHeight(6); self.pbar.setVisible(False); left.addWidget(self.pbar)
+        self.build_lbl = QLabel(); self.build_lbl.setObjectName("sub")
+        self.build_lbl.setWordWrap(True)  # visible build badge is in the global header
+        self._refresh_build_badge()
 
         # read-only view of the shared mixtures (managed in Samples) — collapsible
         self.mix_tgl = QPushButton(); self.mix_tgl.setObjectName("ghost")
-        self.mix_tgl.setCheckable(True); self.mix_tgl.setChecked(False)
+        self.mix_tgl.setCheckable(True); self.mix_tgl.setChecked(True)
         self.mix_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
         self.mix_tgl.toggled.connect(self._toggle_table)
         left.addWidget(self.mix_tgl)
@@ -420,48 +498,101 @@ class ComposePanel(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setMaximumHeight(160)
+        self.table.setMaximumHeight(140)
         left.addWidget(self.table)
-        self._toggle_table(False)
+        self._toggle_table(True)
 
-        self.status = QLabel(""); self.status.setObjectName("sub")
-        self.status.setWordWrap(True); right.addWidget(self.status)
+        # the Benchmark table — one row per method: mean deviation (%p), accuracy at the
+        # declared cut (only when one was declared), recovery %±SE per substance,
+        # detection AUC. Hidden until a benchmark has run. Recovery is direction-aware
+        # but over/under CANCEL in its mean, so it is shown next to the deviation, never
+        # alone (HANDOFF 2026-08-19 §3).
+        self.bench_lbl2 = QLabel(
+            "Benchmark table — condition-grouped 5-fold, map-pooled, same folds for every method. "
+            "Mean dev and RMSE are percentage points of composition; log-ratio distance "
+            "(Aitchison) compares the ratios themselves, so a 2-fold miss costs the same "
+            "on a minor component as on the major one (~0.57 per 2-fold on a ternary). "
+            "Recovery = mean(pred/true)·100 where the substance is present (true=0 excluded).")
+        self.bench_lbl2.setObjectName("sub"); self.bench_lbl2.setWordWrap(True)
+        self.bench_lbl2.setVisible(False)
+        right.addWidget(self.bench_lbl2)
+        self.bench_table = QTableWidget(0, 0)
+        self.bench_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.bench_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.bench_table.setMaximumHeight(220)
+        self.bench_table.setVisible(False)
+        right.addWidget(self.bench_table)
+        self.conc_lbl = QLabel(
+            "Absolute concentration scorecard — filename µM truth, held-out maps. "
+            "This is separate from composition-fraction recovery above.")
+        self.conc_lbl.setObjectName("sub"); self.conc_lbl.setWordWrap(True)
+        self.conc_lbl.setVisible(False); right.addWidget(self.conc_lbl)
+        self.conc_table = QTableWidget(0, 0)
+        self.conc_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.conc_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.conc_table.setMaximumHeight(145); self.conc_table.setVisible(False)
+        right.addWidget(self.conc_table)
 
-        # Five results in a fixed two-row dashboard: two wide panels above, three
-        # compact diagnostics below. No full-screen window and no vertical hunt.
-        plots = QGridLayout(); plots.setSpacing(8)
+        plots = QHBoxLayout(); plots.setSpacing(12)
         lcard, llay = _card("Learning curve — training loss vs epoch (MLP / CNN)")
-        self.c_loss = Canvas(); self.c_loss.setMinimumHeight(210)
+        self.c_loss = Canvas(); self.c_loss.setMinimumHeight(300)
         self.c_loss.placeholder("Train an MLP or CNN to see the loss curve")
-        llay.addWidget(self.c_loss); plots.addWidget(lcard, 0, 0, 1, 3)
-        tcard, tlay = _card("Recovery — true (○) vs predicted (●, colour = accuracy)")
-        self.c_tri = Canvas(); self.c_tri.setMinimumHeight(210)
-        self.c_tri.placeholder("Train to see composition recovery")
-        tlay.addWidget(self.c_tri); plots.addWidget(tcard, 0, 3, 1, 3)
-
-        pcard, play = _card("Parity per substance — predicted vs true fraction")
-        self.c_parity = Canvas(); self.c_parity.setMinimumHeight(210)
-        self.c_parity.placeholder("Train to see the per-substance parity")
-        play.addWidget(self.c_parity); plots.addWidget(pcard, 1, 0, 1, 2)
-        ecard, elay = _card("Per-substance error — mean absolute fraction error")
-        self.c_err = Canvas(); self.c_err.setMinimumHeight(210)
-        self.c_err.placeholder("Train to see the per-substance error")
-        elay.addWidget(self.c_err); plots.addWidget(ecard, 1, 2, 1, 2)
-        self._err_title = elay.itemAt(0).widget()
-        rcard, rlay = _card("Detection ROC — is each substance present?")
-        self.c_roc = Canvas(); self.c_roc.setMinimumHeight(210)
-        self.c_roc.placeholder("Train to see the detection ROC / AUC")
-        rlay.addWidget(self.c_roc); plots.addWidget(rcard, 1, 4, 1, 2)
-        self._roc_title = rlay.itemAt(0).widget()
-        for _c in range(6):
-            plots.setColumnStretch(_c, 1)
-        plots.setRowStretch(0, 1); plots.setRowStretch(1, 1)
+        llay.addWidget(self.c_loss); plots.addWidget(lcard, 1)
+        tcard, tlay = _card("Held-out recovery (leave-one-out) — true (○) vs predicted (●, colour = accuracy)")
+        self.c_tri = Canvas(); self.c_tri.setMinimumHeight(300)
+        self.c_tri.placeholder("Train to see held-out composition recovery")
+        tlay.addWidget(self.c_tri); plots.addWidget(tcard, 1)
+        self._tri_title = tlay.itemAt(0).widget()
         right.addLayout(plots, 1)
-        left.addStretch(1)
+
+        plots2 = QHBoxLayout(); plots2.setSpacing(12)
+        pcard, play = _card("Parity per substance — predicted vs true fraction "
+                            "(on the line = exact)")
+        self.c_parity = Canvas(); self.c_parity.setMinimumHeight(300)
+        self.c_parity.placeholder("Train to see the per-substance parity")
+        play.addWidget(self.c_parity); plots2.addWidget(pcard, 1)
+        self._parity_title = play.itemAt(0).widget()
+        ecard, elay = _card("Per-substance error — mean |predicted − true| fraction "
+                            "(lower = better)")
+        self.c_err = Canvas(); self.c_err.setMinimumHeight(300)
+        self.c_err.placeholder("Train to see the per-substance error")
+        elay.addWidget(self.c_err); plots2.addWidget(ecard, 1)
+        self._err_title = elay.itemAt(0).widget()
+        rcard, rlay = _card("Detection ROC — is each substance present? "
+                            "(threshold the predicted fraction)")
+        self.c_roc = Canvas(); self.c_roc.setMinimumHeight(300)
+        self.c_roc.placeholder("Train to see the detection ROC / AUC")
+        rlay.addWidget(self.c_roc); plots2.addWidget(rcard, 1)
+        self._roc_title = rlay.itemAt(0).widget()
+        right.addLayout(plots2, 1)
+
+        self.status = QLabel(""); self.status.setObjectName("sub"); right.insertWidget(0, self.status)
+
         MIXTURE_BUS.changed.connect(self._load_from_samples)   # Samples edits → refresh here
         self._load_from_samples()
         CALIB_BUS.changed.connect(self._adopt_calib_bus)       # Quantify → calibration
         self._adopt_calib_bus()                # Quantify may have published already
+
+    def _refresh_build_badge(self):
+        current = {name: _source_hash(path) for name, path in _SOURCE_FILES.items()}
+        stale = current != _LOADED_SOURCE_HASHES
+        fp = "/".join(_LOADED_SOURCE_HASHES[name][:6]
+                      for name in ("page_compose.py", "dl_model.py", "dataset.py"))
+        self.build_lbl.setText(
+            ("RESTART REQUIRED — source changed on disk" if stale
+             else f"build {BUILD_TAG} · {fp}"))
+        self.build_lbl.setStyleSheet(f"color:{RED if stale else MUTE};")
+        details = [f"loaded {name}: {_LOADED_SOURCE_HASHES[name]}\n"
+                   f"disk   {name}: {current[name]}\n{_SOURCE_FILES[name]}"
+                   for name in _SOURCE_FILES]
+        self.build_lbl.setToolTip("\n\n".join(details)
+                                  + "\n\nChanges apply only after restarting the app.")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._refresh_build_badge()
 
     # ---- data dir shared with the Model tab / Samples ----
     def set_data_dir(self, path):
@@ -502,8 +633,25 @@ class ComposePanel(QWidget):
 
     def _load_from_samples(self):
         """Pull the known-ratio mixtures prepared in Samples (Step 1)."""
+        from dataset import load_preprocess
+        scfg = load_preprocess(self.data_dir)
+        self.sp_px.setValue(int(scfg.get("sample_pixels", 100)))
+        self.sp_px.setEnabled(False)
+        self.sp_px.setToolTip(
+            "Configured in Samples -> map sampling. Every benchmark method receives "
+            "the same fixed representative spectra.")
         roles = load_mixture_roles(self.data_dir)
-        allm = load_mixture_list(self.data_dir)
+        try:
+            allm = load_mixture_list(self.data_dir, filename_truth=True)
+        except ValueError as exc:
+            # Never fall back to mixtures.json labels here. The filename is the answer
+            # sheet; an unreadable map name must be corrected visibly.
+            self._items_cache = []; self._test_items = []
+            self.table.setRowCount(0)
+            self.mix_lbl.setText("mixtures: label error")
+            self.status.setText(f"label error — {exc}")
+            self.status.setStyleSheet(f"color:{RED};")
+            return
         self._items_cache = [it for it in allm if roles.get(it[0], "train") != "test"]
         self._test_items = [it for it in allm if roles.get(it[0], "train") == "test"]
         self.table.setRowCount(0)
@@ -561,13 +709,17 @@ class ComposePanel(QWidget):
                     n_components=self.sp_nc.value(), n_trees=self.sp_nt.value(),
                     rf_max_features=self.cmb_rfmf.currentData(),
                     cnn_epochs=(self.sp_cnnep.value() or None),
-                    px_per_map=self.sp_px.value(),
+                    px_per_map=int(cfg.get("sample_pixels", 100)),
+                    pixel_sampling=cfg.get("pixel_sampling", "representative"),
+                    sampling_seed=int(cfg.get("sampling_seed", 0)),
                     include_blank=self.chk_blank.isChecked(),
                     nnls_screen=self.chk_screen.isChecked(),
                     screen_min_frac=self.sp_hit.value(),
                     equal_volume_mix=self.chk_equal_volume.isChecked())
 
     def _train(self):
+        # Final fit honours Samples roles: train on the 82 training maps and score the
+        # 20 independent test maps without ever fitting on them.
         items = self._items_cache
         if len(items) < 3:
             self.status.setText("prepare ≥3 known-ratio mixtures in the Samples tab first")
@@ -620,56 +772,128 @@ class ComposePanel(QWidget):
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _benchmark(self):
-        """Leave-one-out comparison of NNLS / PLS / RF / CNN / MLP on the same mixtures."""
-        items = self._items_cache
+        """Grouped 5-fold comparison using pixel bags and one held-out score per map."""
+        # Rotate every labelled map through a held-out fold. Samples' train/test roles
+        # still govern the final Train button, but Benchmark uses all 102 maps.
+        items = self._items_cache + getattr(self, "_test_items", [])
         if len(items) < 3:
             self.status.setText("prepare ≥3 known-ratio mixtures in the Samples tab first")
             self.status.setStyleSheet(f"color:{RED};"); return
         params = self._opts(); params.pop("method", None); params.pop("loo", None)
         params["items"] = items; params["_benchmark"] = True
+        # Split before row expansion: 400 correlated pixels are one map, not 400 answers.
+        # Each held-out map contributes exactly one score after pixel prediction pooling.
+        params["px_per_map"] = self.sp_px.value()
+        params["cv_folds"] = 5
+        # the accuracy cut is frozen NOW, before any result exists — changing the spinbox
+        # afterwards must not re-score a finished run
+        v = float(self.sp_cut.value())
+        self._bench_cut_pending = v if v > 0 else None
         self.train_b.setEnabled(False); self.bench_b.setEnabled(False)
         self.bench_b.setText("Benchmarking…")
         self._cancelled = False; self.cancel_b.setVisible(True)
         self.pbar.setRange(0, 0); self.pbar.setVisible(True)
-        self.status.setText("● leave-one-out benchmark…"); self.status.setStyleSheet(f"color:{MUTE};")
+        self.status.setText(f"● grouped 5-fold benchmark — {len(items)} maps × up to "
+                            f"{self.sp_px.value()} valid pixels × 9 methods; one pooled score/map")
+        self.status.setStyleSheet(f"color:{MUTE};")
         start_worker(self, TrainComposeWorker(params), done=self._done,
                      fail=self._fail,
                      progress=lambda m: self.status.setText("● " + m))
 
     def _reset_buttons(self):
         self.train_b.setEnabled(True); self.train_b.setText("Train")
-        self.bench_b.setEnabled(True); self.bench_b.setText("Benchmark (LOO)")
+        self.bench_b.setEnabled(True); self.bench_b.setText("Benchmark (5-fold · pixels)")
         self.kfold_b.setEnabled(True); self.kfold_b.setText("5-fold check")
         self.pbar.setVisible(False); self.cancel_b.setVisible(False)
 
     def _done_bench(self, bench):
-        """Plot the LOO comparison: composition error per method + overlaid detection ROC."""
+        """Plot grouped out-of-fold, map-pooled scores for all nine methods."""
         import numpy as _np
         subs = list(bench.get("subs", []))
-        methods = [m for m in ("nnls", "pls", "rf", "cnn", "mlp") if m in bench]
-        label = {"nnls": "NNLS", "pls": "PLS", "rf": "RF", "cnn": "1D-CNN", "mlp": "MLP"}
+        methods = [m for m in ("null", "band", "nnls", "nnls_rf", "mcr", "pls", "rf",
+                               "cnn", "mlp") if m in bench]
+        label = {"null": "null", "band": "VIP band", "nnls": "NNLS",
+                 "nnls_rf": "NNLS+resp", "mcr": "MCR-ALS", "pls": "PLS", "rf": "RF",
+                 "cnn": "1D-CNN", "mlp": "MLP"}
         self._bench = {}
+        self._bench_raw = bench
         self._bench_subs = subs
-        self._err_title.setText("Method comparison — composition error, leave-one-out "
+        self._canvas_shows = "bench"        # c_err / c_roc now hold the method comparison
+        self._err_title.setText("Method comparison — composition error, grouped 5-fold / map-pooled "
                                 "(lower = better)")
-        self._roc_title.setText("Method comparison — detection ROC, leave-one-out")
-        ax = self.c_err.new_ax()                            # error bar chart per method
+        self._roc_title.setText("Method comparison — detection ROC, grouped 5-fold / map-pooled")
         errs, aucs = [], {}
         for m in methods:
             T = _np.asarray(bench[m]["true"], float); P = _np.asarray(bench[m]["pred"], float)
             errs.append(float((0.5 * _np.abs(P - T).sum(1)).mean()))
-            rows = [(f"mix {i+1}",
+            names = bench[m].get("condition", [])
+            rows = [((str(names[i]) if i < len(names) else f"map {i+1}"),
                      [float(v) for v in T[i]],
                      [float(v) for v in P[i]])
                     for i in range(len(T))]
             self._bench[m] = rows
             aucs[m] = self._roc(rows)
+
+        # summary FIRST — the error chart and the table below both read from it
+        from dl_model import benchmark_summary
+        cut = getattr(self, "_bench_cut_pending", None)
+        self._bench_cut = cut
+        summ = benchmark_summary(bench, cut)
+        self._bench_summary = summ
+
+        # the benchmark figure: how well each method recovers the mixture composition —
+        # ONE bar per method, mean deviation over every condition with its standard
+        # error. (The by-component-count split still rides along in the CSV for anyone
+        # who wants it, but the headline is the single recovery number.)
+        ax = self.c_err.new_ax()
+        vals = [summ.get(m, {}).get("dev_by_k", {}).get(
+                    "mean", (float("nan"), float("nan"), 0)) for m in methods]
         x = _np.arange(len(methods))
-        ax.bar(x, [e * 100 for e in errs], color=[TEAL if m == "mlp" else MUTE for m in methods],
-               edgecolor="white", alpha=0.9)
+        ax.bar(x, [v[0] for v in vals], 0.62,
+               yerr=[v[1] if v[1] == v[1] else 0.0 for v in vals], capsize=4,
+               color=[TEAL if m == "mlp" else MUTE for m in methods],
+               edgecolor="white", alpha=0.9, error_kw=dict(lw=0.9, ecolor=INK))
         ax.set_xticks(x); ax.set_xticklabels([label[m] for m in methods], fontsize=8.5)
-        ax.set_ylabel("composition error (%)  — leave-one-out")
+        ax.set_ylabel("composition error (%p) — held-out maps")
         self.c_err.fig.tight_layout(); self.c_err.draw_idle()
+
+        # The parity and ternary canvases belong to a TRAINED model and sit idle during a
+        # benchmark, so the two comparisons the table leads with get a figure each rather
+        # than living only in the CSV.
+        self._parity_title.setText(
+            "Strict whole-ratio accuracy — every component within ±1/±3/±5 %p")
+        axa = self.c_parity.new_ax()
+        cuts = (1.0, 3.0, 5.0)
+        for j, m in enumerate(methods):
+            acc = [100 * summ.get(m, {}).get("whole_within_pp", {}).get(
+                        c, float("nan")) for c in cuts]
+            axa.plot(cuts, acc, marker="o", lw=2.4 if m == "mlp" else 1.3,
+                     color=TEAL if m == "mlp" else SERIES[j % len(SERIES)],
+                     label=label[m])
+        axa.set_xticks(cuts); axa.set_xlabel("per-component tolerance (percentage points)")
+        axa.set_ylabel("whole composition correct (%)"); axa.set_ylim(0, 105)
+        axa.legend(fontsize=7, framealpha=0, ncol=3)
+        self.c_parity.fig.tight_layout(); self.c_parity.draw_idle()
+
+        # recovery: mean(pred/true)·100 per substance, ±SE, with 100% marked. Read it
+        # WITH the deviation chart — over- and under-recovery cancel in this mean.
+        self._tri_title.setText("Composition-fraction recovery — mean(predicted fraction / true fraction) × 100 "
+                                "± SE (100% = exact; read next to the error chart)")
+        axv = self.c_tri.new_ax()
+        bw = 0.8 / max(len(subs), 1)
+        for si, s in enumerate(subs):
+            vals = [summ.get(m, {}).get("recovery", {}).get(
+                        s, (float("nan"), float("nan"), 0)) for m in methods]
+            axv.bar(x + (si - (len(subs) - 1) / 2) * bw, [v[0] for v in vals], bw * 0.9,
+                    yerr=[v[1] if v[1] == v[1] else 0.0 for v in vals], capsize=3,
+                    color=substance_color(s, si), edgecolor="white", alpha=0.9,
+                    label=s, error_kw=dict(lw=0.9, ecolor=INK))
+        axv.axhline(100, color=INK, ls="--", lw=1.0)
+        axv.set_xticks(x); axv.set_xticklabels([label[m] for m in methods], fontsize=8.5)
+        axv.set_ylabel("composition-fraction recovery (%)")
+        axv.legend(fontsize=8, framealpha=0, ncol=len(subs))
+        self.c_tri.fig.tight_layout(); self.c_tri.draw_idle()
+
         axr = self.c_roc.new_ax()                           # ROC overlay
         axr.plot([0, 1], [0, 1], ls="--", color=MUTE, lw=1.0)
         for j, m in enumerate(methods):
@@ -685,10 +909,91 @@ class ComposePanel(QWidget):
         self.c_roc.fig.tight_layout(); self.c_roc.draw_idle()
         self._bench_err = dict(zip(methods, errs))
         self._bench_auc = {m: aucs[m][2] for m in methods}
+
+        # the benchmark table — same benchmark_summary the chart above and the CSV
+        # export read, so screen and file cannot disagree
+        cols = (["mean dev (%p)", "RMSE (%p)", "whole ratio <=1/3/5pp",
+                 "all present ratio within 2x", "log-ratio dist", "vs NNLS (Δ%p, p)"]
+                + ([f"accuracy ≤{cut:g} %p"] if cut is not None else [])
+                + [f"{s} fraction recovery %±SE" for s in subs] + ["detection AUC"])
+        self.bench_table.setColumnCount(len(cols))
+        self.bench_table.setHorizontalHeaderLabels(cols)
+        self.bench_table.setRowCount(len(methods))
+        for i, m in enumerate(methods):
+            e = summ.get(m, {})
+            self.bench_table.setVerticalHeaderItem(i, QTableWidgetItem(label[m]))
+            def _ms(key, dec=1):
+                mu, se, _n = e.get(key, (float("nan"), float("nan"), 0))
+                return f"{mu:.{dec}f} ± {se:.{dec}f}" if se == se else f"{mu:.{dec}f}"
+
+            vr = e.get("vs_ref")
+            vals = [f"{e.get('mean_dev_pp', float('nan')):.1f}", _ms("rmse_pp"),
+                    "/".join(f"{e.get('whole_within_pp', {}).get(c, float('nan')) * 100:.0f}%"
+                             for c in (1.0, 3.0, 5.0)),
+                    f"{e.get('whole_within_2fold', float('nan')) * 100:.0f}%",
+                    _ms("logratio", 2),
+                    "reference" if m == "nnls" else
+                    ("—" if not vr else f"{vr[0]:+.1f}, p={vr[1]:.3f}")]
+            if cut is not None:
+                vals.append(f"{e.get('acc_at_cut', float('nan')) * 100:.0f}%")
+            for s in subs:
+                mu, se, n = e.get("recovery", {}).get(s, (float("nan"), float("nan"), 0))
+                vals.append("—" if not n else
+                            (f"{mu:.0f}±{se:.0f}% (n={n})" if se == se
+                             else f"{mu:.0f}% (n={n})"))
+            vals.append(f"{self._bench_auc.get(m, float('nan')):.3f}")
+            for c, v in enumerate(vals):
+                self.bench_table.setItem(i, c, QTableWidgetItem(v))
+        self.bench_lbl2.setVisible(True)
+        self.bench_table.setVisible(True)
+
+        # A separate absolute-concentration scorecard. The nine rows above predict
+        # fractions; calling their pred/true ratio a µM recovery was incorrect.
+        ures = bench.get("uM") or {}
+        self._bench_uM_summary = {}
+        if ures.get("head", {}).get("true_uM"):
+            from dl_model import concentration_summary
+            umethods = [("null", "µM null"), ("head", "µM head")]
+            ucols = ["maps", "overall median fold error",
+                     "overall within 1.25×/1.5×/2×", "whole maps within 2×"]
+            ucols += [f"{s}: MFE / within 2×" for s in subs]
+            self.conc_table.setColumnCount(len(ucols))
+            self.conc_table.setHorizontalHeaderLabels(ucols)
+            self.conc_table.setRowCount(len(umethods))
+            for ri, (key, shown) in enumerate(umethods):
+                us = concentration_summary(ures.get(key, {}), subs)
+                self._bench_uM_summary[key] = us
+                ov = us.get("overall", {}); whole = us.get("whole_condition", {})
+                vals = [
+                    str(us.get("n_conditions", 0)),
+                    f"{ov.get('median_fold_error', float('nan')):.2f}×",
+                    "/".join(f"{ov.get(k, float('nan')) * 100:.0f}%"
+                             for k in ("within_1_25x", "within_1_5x", "within_2_0x")),
+                    f"{whole.get('all_present_within_2_0x', float('nan')) * 100:.0f}%",
+                ]
+                for s in subs:
+                    q = us.get("component", {}).get(s, {})
+                    vals.append(f"{q.get('median_fold_error', float('nan')):.2f}× / "
+                                f"{q.get('within_2_0x', float('nan')) * 100:.0f}%")
+                self.conc_table.setVerticalHeaderItem(ri, QTableWidgetItem(shown))
+                for ci, value in enumerate(vals):
+                    self.conc_table.setItem(ri, ci, QTableWidgetItem(value))
+            self.conc_lbl.setText(
+                "Absolute concentration scorecard — " + ures.get("protocol", "5-fold")
+                + ". µM head = held-out composition-MLP ratio + map intensity quantiles; "
+                  "null = training-map median µM. Every number is from held-out maps.")
+            self.conc_lbl.setVisible(True); self.conc_table.setVisible(True)
+        else:
+            self.conc_lbl.setText(
+                "Absolute concentration scorecard — NOT SCORED: no usable filename µM labels.")
+            self.conc_lbl.setVisible(True); self.conc_table.setVisible(False)
+
         self.export_b.setEnabled(True)
         best = methods[int(_np.argmin(errs))]
-        self.status.setText("leave-one-out benchmark — " + " · ".join(
-            f"{label[m]} {e:.0%}" for m, e in zip(methods, errs)) + f"   → best: {label[best]}")
+        self.status.setText(f"{bench.get('protocol', 'grouped benchmark')} · n={bench.get('n_maps_loaded', 0)} maps — " + " · ".join(
+            f"{label[m]} {e:.0%}" for m, e in zip(methods, errs)) + f"   → best: {label[best]}"
+            + (f"   (accuracy cut declared: ≤{cut:g} %p)" if cut is not None
+               else "   (no accuracy cut — deviation only)"))
         self.status.setStyleSheet(f"color:{MUTE};")
 
     def _cancel(self):
@@ -717,28 +1022,28 @@ class ComposePanel(QWidget):
         self.save_b.setEnabled(True)
         MODEL_BUS.set(model, origin=f"Model tab · {model.get('method', 'mlp').upper()}")
         self._rows = rows
-        try:
-            self._plot_triangle(rows)
-        except Exception:
-            import traceback as _tb
-            print(_tb.format_exc(), file=sys.stderr)
+        self._restore_model_titles()      # the canvases go back to the model's plots
         self._plot_loss(model.get("train_eval", {}).get("loss", []))
-        self._err_title.setText("Per-substance error — mean |predicted − true| fraction "
-                                "(lower = better)")
-        self._roc_title.setText("Detection ROC — is each substance present? "
-                                "(threshold the predicted fraction)")
-        try:
-            self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
-        except Exception:
-            import traceback as _tb
-            print(_tb.format_exc(), file=sys.stderr)
-            self.status.setText("trained OK — a result plot failed to draw (see console); "
-                                "the model itself is live and can be Saved")
+        if rows:
+            try:
+                self._plot_triangle(rows)
+                self._plot_parity(rows); self._plot_error(rows); self._plot_roc(rows)
+            except Exception:
+                import traceback as _tb
+                print(_tb.format_exc(), file=sys.stderr)
+                self.status.setText("trained OK — a result plot failed to draw (see console); "
+                                    "the model itself is live and can be Saved")
+        else:
+            msg = ("No held-out score. Enable held-out scoring (LOO) or assign an "
+                   "independent test batch; train-set recovery is intentionally hidden.")
+            self.c_tri.placeholder(msg); self.c_parity.placeholder(msg)
+            self.c_err.placeholder(msg); self.c_roc.placeholder(msg)
         self.export_b.setEnabled(True)
         m = model.get("method", "mlp").upper() + ("  +µM" if model.get("has_uM") else "")
         errtxt = f"{err:.0%}" if err == err else "—"
-        kind = ("leave-one-map-out" if model.get("loo_eval")
-                else "independent test batch" if model.get("test_eval") else "train-set")
+        kind = ("leave-one-condition-out" if model.get("loo_eval")
+                else "independent test batch" if model.get("test_eval")
+                else "not evaluated — enable LOO or independent test")
         independent = ""
         if model.get("test_eval"):
             _te = model["test_eval"]
@@ -762,7 +1067,24 @@ class ComposePanel(QWidget):
         if getattr(self, "_cancelled", False):            # cancel path already reset the UI
             return
         self._reset_buttons()
-        self.status.setText("failed — " + tb.strip().splitlines()[-1][:90])
+        # A Python traceback says the most in its LAST line; anything else (a killed
+        # worker, a plain message) says it in the FIRST. Guessing wrong buries the
+        # reason — the old code always took the last line, so a multi-line explanation
+        # showed up as its closing clause. The whole text goes to the tooltip and to a
+        # log file, since the app is usually started without a console to print to.
+        lines = [l for l in tb.strip().splitlines() if l.strip()]
+        msg = (lines[-1] if any(l.startswith("Traceback") for l in lines) else lines[0]) \
+            if lines else "no message"
+        log = os.path.join(self.data_dir, "unmixr_last_error.txt")
+        try:
+            with open(log, "w", encoding="utf-8") as f:
+                f.write(tb)
+        except Exception:
+            log = None
+        self.status.setText("failed — " + msg[:120]
+                            + (f"   (full text: {os.path.basename(log)} in the pure-refs "
+                               "folder, and hover this line)" if log else ""))
+        self.status.setToolTip(tb)
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
 
@@ -908,6 +1230,48 @@ class ComposePanel(QWidget):
                           f"{float(_np.sqrt(((tv - pv) ** 2).mean())):.4f}", f"{r2:+.3f}"])
         write_csv(os.path.join(d, "composition_metrics.csv"),
                   ["substance", "mean_abs_error", "sd", "rmse", "r2"], mrows)
+
+        # Held-out concentration metrics use the uM head's condition-grouped LOO only.
+        # Train-set concentration predictions are intentionally never exported as validation.
+        u = m.get("uM") or {}; uev = u.get("loo_eval") or {}
+        if uev.get("true_uM") and uev.get("pred_uM"):
+            from dl_model import concentration_summary
+            unames = list(u.get("subs") or subs)
+            us = concentration_summary(uev, unames)
+            metric_head = ["scope", "substance", "n", "mean_recovery_pct",
+                           "median_recovery_pct", "geometric_bias_fold",
+                           "median_abs_log10_error", "median_fold_error", "rmse_log10",
+                           "within_1_25x", "within_1_5x", "within_2_0x",
+                           "absent_n", "absent_median_pred_uM"]
+            metric_rows = []
+            for scope, name, q in ([["overall", "all", us.get("overall", {})]] +
+                                   [["component", s, us.get("component", {}).get(s, {})]
+                                    for s in unames]):
+                metric_rows.append([scope, name, q.get("n", 0),
+                    f"{q.get('mean_recovery_pct', float('nan')):.3f}",
+                    f"{q.get('median_recovery_pct', float('nan')):.3f}",
+                    f"{q.get('geometric_bias_fold', float('nan')):.5f}",
+                    f"{q.get('median_abs_log10_error', float('nan')):.5f}",
+                    f"{q.get('median_fold_error', float('nan')):.5f}",
+                    f"{q.get('rmse_log10', float('nan')):.5f}",
+                    f"{q.get('within_1_25x', float('nan')):.5f}",
+                    f"{q.get('within_1_5x', float('nan')):.5f}",
+                    f"{q.get('within_2_0x', float('nan')):.5f}",
+                    q.get("absent_n", 0),
+                    f"{q.get('absent_median_pred_uM', float('nan')):.5f}"])
+            write_csv(os.path.join(d, "concentration_loo_metrics.csv"),
+                      metric_head, metric_rows)
+            whole = us.get("whole_condition", {})
+            write_csv(os.path.join(d, "concentration_loo_condition_accuracy.csv"),
+                      ["metric", "fraction"], [[k, f"{v:.5f}"] for k, v in whole.items()])
+            TT = _np.asarray(uev["true_uM"], float); PP = _np.asarray(uev["pred_uM"], float)
+            paths_u = list(uev.get("paths", []))
+            write_csv(os.path.join(d, "concentration_loo_predictions.csv"),
+                      ["condition"] + [f"true_uM_{s}" for s in unames]
+                      + [f"pred_uM_{s}" for s in unames],
+                      [[os.path.basename(paths_u[i]) if i < len(paths_u) else f"condition_{i+1}"]
+                       + [f"{v:.6g}" for v in TT[i]] + [f"{v:.6g}" for v in PP[i]]
+                       for i in range(len(TT))])
         loss = m.get("train_eval", {}).get("loss", [])
         if loss:
             write_csv(os.path.join(d, "composition_learning_curve.csv"), ["epoch", "loss"],
@@ -930,12 +1294,25 @@ class ComposePanel(QWidget):
                   ["presence_threshold", "0.05", "true fraction > threshold"],
                   ["roc_auc_micro", f"{auc_v:.6f}" if auc_v == auc_v else "",
                    "pooled component presence; not composition accuracy"]])
-        n = _save_figs([("composition_learning_curve", self.c_loss),
-                        ("composition_triangle", self.c_tri),
-                        ("composition_parity", self.c_parity),
-                        ("composition_error", self.c_err),
-                        ("composition_roc", self.c_roc)], d)
+        # c_err / c_roc are SHARED with the benchmark: whichever ran last is on screen.
+        # Name them for what they actually show, or a benchmark chart would leave here
+        # as "composition_error.png" and be read as the model's per-substance error.
+        # A benchmark takes over four of the five canvases (error, ROC, parity, ternary),
+        # so a session that both trained and benchmarked can only export the panels the
+        # LAST run drew. Name them for what they actually show, or the benchmark's charts
+        # would leave as composition_*.png and be read as the model's own results.
+        showing_bench = getattr(self, "_canvas_shows", "model") == "bench"
+        figs = [("composition_learning_curve", self.c_loss)]
+        figs += (self._bench_figs() if showing_bench else
+                 [("composition_triangle", self.c_tri),
+                  ("composition_parity", self.c_parity),
+                  ("composition_error", self.c_err),
+                  ("composition_roc", self.c_roc)])
+        n = _save_figs(figs, d)
         n += self._export_grid_figs(d, rows, subs)
+        # a benchmark run in this session leaves with the model, not silently dropped
+        if getattr(self, "_bench", None):
+            self._write_bench_csvs(d, self._result_subs())
         # ONE ternary only — the on-screen `composition_triangle` above. The extra
         # ternaries this used to write (vs-NNLS side-by-side, accuracy-shaded, RGB)
         # said the same thing three more times and buried the rest of the export.
@@ -1074,6 +1451,201 @@ class ComposePanel(QWidget):
                             f"({len(entries)} maps)")
         self.status.setStyleSheet(f"color:{MUTE};")
 
+    def _restore_model_titles(self):
+        """Hand the four shared panels back to the trained model. A benchmark relabels
+        them (accuracy / recovery / method comparison), so training or loading a model
+        afterwards has to put the captions back or the plots would describe the wrong run."""
+        self._canvas_shows = "model"
+        self._tri_title.setText("Held-out recovery (leave-one-out) — true (○) vs "
+                                "predicted (●, colour = accuracy)")
+        self._parity_title.setText("Parity per substance — predicted vs true fraction "
+                                   "(on the line = exact)")
+        self._err_title.setText("Per-substance error — mean |predicted − true| fraction "
+                                "(lower = better)")
+        self._roc_title.setText("Detection ROC — is each substance present? "
+                                "(threshold the predicted fraction)")
+
+    def _bench_figs(self):
+        """The benchmark's four panels, as (filename, canvas)."""
+        return [("benchmark_error", self.c_err),
+                ("benchmark_accuracy_1_3_5pp", self.c_parity),
+                ("benchmark_recovery", self.c_tri),
+                ("benchmark_roc", self.c_roc)]
+
+    def _write_bench_csvs(self, d, subs):
+        """The benchmark table + its raw predictions and ROC points, into folder ``d``.
+        Shared by both export paths so a benchmark leaves with its numbers whether or
+        not a model was also trained this session. Metrics come from
+        dl_model.benchmark_summary — the same call the on-screen table reads."""
+        from io_utils import write_csv
+        bench = getattr(self, "_bench", None)
+        if not bench:
+            return
+        # mean deviation (%p) + per-substance recovery %±SE always; accuracy only when a
+        # cut was DECLARED before the run.
+        summ = getattr(self, "_bench_summary", None)
+        if summ is None and getattr(self, "_bench_raw", None):
+            from dl_model import benchmark_summary
+            summ = benchmark_summary(self._bench_raw, getattr(self, "_bench_cut", None))
+        summ = summ or {}
+        cut = getattr(self, "_bench_cut", None)
+        # the by-component-count split is off the chart now, but stays in the file
+        kgroups = [g for g in ("pure", "binary", "ternary")
+                   if any(g in e.get("dev_by_k", {}) for e in summ.values())]
+        head = ["method", "mean_deviation_pp", "rmse_pp", "rmse_se",
+                "whole_ratio_within_1pp", "whole_ratio_within_3pp",
+                "whole_ratio_within_5pp", "all_present_ratio_within_2fold",
+                "logratio_distance", "logratio_se", "median_delta_vs_nnls_pp",
+                "wilcoxon_p_vs_nnls", "composition_error", "detection_auc"]
+        for g in kgroups:
+            head += [f"deviation_pp_{g}", f"deviation_se_{g}", f"n_{g}"]
+        for s in subs:
+            head += [f"fraction_recovery_pct_{s}", f"fraction_recovery_se_{s}", f"fraction_recovery_n_{s}",
+                     f"bias_pp_{s}", f"mae_pp_{s}", f"rmse_pp_{s}",
+                     f"within_1pp_{s}", f"within_3pp_{s}", f"within_5pp_{s}",
+                     f"within_2fold_{s}"]
+        if cut is not None:
+            head.append(f"accuracy_within_{cut:g}pp")
+        mrows = []
+        for m in bench:
+            e = summ.get(m, {})
+            rm, rs, _ = e.get("rmse_pp", (float("nan"),) * 3)
+            lm, ls, _ = e.get("logratio", (float("nan"),) * 3)
+            vr = e.get("vs_ref") or (float("nan"), float("nan"), 0)
+            row = [m, f"{e.get('mean_dev_pp', float('nan')):.2f}",
+                   f"{rm:.2f}", f"{rs:.2f}",
+                   f"{e.get('whole_within_pp', {}).get(1.0, float('nan')):.4f}",
+                   f"{e.get('whole_within_pp', {}).get(3.0, float('nan')):.4f}",
+                   f"{e.get('whole_within_pp', {}).get(5.0, float('nan')):.4f}",
+                   f"{e.get('whole_within_2fold', float('nan')):.4f}",
+                   f"{lm:.4f}", f"{ls:.4f}",
+                   f"{vr[0]:.2f}", f"{vr[1]:.5f}",
+                   f"{self._bench_err[m]:.4f}",
+                   f"{self._bench_auc.get(m, float('nan')):.4f}"]
+            for g in kgroups:
+                mu, se, nn = e.get("dev_by_k", {}).get(g, (float("nan"), float("nan"), 0))
+                row += [f"{mu:.2f}", f"{se:.2f}", str(nn)]
+            for s in subs:
+                mu, se, nn = e.get("recovery", {}).get(s, (float("nan"), float("nan"), 0))
+                cm = e.get("component_metrics", {}).get(s, {})
+                row += [f"{mu:.2f}", f"{se:.2f}", str(nn),
+                        f"{cm.get('bias_pp', float('nan')):.2f}",
+                        f"{cm.get('mae_pp', float('nan')):.2f}",
+                        f"{cm.get('rmse_pp', float('nan')):.2f}",
+                        f"{cm.get('within_1pp', float('nan')):.4f}",
+                        f"{cm.get('within_3pp', float('nan')):.4f}",
+                        f"{cm.get('within_5pp', float('nan')):.4f}",
+                        f"{cm.get('within_2fold', float('nan')):.4f}"]
+            if cut is not None:
+                row.append(f"{e.get('acc_at_cut', float('nan')):.4f}")
+            mrows.append(row)
+        write_csv(os.path.join(d, "benchmark_metrics.csv"), head, mrows)
+        write_csv(os.path.join(d, "benchmark_composition_metrics.csv"), head, mrows)
+        write_csv(os.path.join(d, "benchmark_build.csv"),
+                  ["build_tag", "source", "loaded_sha256_prefix"],
+                  [[BUILD_TAG, name, value]
+                   for name, value in _LOADED_SOURCE_HASHES.items()])
+        raw = getattr(self, "_bench_raw", {}) or {}
+        write_csv(os.path.join(d, "benchmark_protocol.csv"), ["field", "value"],
+                  [["build_tag", BUILD_TAG], ["protocol", raw.get("protocol", "")],
+                   ["folds", raw.get("cv_folds", "")],
+                   ["configured_pixels_per_map", raw.get("pixels_per_map", "")],
+                    ["pixel_sampling", raw.get("pixel_sampling", "")],
+                    ["sampling_seed", raw.get("sampling_seed", "")],
+                   ["scoring_unit", raw.get("scoring_unit", "")],
+                   ["maps_loaded", raw.get("n_maps_loaded", "")],
+                   ["nnls_screen", raw.get("nnls_screen", "")],
+                   ["screen_min_fraction", raw.get("screen_min_frac", "")],
+                   ["composition_label_source", "mixture filename"],
+                   ["composition_units", "fractions summing to 1"],
+                   ["concentration_protocol", (raw.get("uM") or {}).get("protocol", "NOT SCORED")],
+                   ["concentration_scoring_unit", (raw.get("uM") or {}).get("scoring_unit", "")],
+                   ["concentration_label_source", (raw.get("uM") or {}).get("label_source", "")],
+                   ["concentration_pipeline", (raw.get("uM") or {}).get("pipeline", "")],
+                   ["concentration_input_mode", (raw.get("uM") or {}).get("input_mode", "")]])
+        rows_out = []
+        for m in bench:
+            r = raw.get(m, {}); T = r.get("true", []); P = r.get("pred", [])
+            names = r.get("condition", []); folds = r.get("fold", [])
+            counts = r.get("n_pixels", [])
+            for i in range(min(len(T), len(P))):
+                rows_out.append([m, names[i] if i < len(names) else f"map {i+1}",
+                                 folds[i] if i < len(folds) else "",
+                                 counts[i] if i < len(counts) else ""]
+                                + [f"{v:.4f}" for v in T[i]]
+                                + [f"{v:.4f}" for v in P[i]])
+        write_csv(os.path.join(d, "benchmark_predictions.csv"),
+                  ["method", "map_filename", "fold", "pixels_used"]
+                  + [f"true_{s}" for s in subs] + [f"pred_{s}" for s in subs], rows_out)
+        # True absolute-µM scorecard. Keep it in separate files so no fraction metric can
+        # be mistaken for concentration recovery.
+        ures = raw.get("uM") or {}
+        if ures.get("head", {}).get("true_uM"):
+            from dl_model import concentration_summary
+            metric_head = [
+                "method", "scope", "substance", "n",
+                "mean_recovery_pct", "median_recovery_pct",
+                "geometric_bias_fold", "median_abs_log10_error",
+                "median_fold_error", "rmse_log10",
+                "within_1_25x", "within_1_5x", "within_2_0x",
+                "whole_condition_within_1_25x",
+                "whole_condition_within_1_5x",
+                "whole_condition_within_2_0x",
+                "absent_n", "absent_median_pred_uM"]
+            metric_rows = []
+            pred_rows = []
+            for key, shown in (("null", "uM_null"), ("head", "uM_head")):
+                ev = ures.get(key, {}); us = concentration_summary(ev, subs)
+                whole = us.get("whole_condition", {})
+                scoped = [("overall", "all", us.get("overall", {}))]
+                scoped += [("component", s, us.get("component", {}).get(s, {}))
+                           for s in subs]
+                for scope, substance, q in scoped:
+                    metric_rows.append([
+                        shown, scope, substance, q.get("n", 0),
+                        f"{q.get('mean_recovery_pct', float('nan')):.5f}",
+                        f"{q.get('median_recovery_pct', float('nan')):.5f}",
+                        f"{q.get('geometric_bias_fold', float('nan')):.6f}",
+                        f"{q.get('median_abs_log10_error', float('nan')):.6f}",
+                        f"{q.get('median_fold_error', float('nan')):.6f}",
+                        f"{q.get('rmse_log10', float('nan')):.6f}",
+                        f"{q.get('within_1_25x', float('nan')):.5f}",
+                        f"{q.get('within_1_5x', float('nan')):.5f}",
+                        f"{q.get('within_2_0x', float('nan')):.5f}",
+                        f"{whole.get('all_present_within_1_25x', float('nan')):.5f}",
+                        f"{whole.get('all_present_within_1_5x', float('nan')):.5f}",
+                        f"{whole.get('all_present_within_2_0x', float('nan')):.5f}",
+                        q.get("absent_n", 0),
+                        f"{q.get('absent_median_pred_uM', float('nan')):.6g}"])
+                TT = ev.get("true_uM", []); PP = ev.get("pred_uM", [])
+                names_u = ev.get("condition", []); folds_u = ev.get("fold", [])
+                counts_u = ev.get("n_pixels", [])
+                for i in range(min(len(TT), len(PP))):
+                    pred_rows.append([
+                        shown, names_u[i] if i < len(names_u) else f"map {i+1}",
+                        folds_u[i] if i < len(folds_u) else "",
+                        counts_u[i] if i < len(counts_u) else ""]
+                        + [f"{v:.6g}" for v in TT[i]]
+                        + [f"{v:.6g}" for v in PP[i]])
+            write_csv(os.path.join(d, "benchmark_concentration_metrics.csv"),
+                      metric_head, metric_rows)
+            write_csv(os.path.join(d, "benchmark_concentration_predictions.csv"),
+                      ["method", "map_filename", "fold", "pixels_used"]
+                      + [f"true_uM_{s}" for s in subs]
+                      + [f"pred_uM_{s}" for s in subs], pred_rows)
+
+        # the ROC panel was the one figure leaving without its numbers — only the pooled
+        # AUC was written, and a curve cannot be redrawn from a single scalar.
+        curve = []
+        for m, rws in bench.items():
+            fpr, tpr, _a = self._roc(rws)
+            if fpr is None:
+                continue
+            curve += [[m, f"{a:.5f}", f"{b:.5f}"] for a, b in zip(fpr, tpr)]
+        if curve:
+            write_csv(os.path.join(d, "benchmark_roc_curves.csv"),
+                      ["method", "fpr", "tpr"], curve)
+
     def _export_eval_only(self):
         """Save a Benchmark / 5-fold result when no model has been trained in this session."""
         import numpy as _np
@@ -1088,31 +1660,8 @@ class ComposePanel(QWidget):
             return
         n = 0
         if bench:
-            write_csv(os.path.join(d, "benchmark_metrics.csv"),
-                      ["method", "composition_error", "detection_auc"],
-                      [[m, f"{self._bench_err[m]:.4f}",
-                        f"{self._bench_auc.get(m, float('nan')):.4f}"] for m in bench])
-            rows_out = []
-            for m, rws in bench.items():
-                for nm, tv, pv in rws:
-                    rows_out.append([m, nm] + [f"{v:.4f}" for v in tv]
-                                    + [f"{v:.4f}" for v in pv])
-            write_csv(os.path.join(d, "benchmark_predictions.csv"),
-                      ["method", "mixture"] + [f"true_{s}" for s in subs]
-                      + [f"pred_{s}" for s in subs], rows_out)
-            # the ROC panel was the one figure leaving without its numbers — only the
-            # pooled AUC was written, and a curve cannot be redrawn from a single scalar.
-            curve = []
-            for m, rws in bench.items():
-                fpr, tpr, _a = self._roc(rws)
-                if fpr is None:
-                    continue
-                curve += [[m, f"{a:.5f}", f"{b:.5f}"] for a, b in zip(fpr, tpr)]
-            if curve:
-                write_csv(os.path.join(d, "benchmark_roc_curves.csv"),
-                          ["method", "fpr", "tpr"], curve)
-            n += _save_figs([("benchmark_error", self.c_err),
-                             ("benchmark_roc", self.c_roc)], d)
+            self._write_bench_csvs(d, subs)
+            n += _save_figs(self._bench_figs(), d)
         if kf:
             write_csv(os.path.join(d, "kfold_errors.csv"), ["fold", "composition_error"],
                       [[i + 1, f"{e:.4f}"] for i, e in enumerate(kf.get("errors", []))]
@@ -1153,6 +1702,7 @@ class ComposePanel(QWidget):
             rows.append((f"mix {i + 1}", tv, pv))
         if rows:
             self._rows = rows
+            self._restore_model_titles()
             self._plot_triangle(rows); self._plot_parity(rows)
             self._plot_error(rows); self._plot_roc(rows)
             self._plot_loss(model.get("train_eval", {}).get("loss", []))

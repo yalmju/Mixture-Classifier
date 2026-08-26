@@ -97,7 +97,15 @@ class ValidatePage(QWidget):
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
 
-        ctl = QHBoxLayout(); ctl.setSpacing(8)
+        content = QHBoxLayout(); content.setSpacing(14)
+        left_body = QWidget(); left = QVBoxLayout(left_body)
+        left.setContentsMargins(0, 0, 6, 0); left.setSpacing(8)
+        left_body.setFixedWidth(320)
+        content.addWidget(left_body)
+        right_body = QWidget(); right = QVBoxLayout(right_body)
+        right.setContentsMargins(0, 0, 0, 0); right.setSpacing(10)
+        content.addWidget(right_body, 1)
+        root.addLayout(content, 1)
         self.ref_lbl = QLabel(self._short(self.data_dir)); self.ref_lbl.setObjectName("field")
         add_b = QPushButton("Add mixtures…"); add_b.setObjectName("ghost")
         add_b.setToolTip("load one or more known-ratio mixture maps")
@@ -124,11 +132,15 @@ class ValidatePage(QWidget):
         self.cancel_btn = QPushButton("Cancel"); self.cancel_btn.setObjectName("ghost")
         self.cancel_btn.setToolTip("stop the running Validate / DL job")
         self.cancel_btn.clicked.connect(self._cancel); self.cancel_btn.setVisible(False)
-        ctl.addWidget(self.ref_lbl); ctl.addStretch(1)
-        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.dl_chk)
-        ctl.addWidget(add_b); ctl.addWidget(self.explain_btn)
-        ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.cancel_btn); ctl.addWidget(self.btn)
-        root.addLayout(ctl)
+        left.addWidget(self.ref_lbl)
+        left.addWidget(cal_b); left.addWidget(self.cal_lbl)
+        left.addWidget(self.dl_chk)
+        left.addWidget(add_b); left.addWidget(self.explain_btn)
+        util = QHBoxLayout(); util.setSpacing(6)
+        util.addWidget(clr_b); util.addWidget(exp_b)
+        left.addLayout(util)
+        left.addWidget(self.cancel_btn); left.addWidget(self.btn)
+
 
         # collapsible input detail (fixed components · VIP · mixture table) — collapse it
         # (auto-collapses after a run) to give the result plots the full window height
@@ -136,13 +148,13 @@ class ValidatePage(QWidget):
         self.tgl.setCheckable(True); self.tgl.setChecked(True)
         self.tgl.setStyleSheet("text-align:left; padding:4px 8px;")
         self.tgl.toggled.connect(self._toggle_inputs)
-        root.addWidget(self.tgl)
+        left.addWidget(self.tgl)
 
         self.inbox = QWidget(); ibl = QVBoxLayout(self.inbox)
         ibl.setContentsMargins(0, 0, 0, 0); ibl.setSpacing(12)
 
         # fixed-component base ratio — auto-added to files that don't name them
-        brow = QHBoxLayout(); brow.setSpacing(8)
+        brow = QVBoxLayout(); brow.setSpacing(5)
         bl = QLabel("fixed components:"); bl.setObjectName("field")
         self.base_txt = QLineEdit()
         self.base_txt.setPlaceholderText("e.g. TBZ:1, DQ:1  — added to files that only "
@@ -152,12 +164,12 @@ class ValidatePage(QWidget):
         repar_b = QPushButton("Re-parse names"); repar_b.setObjectName("ghost")
         repar_b.setToolTip("re-read every filename's true ratio using the fixed-components base")
         repar_b.clicked.connect(self._reparse)
-        brow.addWidget(bl); brow.addWidget(self.base_txt, 1); brow.addWidget(repar_b)
+        brow.addWidget(bl); brow.addWidget(self.base_txt); brow.addWidget(repar_b)
         ibl.addLayout(brow)
 
         # VIP-band NNLS — decompose the composition on each compound's discriminative
         # marker band(s) only, instead of the whole spectrum (less mixture cross-talk)
-        vrow = QHBoxLayout(); vrow.setSpacing(8)
+        vrow = QVBoxLayout(); vrow.setSpacing(5)
         self.vip_chk = QCheckBox("VIP-band NNLS"); self.vip_chk.setObjectName("field")
         self.vip_chk.setToolTip("fit each mixture's composition only on the compounds' "
                                 "VIP marker bands (least cross-talk) rather than the full "
@@ -171,7 +183,7 @@ class ValidatePage(QWidget):
         vip_b.setToolTip("recommend each compound's least-cross-talk discriminative band "
                          "from the references")
         vip_b.clicked.connect(self._auto_vip)
-        vrow.addWidget(self.vip_chk); vrow.addWidget(self.vip_txt, 1); vrow.addWidget(vip_b)
+        vrow.addWidget(self.vip_chk); vrow.addWidget(self.vip_txt); vrow.addWidget(vip_b)
         ibl.addLayout(vrow)
 
         # No DL training knobs here on purpose: Recovery APPLIES the model trained
@@ -187,7 +199,7 @@ class ValidatePage(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
         self.table.setMaximumHeight(170)
         ibl.addWidget(self.table)
-        root.addWidget(self.inbox)
+        left.addWidget(self.inbox)
         self._toggle_inputs(True)                          # set the toggle label
 
         # progress: a busy bar (shown only while working) + the live status text
@@ -197,14 +209,15 @@ class ValidatePage(QWidget):
         self.progbar.setFixedHeight(6); self.progbar.setMaximumWidth(180)
         self.progbar.setVisible(False)
         prow.addWidget(self.progbar); prow.addWidget(self.status, 1)
-        root.addLayout(prow)
+        left.addLayout(prow)
+        left.addStretch(1)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
         self.k_mix = Kpi("mixtures"); self.k_sub = Kpi("substances")
         self.k_max = Kpi("max response ×"); self.k_err = Kpi("mean error → corrected")
         for k in (self.k_mix, self.k_sub, self.k_max, self.k_err):
             kpis.addWidget(k)
-        root.addLayout(kpis)
+        right.addLayout(kpis)
 
         body = QVBoxLayout(); body.setSpacing(12)
         self.c_parity = Canvas(); self.c_resp = Canvas(); self.c_corr = Canvas()
@@ -244,6 +257,8 @@ class ValidatePage(QWidget):
         bodyw = QWidget(); bodyw.setLayout(body)
         # Re-home the already-built cards into three in-place result views.
         views = QTabWidget()
+        views.setSizePolicy(QSizePolicy.Policy.Ignored,
+                            QSizePolicy.Policy.Expanding)
         ratio_w = QWidget(); ratio_lay = QVBoxLayout(ratio_w)
         ratio_lay.setContentsMargins(0, 8, 0, 0); ratio_lay.setSpacing(8)
         ratio_lay.addWidget(prow_w, 1); ratio_lay.addWidget(rcard, 1)
@@ -261,7 +276,13 @@ class ValidatePage(QWidget):
         views.addTab(ratio_w, "Ratios & response")
         views.addTab(comp_w, "Composition & drift")
         views.addTab(explain_w, "Model explanation")
-        root.addWidget(views, 1)
+        for card_title in views.findChildren(QLabel):
+            if card_title.objectName() == "cardTitle":
+                card_title.setWordWrap(True)
+                card_title.setMinimumWidth(0)
+                card_title.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                         QSizePolicy.Policy.Preferred)
+        right.addWidget(views, 1)
         for cv, m in [(self.c_parity, "Add mixtures, then Validate"),
                       (self.c_corr, "Corrected ratio appears here"),
                       (self.c_resp, "Response factors appear here"),
@@ -275,7 +296,7 @@ class ValidatePage(QWidget):
         self.readout = QLabel(""); self.readout.setObjectName("sub")
         self.readout.setWordWrap(True); self.readout.setTextFormat(Qt.TextFormat.RichText)
         self.readout.setStyleSheet(f"font-size:15px; color:{INK};")
-        root.addWidget(self.readout)
+        right.addWidget(self.readout)
         self._on_model_bus()          # reflect whether a model exists NOW, not only later
 
     # ---- helpers ----

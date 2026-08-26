@@ -235,6 +235,7 @@ def _vip_fit_mask(wn, peak_map, window, min_pts):
 def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
               min_frac=0.05, hit_mode="threshold", calib_path=None,
               peak_map=None, peak_window=10.0, dl_model=None, bg_map=None,
+              calib_bands=None,
               progress=None) -> UnmixResult:
     """Unmix ``test_path`` against the substances in ``data_dir`` (background
     included) by ``method`` ('nnls' or 'mcr'). ``hit_mode`` decides which pixels
@@ -465,8 +466,13 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     if calib_path and nonbg:
         nb_names = [names[i] for i in nonbg]
         pures = ref_templates[nonbg]                       # calibrate against the references
-        conc, pp_theta, calib_r2, calib_slope, conc_ood, conc_ranges = _quantify_map(
-            calib_path, nb_names, pures, spectra, wn, trim, baseline, hit, progress)
+        if os.path.splitext(calib_path)[1].lower() in (".xlsx", ".xlsm"):
+            conc, pp_theta, calib_r2, calib_slope, conc_ood, conc_ranges = \
+                _quantify_summary_map(calib_path, nb_names, pures, spectra, wn,
+                                      hit, ratio_nb, calib_bands, progress)
+        else:
+            conc, pp_theta, calib_r2, calib_slope, conc_ood, conc_ranges = _quantify_map(
+                calib_path, nb_names, pures, spectra, wn, trim, baseline, hit, progress)
         conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
         calibrated = True
 
@@ -562,6 +568,62 @@ def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
     ood[~hit] = False
     return conc, theta, r2, np.asarray(calib.gA) * np.asarray(calib.K), ood, ranges
 
+
+def _quantify_summary_map(calib_path, nb_names, pures, spectra, wn, hit,
+                          ratio_nb, calib_bands=None, progress=None):
+    """Invert marker curves to total concentration while preserving model ratio."""
+    from summary_calibration import load_summary_calibration
+
+    curves, corrections = load_summary_calibration(calib_path)
+    by_name = {c.name: c for c in curves}
+    missing = [n for n in nb_names if n not in by_name]
+    if missing:
+        raise ValueError(f"summary calibration is missing {missing}")
+    if progress:
+        note = f" ({'; '.join(corrections)})" if corrections else ""
+        progress("summary calibration — marker curves" + note)
+
+    bands = dict(calib_bands or {})
+    defaults = vip_bands(wn, pures, nb_names, k=1)
+    for name in nb_names:
+        if name not in bands:
+            vals = defaults.get(name) or []
+            if not vals:
+                vals = [float(wn[int(np.argmax(pures[nb_names.index(name)]))])]
+            bands[name] = float(vals[0])
+
+    responses = np.zeros((len(spectra), len(nb_names)), float)
+    apparent = np.zeros_like(responses)
+    r2 = np.zeros(len(nb_names)); slopes = np.zeros(len(nb_names))
+    ranges = np.zeros((len(nb_names), 2), float)
+    axis = np.asarray(wn, float)
+    for j, name in enumerate(nb_names):
+        curve = by_name[name]
+        mask = np.abs(axis - float(bands[name])) <= 8.0
+        if not mask.any():
+            mask[int(np.argmin(np.abs(axis-float(bands[name]))))] = True
+        responses[:, j] = np.asarray(spectra, float)[:, mask].mean(axis=1)
+        apparent[:, j] = curve.invert(responses[:, j])
+        pred = curve.predict(curve.concentration_M)
+        sst = float(np.sum((curve.mean-curve.mean.mean())**2))
+        r2[j] = 1.0-float(np.sum((curve.mean-pred)**2))/sst if sst > 0 else 0.0
+        slopes[j] = curve.plateau * curve.K
+        ranges[j] = [curve.concentration_M.min(), curve.concentration_M.max()]
+
+    ratio = np.asarray(ratio_nb, float)
+    candidates = np.divide(apparent, ratio, out=np.full_like(apparent, np.nan),
+                           where=ratio >= 0.05)
+    candidates[(candidates <= 0) | ~np.isfinite(candidates)] = np.nan
+    total = np.zeros(len(candidates), float)
+    usable = np.isfinite(candidates).any(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        total[usable] = np.exp(np.nanmedian(np.log(candidates[usable]), axis=1))
+    total = np.where(np.isfinite(total), total, 0.0)
+    conc = ratio * total[:, None]
+    conc[~np.asarray(hit, bool)] = 0.0
+    ood = ((conc < ranges[:, 0][None, :]) | (conc > ranges[:, 1][None, :])) & (conc > 0)
+    theta = np.zeros(len(spectra), float)
+    return conc, theta, r2, slopes, ood, ranges
 
 if __name__ == "__main__":
     import sys

@@ -101,10 +101,20 @@ class RealDataPage(QWidget):
         # the right side is nothing but results. One screen, no hunting.
         outer = QHBoxLayout(); outer.setSpacing(10)
         root.addLayout(outer, 1)
-        leftw = QWidget(); leftw.setFixedWidth(270)
+        # Keep the control rail's content height independent from the dashboard.
+        # Opening Options may scroll this rail, but must never stretch result rows.
+        leftw = QWidget()
         left = QVBoxLayout(leftw)
         left.setContentsMargins(0, 0, 0, 0); left.setSpacing(10)
-        outer.addWidget(leftw)
+        left_scroll = QScrollArea()
+        left_scroll.setObjectName("controlRail")
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        left_scroll.setFixedWidth(280)
+        left_scroll.setWidget(leftw)
+        outer.addWidget(left_scroll)
 
         ctl = QVBoxLayout(); ctl.setSpacing(6)
         test_b = QPushButton("Load test map…"); test_b.setObjectName("ghost")
@@ -284,6 +294,7 @@ class RealDataPage(QWidget):
 
         # ---------- result dashboard: compact hierarchy, no page scroll ----------
         body = QGridLayout(); body.setSpacing(5)
+        self._fold_dirty = {"maps": False, "abund": False}
 
         # 1) band maps: raw intensity at one marker band per substance + their RGB merge
         self.c_maps = Canvas()
@@ -292,13 +303,13 @@ class RealDataPage(QWidget):
         self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
-        lay_maps.addWidget(self.c_maps); self.c_maps.setFixedHeight(175)
+        lay_maps.addWidget(self.c_maps); self.c_maps.setFixedHeight(190)
         # one min/max pair PER band panel (rebuilt with the band row) — the card-wide
         # pair could not stretch a weak channel without flattening a strong one
         self.scalerow = QHBoxLayout(); self.scalerow.setSpacing(6)
         self.scalerow.addWidget(self._mk_lbl("scale:")); self.scalerow.addStretch(1)
         lay_maps.addLayout(self.scalerow)
-        self._add_fold(lay_maps, self.c_maps, "band maps", opened=True, key="maps")
+
 
         # 1b) unmixed abundance maps — NNLS runs FIRST in every path (the gate), so
         #     its per-substance abundances belong beside the raw band maps: bands =
@@ -306,9 +317,9 @@ class RealDataPage(QWidget):
         self.c_abund = Canvas()
         card_ab, lay_ab = _card(
             "Stage-1 spectral evidence — full-spectrum NNLS + background gate")
-        lay_ab.addWidget(self.c_abund); self.c_abund.setFixedHeight(175)
+        lay_ab.addWidget(self.c_abund); self.c_abund.setFixedHeight(190)
         lay_ab.addLayout(self._scale_row("abund", 1.0))
-        self._add_fold(lay_ab, self.c_abund, "abundance maps", opened=True, key="abund")
+
         # Nine equal map slots across the result area. Raw uses four (merge + 3),
         # stage-1 uses five (merge + 3 + background), so every spatial map has the
         # same physical width instead of shrinking because its card has more panels.
@@ -320,15 +331,15 @@ class RealDataPage(QWidget):
         self.c_spec = Canvas()
         scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
         slay.addWidget(self.c_spec)
-        self.c_spec.setFixedHeight(175)
+        self.c_spec.setFixedHeight(215)
 
         # 3) per-pixel composition pie | the same composition summed over the map —
         #    the pie map and the number it adds up to belong on one row
         self.c_pie = Canvas(); self.c_comp = Canvas()
         pcard, play = _card("Per-pixel composition — spectral evidence (before) vs model (after)")
-        play.addWidget(self.c_pie); self.c_pie.setFixedHeight(175)
+        play.addWidget(self.c_pie); self.c_pie.setFixedHeight(215)
         ccard, clay = _card("Composition (overall) — before vs after")
-        clay.addWidget(self.c_comp); self.c_comp.setFixedHeight(175)
+        clay.addWidget(self.c_comp); self.c_comp.setFixedHeight(215)
 
         # One comparison row, in reading order. All three stay visible.
         body.addWidget(scard, 1, 0, 1, 3)
@@ -376,7 +387,7 @@ class RealDataPage(QWidget):
         lay_conc.addWidget(self.conc_opt_tgl)
         lay_conc.addWidget(self.conc_optbox)
         lay_conc.addWidget(self.c_conc)
-        self.c_conc.setFixedHeight(175)
+        self.c_conc.setFixedHeight(185)
         # Long headings used to become hard minimum widths (over 2,100 px for the
         # whole page). Wrap them inside their cards so a normal laptop window can
         # show the complete wording without a horizontal scrollbar.
@@ -385,15 +396,16 @@ class RealDataPage(QWidget):
             _title.setWordWrap(True)
             _title.setMinimumWidth(0)
             _title.setSizePolicy(QSizePolicy.Policy.Ignored,
-                                 QSizePolicy.Policy.Preferred)
+                                 QSizePolicy.Policy.Fixed)
+            _lay.setAlignment(Qt.AlignmentFlag.AlignTop)
         body.addWidget(self.card_conc, 2, 0, 1, 9)
         self.card_conc.setVisible(False)
 
         self.result_grid = body
         for col in range(9):
             body.setColumnStretch(col, 1)
-        body.setRowStretch(0, 2)
-        body.setRowStretch(1, 2)
+        body.setRowStretch(0, 0)
+        body.setRowStretch(1, 1)
         body.setRowStretch(2, 0)  # enabled only while concentration is visible
 
         # Matplotlib advertises a large preferred width. Ignore that hint so three
@@ -623,12 +635,13 @@ class RealDataPage(QWidget):
         L, R = lr if lr is not None else (self._GS_L, self._GS_R)
         WS, HS = self._GS_WS, self._GS_HS
         BOT, TOP, BAR_IN = 0.08, 0.92, 0.11
-        figw, figh = fig.get_size_inches()
+        _, figh = fig.get_size_inches()
         figh = max(float(figh), 1e-6)
-        cell_w = (R - L) / (n + (n - 1) * WS) * float(figw)          # inches
-        need = cell_w * (ny / max(nx, 1)) / figh                     # image row, frac
-        need = min(max(need, 0.05), TOP - BOT)
         bar = BAR_IN / figh                                          # ramp row, frac
+        # A common row height keeps the same measurement equally tall in the raw
+        # four-panel and abundance five-panel cards. Data aspect is kept inside it.
+        need = min(0.75, TOP - BOT - bar)
+        need = max(need, 0.05)
         # hspace is a fraction of the MEAN row height
         span = need + bar + HS * (need + bar) / 2.0
         if span > TOP - BOT:                       # too tall for the card — scale both
@@ -1020,8 +1033,8 @@ class RealDataPage(QWidget):
 
     def _browse_calib(self):
         p, _ = QFileDialog.getOpenFileName(
-            self, "Calibration spectra CSV (compound, concentration_M, wavenumbers…) "
-            "— e.g. calibration_spectra.csv from Quantify Export", "", "CSV (*.csv)")
+            self, "Calibration spectra CSV or summary curve XLSX", "",
+            "Calibration (*.csv *.xlsx *.xlsm);;CSV (*.csv);;Excel (*.xlsx *.xlsm)")
         if not p:
             return
         problem = self._validate_calib(p)                 # reject fit/curve/wrong CSVs
@@ -1029,8 +1042,8 @@ class RealDataPage(QWidget):
             self.calib_path = None; self.cal_x.setVisible(False)
             self.cal_lbl.setText("not a calibration"); self.cal_lbl.setStyleSheet(f"color:{RED};")
             self.status.setText(
-                f"{os.path.basename(p)} is not a spectra calibration — {problem}. "
-                "Use calibration_spectra.csv (from Quantify → Export), not "
+                f"{os.path.basename(p)} is not a usable calibration — {problem}. "
+                "Use calibration_spectra.csv or a concentration/Mean/std XLSX, not "
                 "calibration_fit/curve/stats.csv.")
             self.status.setStyleSheet(f"color:{RED};")
             return
@@ -1041,6 +1054,13 @@ class RealDataPage(QWidget):
     def _validate_calib(path):
         """Return a reason string if `path` is not a per-standard spectra calibration
         (compound, concentration_M, <wavenumbers>), else None."""
+        if os.path.splitext(path)[1].lower() in (".xlsx", ".xlsm"):
+            try:
+                from summary_calibration import load_summary_calibration
+                curves, _corrections = load_summary_calibration(path)
+            except Exception as exc:
+                return f"could not read summary curves ({type(exc).__name__})"
+            return None if curves else "no summary curves"
         from io_utils import load_calibration_csv
         try:
             axis, names, dils = load_calibration_csv(path)
@@ -1263,7 +1283,8 @@ class RealDataPage(QWidget):
                           trim=cfg["trim"], min_frac=self.thr_value(),
                           hit_mode="auto" if self.chk_auto.isChecked() else "threshold",
                           calib_path=self._effective_calib()[0], dl_model=self.dl_model,
-                          bg_map=self.bg_paths or None)
+                          bg_map=self.bg_paths or None,
+                          calib_bands=dict(self._bands))
             if params["method"] == "dlpx" and self.dl_model is None:
                 self.status.setText("no composition model — train one in the Model tab "
                                     "(or Load DL model…)")
@@ -1417,7 +1438,7 @@ class RealDataPage(QWidget):
             norm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
         ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                   interpolation="nearest")
-        ax.set_title("merged (R/G/B)", fontsize=9)
+        ax.set_title("merged (R/G/B)", fontsize=8)
         ax.set_xticks([]); ax.set_yticks([])
         # no legend under the merge — the per-panel titles already carry name + band
         self._exp_maps.append(("band_merged", ax, None))
@@ -1438,7 +1459,7 @@ class RealDataPage(QWidget):
                             vmin=lims[i][0], vmax=lims[i][1])
             # mathtext, not "cm⁻¹" — Arial has no superscript-minus glyph, so the
             # literal character renders as a box in the exported PNG
-            ax.set_title(f"{nm} @ {bands[i]:.0f} cm$^{{-1}}$", fontsize=9)
+            ax.set_title(f"{nm} @ {bands[i]:.0f} cm$^{{-1}}$", fontsize=8)
             ax.set_xticks([]); ax.set_yticks([])
             # ramp UNDER the panel — horizontal bars share the panel's width, so
             # (unlike the old vertical ones) they cannot outgrow the map
@@ -1779,12 +1800,8 @@ class RealDataPage(QWidget):
         self._pie_ax = axes[-1]
         self._exp_pie = [("composition_before", axes[0], None),
                          ("composition_after", axes[1], None)]
-        handles = [Patch(facecolor=cols[i], label=r.comps[j])
-                   for i, j in enumerate(r.nonbg)] + [Patch(facecolor=self.PIE_BG,
-                                                             label="background")]
-        self.c_pie.fig.legend(handles=handles, fontsize=8, frameon=False,
-                              loc="lower center", ncol=len(handles),
-                              bbox_to_anchor=(0.5, 0.01))
+        # The persistent colour chips above the dashboard already identify each
+        # substance; repeating them here only covers the bottom of both maps.
         self.c_pie.draw_idle()
     def _update_sel_rings(self, r):
         """One ring on EVERY map (band, abundance, pie) at the clicked pixel — the
@@ -1825,7 +1842,7 @@ class RealDataPage(QWidget):
 
     def _plot_comp(self, r):
         self.c_comp.fig.clear()
-        self.c_comp.fig.subplots_adjust(left=0.01, right=0.99, bottom=0.06,
+        self.c_comp.fig.subplots_adjust(left=0.01, right=0.99, bottom=0.20,
                                         top=0.86, wspace=0.05)
         cols = self._nb_colors(r); nb = [r.comps[i] for i in r.nonbg]
         hit = self._hit(r)
@@ -1843,11 +1860,15 @@ class RealDataPage(QWidget):
         for panel, (mr, title) in enumerate(pairs, 1):
             ax = self.c_comp.style(self.c_comp.fig.add_subplot(1, 2, panel))
             keep = [i for i in range(len(nb)) if mr[i] >= 0.01] or [int(mr.argmax())]
-            ax.pie([mr[i] for i in keep], labels=[nb[i] for i in keep],
+            ax.pie([mr[i] for i in keep], labels=None,
                    colors=[cols[i] for i in keep], autopct="%1.0f%%",
                    textprops={"fontsize": 8, "color": INK}, radius=0.88)
             ax.set_title(title, fontsize=8, pad=1)
             ax.set_aspect("equal")
+        handles = [Patch(facecolor=cols[i], label=nm) for i, nm in enumerate(nb)]
+        self.c_comp.fig.legend(handles=handles, loc="lower center", ncol=len(handles),
+                               fontsize=7, frameon=False, handlelength=1.0,
+                               columnspacing=1.1, bbox_to_anchor=(0.5, 0.01))
         self.c_comp.draw_idle()
     def _plot_spec(self, r, i):
         ax = self.c_spec.new_ax()

@@ -17,8 +17,8 @@ from real_data import PEST_DEFAULT
 from dataset import (discover_references, base_and_batch, load_manifest,
                      save_manifest, map_pixel_count, load_preprocess,
                      save_preprocess, load_mixture_list, save_mixture_list,
-                     load_mixture_roles, parse_mixture_label)
-from validate import simplify_ratio
+                     load_mixture_roles)
+from validate import parse_mixture_label, simplify_ratio
 
 
 # --------------------------------------------------------------------------
@@ -75,6 +75,34 @@ class SamplingPage(QWidget):
         prep.addStretch(1)
         root.addLayout(prep)
 
+        # Pixel sampling is preprocessing, not a model hyperparameter. Keep the
+        # decision here so every compared method receives the exact same spectra.
+        sampling = QHBoxLayout(); sampling.setSpacing(10)
+        sl = QLabel("map sampling:"); sl.setObjectName("field")
+        sampling.addWidget(sl)
+        self.cmb_sampling = QComboBox(); self.cmb_sampling.setObjectName("field")
+        self.cmb_sampling.addItem("representative spectra", "representative")
+        self.cmb_sampling.addItem("legacy intensity order", "legacy")
+        self.cmb_sampling.setToolTip(
+            "Within each map, group spectra by shape + log intensity and keep actual "
+            "representative spectra. Labels and train/test groups are unchanged.")
+        sampling.addWidget(self.cmb_sampling)
+        self.sp_sample_px = QSpinBox(); self.sp_sample_px.setRange(16, 400)
+        self.sp_sample_px.setValue(100); self.sp_sample_px.setSingleStep(10)
+        self.sp_sample_px.setPrefix("representatives/map ")
+        self.sp_sample_px.setToolTip(
+            "Maximum fixed representative spectra retained from each map. "
+            "100 is the default; Model and benchmark reuse this value.")
+        sampling.addWidget(self.sp_sample_px)
+        self.sp_sampling_seed = QSpinBox(); self.sp_sampling_seed.setRange(0, 999999)
+        self.sp_sampling_seed.setValue(0); self.sp_sampling_seed.setPrefix("seed ")
+        self.sp_sampling_seed.setToolTip(
+            "Reproducible map-level sampling seed. The file path is folded into it, "
+            "so the same map gets the same representatives in every fold.")
+        sampling.addWidget(self.sp_sampling_seed)
+        sampling.addStretch(1)
+        root.addLayout(sampling)
+
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             ["File", "# px", "Class (substance)", "Batch", "Role (train/test/exclude)"])
@@ -100,9 +128,8 @@ class SamplingPage(QWidget):
         self.mix_tgl.setStyleSheet("text-align:left; padding:4px 8px;")
         self.mix_tgl.toggled.connect(self._toggle_mix)
         self.chk_mix_uM = QCheckBox("ratios are µM"); self.chk_mix_uM.setObjectName("field")
-        self.chk_mix_uM.setToolTip("amounts encoded in filenames (e.g. DQ12-TB3-TH6) are "
-                                   "always read as µM automatically. Tick this only to treat "
-                                   "numbers from non-standard filenames as absolute µM too.")
+        self.chk_mix_uM.setToolTip("treat the ratio numbers as absolute µM (e.g. DQ1000 → "
+                                   "1000 µM) so the concentration head can be trained")
         self.chk_mix_uM.stateChanged.connect(lambda _=0: self._save_mix())
         mix_add = QPushButton("Add mixtures…"); mix_add.setObjectName("ghost")
         mix_add.clicked.connect(self._add_mix)
@@ -187,7 +214,10 @@ class SamplingPage(QWidget):
         trim = (lo, hi) if (hi > lo and (lo > 0 or hi < 4000)) else None
         return {"baseline": self.chk_base.isChecked(),
                 "deriv": self.cmb_deriv.currentData(),
-                "norm": self.cmb_norm.currentData(), "trim": trim}
+                "norm": self.cmb_norm.currentData(), "trim": trim,
+                "pixel_sampling": self.cmb_sampling.currentData(),
+                "sample_pixels": self.sp_sample_px.value(),
+                "sampling_seed": self.sp_sampling_seed.value()}
 
     # ---- known-ratio mixtures (Step 1 prepares them; Model / Recovery share them) ----
     def _mix_ref_names(self):
@@ -250,16 +280,22 @@ class SamplingPage(QWidget):
                 except ValueError:
                     pass
             if len(ratio) >= 2:
-                # A parseable filename is absolute measurement metadata, regardless
-                # of the checkbox. If the user meant only 1,2,3,4,5 ratios they would
-                # not have named the maps DQ12-TB3-TH6. The checkbox remains only as
-                # an explicit fallback for legacy/non-standard filenames.
+                # µM comes from the FILENAME — the single source of truth
+                # (260814_mixture_final doctrine). The old mix_amounts cache
+                # drifted out of row order once and silently scrambled EVERY
+                # concentration label (101/101 mismatched, the µM head trained
+                # on another map's answer key); a per-row cache is never again
+                # trusted for µM. Nor is the µM checkbox allowed to VETO the
+                # filename: with it unticked a single save used to strip conc
+                # from all 102 entries (2026-08-19, an app instance with the box
+                # off rewrote mixtures.json µM-less) — the checkbox only decides
+                # whether the row CACHE may stand in for a non-standard filename.
                 nm = os.path.splitext(os.path.basename(self.mix_files[row]))[0]
                 amt = parse_mixture_label(nm, self._mix_ref_names()) or {}
-                if amt or self.chk_mix_uM.isChecked():
-                    if not amt:                        # non-standard filename only
-                        amt = (self.mix_amounts[row]
-                               if row < len(self.mix_amounts) else {}) or ratio
+                if not amt and self.chk_mix_uM.isChecked():   # non-standard filename only
+                    amt = (self.mix_amounts[row]
+                           if row < len(self.mix_amounts) else {}) or ratio
+                if amt:
                     items.append((self.mix_files[row], ratio,
                                   {k: float(v) * 1e-6 for k, v in amt.items() if float(v) > 0}))
                 else:
@@ -431,6 +467,10 @@ class SamplingPage(QWidget):
         self.cmb_norm.setCurrentIndex(max(0, self.cmb_norm.findData(cfg["norm"])))
         self.sp_lo.setValue(cfg["trim"][0] if cfg["trim"] else 0)
         self.sp_hi.setValue(cfg["trim"][1] if cfg["trim"] else 4000)
+        self.cmb_sampling.setCurrentIndex(
+            max(0, self.cmb_sampling.findData(cfg["pixel_sampling"])))
+        self.sp_sample_px.setValue(cfg["sample_pixels"])
+        self.sp_sampling_seed.setValue(cfg["sampling_seed"])
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(
@@ -524,7 +564,12 @@ class SamplingPage(QWidget):
         try:
             save_manifest(self.data_dir, rows)
             save_preprocess(self.data_dir, self._gather_prep())
-            self.status.setText(f"saved samples.csv + preprocess.json ({len(rows)} maps)")
+            cfg = self._gather_prep()
+            mode = (f"representative {cfg['sample_pixels']}/map"
+                    if cfg["pixel_sampling"] == "representative"
+                    else f"legacy {cfg['sample_pixels']}/map")
+            self.status.setText(
+                f"saved samples.csv + preprocess.json ({len(rows)} maps · {mode})")
             self.status.setStyleSheet(f"color:{TEAL};")
         except Exception as exc:
             self.status.setText("save failed"); self.status.setStyleSheet(f"color:{RED};")

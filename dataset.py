@@ -201,7 +201,9 @@ def save_manifest(data_dir, rows):
 
 
 _PREPROCESS = "preprocess.json"
-_PREPROCESS_DEFAULT = {"baseline": True, "deriv": 0, "norm": "l2", "trim": None}
+_PREPROCESS_DEFAULT = {"baseline": True, "deriv": 0, "norm": "l2", "trim": None,
+                       "pixel_sampling": "representative", "sample_pixels": 100,
+                       "sampling_seed": 0}
 
 
 def load_preprocess(data_dir):
@@ -219,6 +221,10 @@ def load_preprocess(data_dir):
     cfg["baseline"] = bool(cfg.get("baseline", True))
     cfg["deriv"] = int(cfg.get("deriv", 0) or 0)
     cfg["norm"] = cfg.get("norm") or "l2"
+    mode = str(cfg.get("pixel_sampling") or "representative").lower()
+    cfg["pixel_sampling"] = mode if mode in ("representative", "legacy") else "representative"
+    cfg["sample_pixels"] = max(1, min(400, int(cfg.get("sample_pixels", 100) or 100)))
+    cfg["sampling_seed"] = max(0, int(cfg.get("sampling_seed", 0) or 0))
     return cfg
 
 
@@ -271,7 +277,27 @@ def rebase_path(p, data_dir):
     return p
 
 
-def load_mixture_list(data_dir, role=None):
+def filename_mixture_truth(path, ref_names):
+    """Return filename-encoded nominal amounts and concentrations in M.
+
+    Benchmark/training labels come from the measured map filename. A stale
+    ``mixtures.json`` value must never silently replace that primary record.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    if stem.lower().endswith(_SUFFIX):
+        stem = stem[:-len(_SUFFIX)]
+    names = [base_and_batch(str(n))[0] for n in ref_names
+             if not is_blank(base_and_batch(str(n))[0])]
+    names = list(dict.fromkeys(names))
+    amounts_uM = parse_mixture_label(stem, names)
+    if not amounts_uM or sum(float(v) for v in amounts_uM.values()) <= 0:
+        raise ValueError(
+            f"cannot read the benchmark truth from filename: {os.path.basename(path)}")
+    amounts_uM = {n: float(amounts_uM.get(n, 0.0)) for n in names}
+    return amounts_uM, {n: v * 1e-6 for n, v in amounts_uM.items() if v > 0}
+
+
+def load_mixture_list(data_dir, role=None, filename_truth=False):
     """Read <data_dir>/mixtures.json → list of (path, ratio_dict[, conc_dict in M]).
     The known-ratio mixtures are prepared once in Samples (Step 1); Model/Recovery read
     them from here so the mixture list is shared, not re-entered per tab.
@@ -288,11 +314,17 @@ def load_mixture_list(data_dir, role=None):
     for m in raw:
         path = rebase_path(m.get("path"), data_dir)   # other-machine drive letters
         ratio = {str(k): float(v) for k, v in (m.get("ratio") or {}).items()}
-        if not path or not ratio:
+        if not path or (not ratio and not filename_truth):
             continue
         if role and (m.get("role") or "train") != role:
             continue
-        conc = m.get("conc")
+        if filename_truth:
+            # In the Model tab JSON is only the file/role manifest. Its historic
+            # ratio/conc fields are not permitted to act as the answer sheet.
+            refs = [base_and_batch(n)[0] for n, _p in discover_references(data_dir)]
+            ratio, conc = filename_mixture_truth(path, refs or list(ratio))
+        else:
+            conc = m.get("conc")
         if not conc:
             # Filenames such as DQ12-TB3-TH6 deliberately carry the absolute µM
             # labels. Never let a missing/accidentally-cleared JSON field turn a
@@ -341,7 +373,12 @@ def save_preprocess(data_dir, cfg):
     out = {"baseline": bool(cfg.get("baseline", True)),
            "deriv": int(cfg.get("deriv", 0) or 0),
            "norm": cfg.get("norm") or "l2",
-           "trim": [trim[0], trim[1]] if trim else None}
+           "trim": [trim[0], trim[1]] if trim else None,
+           "pixel_sampling": (str(cfg.get("pixel_sampling") or "representative")
+                              if str(cfg.get("pixel_sampling") or "representative")
+                              in ("representative", "legacy") else "representative"),
+           "sample_pixels": max(1, min(400, int(cfg.get("sample_pixels", 100) or 100))),
+           "sampling_seed": max(0, int(cfg.get("sampling_seed", 0) or 0))}
     p = os.path.join(data_dir, _PREPROCESS)
     with open(p, "w") as f:
         json.dump(out, f, indent=2)
