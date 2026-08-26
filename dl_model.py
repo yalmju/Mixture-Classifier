@@ -403,6 +403,342 @@ def _group_validation_indices(groups, fraction=0.2, seed=0):
     return np.where(~is_val)[0], np.where(is_val)[0]
 
 
+# --------------------------------------------------------------------------
+# Calibration-residual µM head ("calibration_residual_uM_v1")
+#
+# The integrated 20260824 re-evaluation compared three concentration routes on the
+# same absolute-condition-grouped 5-fold split (composition head AND corrector refit
+# per fold): pure single-band calibration inversion, a Ridge Δlog10 corrector and a
+# small neural Δlog10 corrector on top of the inversion. On the 64 calibration-range
+# maps the neural corrector won every headline number (MAE 8.81→5.01 µM, within-2×
+# 29→78%), so when a calibration is available this head replaces the direct
+# log10-µM pixel head below. Construction (documentation/scripts/
+# run_integrated_reevaluation.py, results/integrated_final_20260824):
+#
+#   per-substance marker band  →  composition-probability-weighted band signal Ieq
+#   →  log-linear inversion  Ccal = 10^((Ieq − b)/a)  clipped to the calibration range
+#   →  12 map-level features [log10 Ccal, ratio, log1p Ieq, intensity P10/50/90]
+#   →  128→32 net  →  Δlog10(C)   →   C = Ccal · 10^Δ  (Δ clipped to ±2 decades)
+# --------------------------------------------------------------------------
+_MARKER_BANDS_CM = {"DQ": 1570.0, "TBZ": 1270.0, "THI": 1367.0}
+_BAND_HALF_WIDTH_CM = 10.0
+_DELTA_CLIP_DECADES = 2.0
+
+
+def _marker_bands(conc_subs, wn_axis, P=None):
+    """One characteristic band (cm⁻¹) per substance: the known VIP marker for the
+    DQ/TBZ/THI trio, else the strongest channel of that substance's unit template."""
+    wn_axis = np.asarray(wn_axis, float)
+    bands = []
+    for j, s in enumerate(conc_subs):
+        b = next((v for k, v in _MARKER_BANDS_CM.items()
+                  if str(s).upper().startswith(k)), None)
+        if b is None:
+            b = float(wn_axis[int(np.argmax(P[j]))]) if P is not None else float(np.median(wn_axis))
+        bands.append(float(b))
+    return np.asarray(bands, float)
+
+
+def _band_signal(raw, wn_axis, bands, half_width=_BAND_HALF_WIDTH_CM):
+    """Local band maxima: (n_px, n_feat) raw intensities → (n_px, n_bands). The maximum
+    inside ±half_width tolerates the instrument grid and small peak drift."""
+    raw = np.clip(np.atleast_2d(np.asarray(raw, float)), 0, None)
+    wn_axis = np.asarray(wn_axis, float)
+    out = np.zeros((len(raw), len(bands)))
+    for j, centre in enumerate(np.asarray(bands, float)):
+        m = np.abs(wn_axis - centre) <= float(half_width)
+        if not m.any():
+            m = np.zeros(raw.shape[1], bool)
+            m[int(np.argmin(np.abs(wn_axis - centre)))] = True
+        out[:, j] = raw[:, m].max(axis=1)
+    return out
+
+
+def _fit_loglinear_ab(calib_path, conc_subs, bands, lo, hi):
+    """Per-substance log-linear calibration Ieq = a·log10(C µM) + b, fitted on the SAME
+    band extraction the head applies to maps (so fit and inversion share one
+    convention — a per-substance offset in the convention is absorbed by Δlog10).
+    Returns (ab (n,2), calibrated range in µM (n,2)); rows are NaN when a substance is
+    missing from the CSV or its slope comes out non-positive."""
+    from io_utils import load_calibration_csv
+    ax_c, names_c, dils = load_calibration_csv(calib_path)
+    ax_c = np.asarray(ax_c, float)
+    m = (ax_c >= lo) & (ax_c <= hi)
+    if m.sum() < 10:
+        m = np.ones(len(ax_c), bool)
+    ab = np.full((len(conc_subs), 2), np.nan)
+    rng_uM = np.full((len(conc_subs), 2), np.nan)
+    for j, s in enumerate(conc_subs):
+        if s not in names_c:
+            continue
+        Cser, spec = dils[names_c.index(s)]
+        sig = _band_signal(np.asarray(spec, float)[:, m], ax_c[m], [bands[j]])[:, 0]
+        c_uM = np.asarray(Cser, float) * 1e6
+        ok = (c_uM > 0) & (sig > 0)
+        if ok.sum() < 2:
+            continue
+        a, b = np.polyfit(np.log10(c_uM[ok]), sig[ok], 1)
+        if a <= 0:                      # inversion needs signal growing with C
+            continue
+        ab[j] = [float(a), float(b)]
+        rng_uM[j] = [float(c_uM[ok].min()), float(c_uM[ok].max())]
+    return ab, rng_uM
+
+
+def _invert_calibration(band_sig, ab, cal_rng_uM):
+    """Band signal → Ccal (µM), clipped to each substance's calibrated range."""
+    band_sig = np.atleast_2d(np.asarray(band_sig, float))
+    lo_c = np.where(np.isfinite(cal_rng_uM[:, 0]), cal_rng_uM[:, 0], 0.1)
+    hi_c = np.where(np.isfinite(cal_rng_uM[:, 1]), cal_rng_uM[:, 1], 100.0)
+    return np.clip(10.0 ** ((band_sig - ab[:, 1]) / ab[:, 0]), lo_c, hi_c)
+
+
+def _residual_context(raw_px, ratios_px, map_keys, wn_axis, bands, ab, cal_rng_uM):
+    """Map-level feature rows for the residual corrector.
+
+    Returns (map_names, F (n_maps, 3n+3), Ccal_uM (n_maps, n)). Each pixel contributes
+    to Ieq in proportion to its composition probability for that component, so hotspot
+    pixels of a component dominate its band readout."""
+    raw_px = np.clip(np.asarray(raw_px, float), 0, None)
+    R = np.clip(np.asarray(ratios_px, float), 0, None)
+    keys = np.asarray(map_keys, object)
+    band_px = _band_signal(raw_px, wn_axis, bands)
+    log_total = np.log1p(raw_px.sum(axis=1))
+    names, F, CC = [], [], []
+    for g in dict.fromkeys(keys.tolist()):
+        idx = np.where(keys == g)[0]
+        p = R[idx]
+        ratio = p.mean(0); ratio = ratio / (ratio.sum() + 1e-12)
+        w = p + 1e-6
+        ieq = (w * band_px[idx]).sum(0) / w.sum(0)
+        ccal = _invert_calibration(ieq, ab, cal_rng_uM)[0]
+        iq = np.percentile(log_total[idx], [10, 50, 90])
+        F.append(np.concatenate([np.log10(ccal), ratio, np.log1p(ieq), iq]))
+        names.append(g); CC.append(ccal)
+    return names, np.asarray(F, float), np.asarray(CC, float)
+
+
+def _residual_net_torch(n_in, n_out, seed):
+    import torch, torch.nn as nn
+    torch.manual_seed(int(seed))
+    return nn.Sequential(nn.Linear(n_in, 128), nn.BatchNorm1d(128), nn.ReLU(),
+                         nn.Dropout(0.25), nn.Linear(128, 32), nn.ReLU(),
+                         nn.Linear(32, n_out))
+
+
+def _fit_residual_net(F, Ccal_uM, T_uM, cond_keys, seed=0, max_epochs=800):
+    """Masked-Huber Δlog10 fit. The epoch budget is selected on a condition-grouped 20%
+    holdout, then the net is refit on every map for that many epochs (the same recipe
+    the validated run used). Absent components (true 0) are masked out of the loss.
+    Returns (net, mu, sd, best_epoch, best_val, loss_curve)."""
+    import torch
+    F = np.asarray(F, np.float32); Ccal = np.asarray(Ccal_uM, float); T = np.asarray(T_uM, float)
+    target = (np.log10(np.clip(T, 0.05, None))
+              - np.log10(np.clip(Ccal, 0.05, None))).astype(np.float32)
+    mask = (T > 0).astype(np.float32)
+
+    def masked_huber(pred, tgt, msk):
+        loss = torch.nn.functional.smooth_l1_loss(pred, tgt, reduction="none", beta=0.25)
+        return (loss * msk).sum() / msk.sum().clamp_min(1.0)
+
+    tr, va = _group_validation_indices(np.asarray(cond_keys, object), seed=seed)
+    best_ep, best = min(300, int(max_epochs)), None
+    if len(va):
+        mu = F[tr].mean(0); sd = F[tr].std(0) + 1e-6
+        A = torch.tensor(((F - mu) / sd).astype(np.float32))
+        Y = torch.tensor(target); M = torch.tensor(mask)
+        net = _residual_net_torch(F.shape[1], T.shape[1], seed)
+        op = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=3e-3)
+        best = float("inf"); stale = 0
+        for ep in range(int(max_epochs)):
+            net.train(); op.zero_grad()
+            l = masked_huber(net(A[tr]), Y[tr], M[tr]); l.backward(); op.step()
+            net.eval()
+            with torch.no_grad():
+                v = float(masked_huber(net(A[va]), Y[va], M[va]))
+            if v < best - 1e-4:
+                best, best_ep, stale = v, ep + 1, 0
+            else:
+                stale += 1
+            if stale >= 80 and ep >= 100:
+                break
+    mu = F.mean(0); sd = F.std(0) + 1e-6
+    A = torch.tensor(((F - mu) / sd).astype(np.float32))
+    Y = torch.tensor(target); M = torch.tensor(mask)
+    net = _residual_net_torch(F.shape[1], T.shape[1], seed + 1000)
+    op = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=3e-3)
+    hist = []
+    for _ in range(max(5, int(best_ep))):
+        net.train(); op.zero_grad()
+        l = masked_huber(net(A), Y, M); l.backward(); op.step()
+        hist.append(float(l.detach()))
+    net.eval()
+    return net, mu, sd, int(best_ep), best, hist
+
+
+def _predict_residual_uM(net, mu, sd, F, Ccal_uM):
+    """Features + calibration inversion → corrected µM (Δ clipped to ±2 decades)."""
+    import torch
+    A = torch.tensor(((np.asarray(F, np.float32) - mu) / sd).astype(np.float32))
+    net.eval()
+    with torch.no_grad():
+        delta = net(A).numpy()
+    delta = np.clip(delta, -_DELTA_CLIP_DECADES, _DELTA_CLIP_DECADES)
+    return np.clip(np.asarray(Ccal_uM, float) * (10.0 ** delta), 1e-3, 5e3)
+
+
+def _train_calibration_residual_head(Xraw, Rabs, gp, gcond, C_uM_rows, conc_subs,
+                                     wn_axis, P, calib_path, lo, hi, *, seed=0,
+                                     loo=False, progress=None):
+    """Train the calibration-residual µM head on the hit pixels train_model collected.
+    Returns the portable uM dict, or None when no usable calibration line exists."""
+    bands = _marker_bands(conc_subs, wn_axis, P)
+    ab, cal_rng = _fit_loglinear_ab(calib_path, conc_subs, bands, lo, hi)
+    if not np.isfinite(ab).all():
+        return None
+    if progress:
+        progress("training concentration head (calibration residual)")
+    map_names, F, Ccal = _residual_context(Xraw, Rabs, gp, wn_axis, bands, ab, cal_rng)
+    gp = np.asarray(gp, object); gcond = np.asarray(gcond, object)
+    first_px = {g: np.where(gp == g)[0][0] for g in map_names}
+    T = np.stack([np.asarray(C_uM_rows[first_px[g]], float) for g in map_names])
+    cond_of_map = np.array([gcond[first_px[g]] for g in map_names], object)
+    net, mu, sd, best_ep, best_val, hist = _fit_residual_net(
+        F, Ccal, T, cond_of_map, seed=seed)
+    uM = {"kind": "calibration_residual_uM_v1",
+          "state": {k: v.detach().numpy() for k, v in net.state_dict().items()},
+          "mu": mu, "sd": sd, "subs": list(conc_subs), "pool": "map",
+          "hidden": (128, 32), "input_mode": "comp_ratio+band_loglinear_residual_v1",
+          "bands_cm": bands, "band_half_width_cm": _BAND_HALF_WIDTH_CM,
+          "loglinear_ab": ab, "cal_range_uM": cal_rng,
+          "ab_source": "log-linear fit of the embedded calibration CSV at the marker bands",
+          "delta_clip_decades": _DELTA_CLIP_DECADES,
+          "ranges_M": np.asarray(cal_rng, float) * 1e-6,
+          "selected_epochs": best_ep, "selection_val_loss": best_val,
+          "selection_level": "condition", "train_loss": hist,
+          "n_maps": len(map_names), "n_pixels": int(len(Xraw)),
+          "protocol": "integrated_v1_20260824 (abs-condition-grouped held-out validated)"}
+
+    # ---- the VALIDATED window, same meaning as the pixel head's ---------------
+    # 20% condition-grouped holdout: a level counts as validated for a substance when
+    # its held-out maps recover within 2-fold. Cheap — the head sees one row per map.
+    try:
+        mtr, mva = _group_validation_indices(cond_of_map, seed=seed + 31)
+        if len(mva) and len(mtr) >= 3:
+            if progress:
+                progress("validating the reportable window (20% held-out)")
+            vnet, vmu, vsd, _, _, _ = _fit_residual_net(
+                F[mtr], Ccal[mtr], T[mtr], cond_of_map[mtr], seed=seed + 31)
+            vpred = _predict_residual_uM(vnet, vmu, vsd, F[mva], Ccal[mva])
+            lv_err = {}
+            for i, row in zip(mva, vpred):
+                for j in range(len(conc_subs)):
+                    t = float(T[i][j])
+                    if t > 0 and np.isfinite(row[j]) and row[j] > 0:
+                        lv_err.setdefault((j, round(t, 4)), []).append(
+                            abs(np.log10(row[j] / t)))
+            vr = np.full((len(conc_subs), 2), np.nan)
+            for j in range(len(conc_subs)):
+                good = [lvl for (jj, lvl), es in lv_err.items()
+                        if jj == j and 10.0 ** float(np.median(es)) <= 2.0]
+                if len(good) >= 2:
+                    vr[j] = [min(good) * 1e-6, max(good) * 1e-6]
+            uM["validated_ranges_M"] = vr
+            uM["validated_note"] = ("levels recovered within 2-fold on a 20% "
+                                    "condition-grouped holdout")
+    except Exception as _e:
+        if progress:
+            progress(f"validated-window check skipped ({_e})")
+
+    # ---- honest per-condition scoring, same boundary as composition -----------
+    # The residual net is refit per held-out absolute condition. Ratios/Ieq come from
+    # the deployed composition head (refitting IT per fold is the offline benchmark's
+    # job) — noted in the dict so the number is never sold as the fully-nested one.
+    if loo:
+        loo_true, loo_pred, loo_paths = [], [], []
+        uniq = list(dict.fromkeys(cond_of_map.tolist()))
+        for fold_i, held in enumerate(uniq):
+            te = np.where(cond_of_map == held)[0]
+            tr = np.where(cond_of_map != held)[0]
+            if not len(te) or len(tr) < 3:
+                continue
+            if progress:
+                progress(f"concentration leave-one-condition-out {fold_i + 1}/{len(uniq)}")
+            fnet, fmu, fsd, _, _, _ = _fit_residual_net(
+                F[tr], Ccal[tr], T[tr], cond_of_map[tr], seed=seed + 1000 + fold_i)
+            fpred = _predict_residual_uM(fnet, fmu, fsd, F[te], Ccal[te])
+            for i, row in zip(te, fpred):
+                loo_true.append(T[i].tolist())
+                loo_pred.append(np.asarray(row, float).tolist())
+                loo_paths.append(map_names[i])
+        uM["loo_eval"] = {"true_uM": loo_true, "pred_uM": loo_pred, "paths": loo_paths,
+                          "level": "condition",
+                          "ratio_source": "deployed composition head (not refit per fold)"}
+    return uM
+
+
+def _apply_calibration_residual(model, wn, spectra, return_meta):
+    """Apply path for the calibration-residual head. The batch is treated as ONE map
+    (the same contract the pixel head's context features rely on). Returns per-pixel
+    µM whose per-component median equals the map-level corrected estimate, so every
+    downstream median-pool reports exactly the validated construction."""
+    u = model["uM"]
+    usubs = list(u.get("subs") or model["subs"])
+    wn = np.asarray(wn, float)
+    mask = (wn >= model["lo"]) & (wn <= model["hi"])
+    X = np.asarray(spectra, float)
+    if X.shape[1] == len(wn):
+        X = X[:, mask]
+    X = np.clip(X, 0, None)
+    wn_axis = wn[mask] if mask.sum() == X.shape[1] else wn
+    pk = np.clip(np.asarray(apply_model_pixels(model, wn, spectra), float), 0, None)
+    subs_all = list(model["subs"])
+    cols = [subs_all.index(s_) for s_ in usubs if s_ in subs_all]
+    analyte_mass = pk[:, cols].sum(axis=1)
+    R = pk[:, cols] / (pk[:, cols].sum(axis=1, keepdims=True) + 1e-12)
+    # Map context from analyte-dominant pixels only: Real hands EVERY pixel through
+    # here (background included), while training saw hit-screened pixels. The model's
+    # own blank channel is the closest stand-in for that gate; without a blank class
+    # every pixel passes, which matches the all-hit training sets.
+    sel = np.where(analyte_mass >= 0.5)[0]
+    if not len(sel):
+        sel = np.arange(len(X))
+    ab = np.asarray(u["loglinear_ab"], float)
+    cal_rng = np.asarray(u["cal_range_uM"], float)
+    bands = np.asarray(u["bands_cm"], float)
+    import torch
+    net = _residual_net_torch(len(u["mu"]), len(usubs), 0)
+    net.load_state_dict({k: torch.tensor(v) for k, v in u["state"].items()})
+    _, F, Ccal = _residual_context(X[sel], R[sel], np.zeros(len(sel), int),
+                                   wn_axis, bands, ab, cal_rng)
+    c_map = _predict_residual_uM(net, u["mu"], u["sd"], F, Ccal)[0]   # (n_subs,) µM
+    # Per-pixel display: each pixel's own calibration inversion, rescaled per component
+    # so the median equals the map estimate — the spatial pattern is the pixels', the
+    # reported number is the validated map-level one.
+    ccal_px = _invert_calibration(_band_signal(X, wn_axis, bands), ab, cal_rng)
+    med = np.median(ccal_px, axis=0)
+    um = ccal_px * (c_map / np.where(med > 0, med, 1.0))[None, :]
+    um = np.clip(um, 1e-3, 5e3)
+    result = (um, usubs)
+    if not return_meta:
+        return result
+    rngs_out = np.asarray(u.get("ranges_M"), float).copy()
+    vr = u.get("validated_ranges_M")
+    if vr is not None:
+        vr = np.asarray(vr, float)
+        ok_ = np.isfinite(vr).all(axis=1)
+        rngs_out[ok_] = vr[ok_]                  # validated window beats label range
+    r_um = rngs_out * 1e6
+    component_ood = np.zeros_like(um, bool)
+    for k in range(min(len(usubs), len(r_um))):
+        if np.isfinite(r_um[k][1]) and r_um[k][1] > 0:
+            component_ood[:, k] = um[:, k] > r_um[k][1]
+    meta = {"feature_ood": np.zeros(len(um), bool),
+            "component_ood": component_ood, "ranges_M": rngs_out,
+            "map_uM": {s_: float(c_map[j]) for j, s_ in enumerate(usubs)}}
+    return (*result, meta)
+
+
 def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                 method="mlp", epochs=300, seed=0, use_pretrain=True, epoch_diagnostics=False,
                 n_components=8, n_trees=300, loo=False, test_items=None, px_per_map=0,
@@ -729,7 +1065,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
     have = [i for i in range(len(Xabs)) if Cabs[i] is not None and any(c > 0 for c in Cabs[i])]
     if len(have) >= 3:
         if progress:
-            progress("training concentration head (map-pooled)")
+            progress("preparing concentration inputs")
         hv = np.array(have)
         C = np.array([list(Cabs[i])[:len(conc_subs)] if Cabs[i] is not None
                       else [0.0] * len(conc_subs) for i in range(len(Xabs))], float)
@@ -757,187 +1093,206 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         if Rabs is None:
             from dl_quantify import surface_composition
             Rabs = surface_composition(_composition_features(Xabs[hv], 'legacy_l2'), P)
-        Xctx = _concentration_context_features(Xabs[hv], gp, Rabs)
-        target = (np.log10(np.clip(C[hv], 1e-8, None)) + 6.0).astype(np.float32)
-
-        def make_conc_net():
-            return nn.Sequential(nn.Linear(Xctx.shape[1], 128), nn.BatchNorm1d(128), nn.ReLU(),
-                                 nn.Dropout(0.25), nn.Linear(128, 32), nn.ReLU(),
-                                 nn.Linear(32, len(conc_subs)))
-
-        def pooled_loss(pred, truth, group_values, consistency_weight=0.05):
-            terms = []
-            for g in dict.fromkeys(group_values.tolist()):
-                idx = np.where(group_values == g)[0]
-                ii = torch.as_tensor(idx, dtype=torch.long)
-                terms.append(torch.nn.functional.smooth_l1_loss(
-                    torch.quantile(pred[ii], 0.5, dim=0), truth[ii[0]], beta=0.25))
-            map_term = torch.stack(terms).mean()
-            if consistency_weight:
-                map_term = map_term + float(consistency_weight) * torch.nn.functional.smooth_l1_loss(
-                    pred, truth, beta=0.5)
-            return map_term
-
-        # Select capacity using entire held-out CONDITIONS, never random pixels from a map.
-        # Fixed budget here too, for the same reason as the composition head above.
-        tr_sel, va_sel = _group_validation_indices(gcond, seed=seed + 17)
-        selected_uM_epochs = int(epochs); selection_uM_val = []; best_val = float("inf"); stale = 0
-        if len(va_sel) and epoch_diagnostics:
-            smu = Xctx[tr_sel].mean(0); ssd = Xctx[tr_sel].std(0) + 1e-8
-            sXtr = torch.tensor(((Xctx[tr_sel] - smu) / ssd).astype(np.float32))
-            sXva = torch.tensor(((Xctx[va_sel] - smu) / ssd).astype(np.float32))
-            sYtr = torch.tensor(target[tr_sel]); sYva = torch.tensor(target[va_sel])
-            torch.manual_seed(seed + 17); snet = make_conc_net()
-            sop = torch.optim.Adam(snet.parameters(), lr=1e-3, weight_decay=3e-3)
-            for ep in range(int(epochs)):
-                snet.train(); sop.zero_grad(); sp = snet(sXtr)
-                sl = pooled_loss(sp, sYtr, gp[tr_sel]); sl.backward(); sop.step()
-                snet.eval()
-                with torch.no_grad():
-                    sv = float(pooled_loss(snet(sXva), sYva, gp[va_sel], 0.0))
-                selection_uM_val.append(sv)
-                if sv < best_val - 1e-4:          # recorded, but no longer chooses the epoch
-                    best_val = sv; stale = 0
-                else:
-                    stale += 1
-                if progress and (ep % 15 == 0 or ep == int(epochs) - 1):
-                    progress(f"selecting concentration epoch {ep + 1}/{epochs}  val {sv:.3f}")
-                if stale >= 40:
-                    break
-
-        # Refit on every map, but only for the validation-selected number of epochs.
-        mu = Xctx.mean(0); sd = Xctx.std(0) + 1e-8
-        Xe = ((Xctx - mu) / sd).astype(np.float32)
-        Xt = torch.tensor(Xe); Yt = torch.tensor(target)
-        torch.manual_seed(seed); net = make_conc_net()
-        op = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=3e-3)
-        loss_curve_uM = []
-        for ep in range(selected_uM_epochs):
-            net.train(); op.zero_grad(); loss = pooled_loss(net(Xt), Yt, gp)
-            loss.backward(); op.step(); loss_curve_uM.append(float(loss.detach()))
-            if progress and (ep % 15 == 0 or ep == selected_uM_epochs - 1):
-                progress(f"concentration refit {ep + 1}/{selected_uM_epochs}")
-        net.eval()
-        dist = np.sqrt(np.mean(Xe ** 2, axis=1))
-        ranges = []
-        for j in range(len(conc_subs)):
-            positive = C[hv, j][C[hv, j] > 0]
-            ranges.append([float(positive.min()), float(positive.max())]
-                          if len(positive) else [float("nan"), float("nan")])
-        uM = {"kind": "map_pooled_pixel_concentration_v1",
-              "state": {k: v.detach().numpy() for k, v in net.state_dict().items()},
-              "mu": mu, "sd": sd, "subs": list(conc_subs), "pool": "median_log10",
-              "input_mode": uM_input_mode, "hidden": (128, 32),
-              "raw_n_feat": Xabs.shape[1], "ratio_n_feat": len(conc_subs),
-              "ood_threshold": float(np.quantile(dist, 0.99)),
-              "ranges_M": np.asarray(ranges, float), "train_loss": loss_curve_uM,
-              "selected_epochs": selected_uM_epochs,
-              "selection_val_loss": (best_val if selection_uM_val else None),
-              "selection_val_history": selection_uM_val,
-              "selection_level": "condition",
-              "n_maps": len(dict.fromkeys(gp.tolist())), "n_pixels": len(hv)}
-
-        # ---- the VALIDATED window, derived from the file itself -----------------
-        # One condition-grouped 20% holdout of the µM head (cheap - one extra fit,
-        # not the ~100x LOO): a concentration level counts as validated for a
-        # substance when its held-out maps recover within 2-fold at that level.
-        # Real reports inside this window automatically; nothing is typed by hand.
-        try:
-            v_tr, v_va = _group_validation_indices(gcond, seed=seed + 31)
-            if len(v_va) and len(v_tr) >= 3:
+        # ---- calibration available → the validated residual corrector wins -------
+        # Integrated 20260824 benchmark (abs-condition-grouped 5-fold, everything
+        # refit per fold): MAE 8.81→5.01 µM, within-2× 29→78% over the pure
+        # inversion on the calibration-range maps. The direct pixel head below stays
+        # as the no-calibration fallback; any failure here falls through to it.
+        if calib_path:
+            try:
+                uM = _train_calibration_residual_head(
+                    Xabs[hv], Rabs, gp, gcond, C[hv] * 1e6, conc_subs,
+                    wn[mask], P, calib_path, lo, hi, seed=seed, loo=loo,
+                    progress=progress)
+                if uM is not None:
+                    uM["ratio_head"] = uM_input_mode.split("_ratio")[0]
+            except Exception as _e:
                 if progress:
-                    progress("validating the reportable window (20% held-out)")
-                vtrain = _concentration_context_features(Xabs[hv][v_tr], gp[v_tr], Rabs[v_tr])
-                vmu_ = vtrain.mean(0); vsd_ = vtrain.std(0) + 1e-8
-                vX = torch.tensor(((vtrain - vmu_) / vsd_).astype(np.float32))
-                vY = torch.tensor((np.log10(np.clip(C[hv][v_tr], 1e-8, None)) + 6.0
-                                   ).astype(np.float32))
-                torch.manual_seed(seed + 31); vnet = make_conc_net()
-                vop = torch.optim.Adam(vnet.parameters(), lr=1e-3, weight_decay=3e-3)
-                for _ in range(selected_uM_epochs):
-                    vnet.train(); vop.zero_grad()
-                    vl = pooled_loss(vnet(vX), vY, gp[v_tr]); vl.backward(); vop.step()
-                vnet.eval()
-                vtest = _concentration_context_features(Xabs[hv][v_va], ratios=Rabs[v_va])
-                with torch.no_grad():
-                    vlog = vnet(torch.tensor(((vtest - vmu_) / vsd_
-                                              ).astype(np.float32))).numpy()
-                vgp = gp[v_va]
-                lv_err = {}                       # (subs j, level µM) -> [fold errors]
-                for mp in dict.fromkeys(vgp.tolist()):
-                    sel = np.where(vgp == mp)[0]
-                    pred = 10.0 ** np.clip(np.median(vlog[sel], axis=0), -3.0, 6.0)
-                    true = C[hv][v_va[sel[0]]] * 1e6
+                    progress(f"calibration-residual µM head failed ({_e}) — "
+                             "falling back to the pixel head")
+                uM = None
+        if uM is None:
+            Xctx = _concentration_context_features(Xabs[hv], gp, Rabs)
+            target = (np.log10(np.clip(C[hv], 1e-8, None)) + 6.0).astype(np.float32)
+
+            def make_conc_net():
+                return nn.Sequential(nn.Linear(Xctx.shape[1], 128), nn.BatchNorm1d(128), nn.ReLU(),
+                                     nn.Dropout(0.25), nn.Linear(128, 32), nn.ReLU(),
+                                     nn.Linear(32, len(conc_subs)))
+
+            def pooled_loss(pred, truth, group_values, consistency_weight=0.05):
+                terms = []
+                for g in dict.fromkeys(group_values.tolist()):
+                    idx = np.where(group_values == g)[0]
+                    ii = torch.as_tensor(idx, dtype=torch.long)
+                    terms.append(torch.nn.functional.smooth_l1_loss(
+                        torch.quantile(pred[ii], 0.5, dim=0), truth[ii[0]], beta=0.25))
+                map_term = torch.stack(terms).mean()
+                if consistency_weight:
+                    map_term = map_term + float(consistency_weight) * torch.nn.functional.smooth_l1_loss(
+                        pred, truth, beta=0.5)
+                return map_term
+
+            # Select capacity using entire held-out CONDITIONS, never random pixels from a map.
+            # Fixed budget here too, for the same reason as the composition head above.
+            tr_sel, va_sel = _group_validation_indices(gcond, seed=seed + 17)
+            selected_uM_epochs = int(epochs); selection_uM_val = []; best_val = float("inf"); stale = 0
+            if len(va_sel) and epoch_diagnostics:
+                smu = Xctx[tr_sel].mean(0); ssd = Xctx[tr_sel].std(0) + 1e-8
+                sXtr = torch.tensor(((Xctx[tr_sel] - smu) / ssd).astype(np.float32))
+                sXva = torch.tensor(((Xctx[va_sel] - smu) / ssd).astype(np.float32))
+                sYtr = torch.tensor(target[tr_sel]); sYva = torch.tensor(target[va_sel])
+                torch.manual_seed(seed + 17); snet = make_conc_net()
+                sop = torch.optim.Adam(snet.parameters(), lr=1e-3, weight_decay=3e-3)
+                for ep in range(int(epochs)):
+                    snet.train(); sop.zero_grad(); sp = snet(sXtr)
+                    sl = pooled_loss(sp, sYtr, gp[tr_sel]); sl.backward(); sop.step()
+                    snet.eval()
+                    with torch.no_grad():
+                        sv = float(pooled_loss(snet(sXva), sYva, gp[va_sel], 0.0))
+                    selection_uM_val.append(sv)
+                    if sv < best_val - 1e-4:          # recorded, but no longer chooses the epoch
+                        best_val = sv; stale = 0
+                    else:
+                        stale += 1
+                    if progress and (ep % 15 == 0 or ep == int(epochs) - 1):
+                        progress(f"selecting concentration epoch {ep + 1}/{epochs}  val {sv:.3f}")
+                    if stale >= 40:
+                        break
+
+            # Refit on every map, but only for the validation-selected number of epochs.
+            mu = Xctx.mean(0); sd = Xctx.std(0) + 1e-8
+            Xe = ((Xctx - mu) / sd).astype(np.float32)
+            Xt = torch.tensor(Xe); Yt = torch.tensor(target)
+            torch.manual_seed(seed); net = make_conc_net()
+            op = torch.optim.Adam(net.parameters(), lr=1e-3, weight_decay=3e-3)
+            loss_curve_uM = []
+            for ep in range(selected_uM_epochs):
+                net.train(); op.zero_grad(); loss = pooled_loss(net(Xt), Yt, gp)
+                loss.backward(); op.step(); loss_curve_uM.append(float(loss.detach()))
+                if progress and (ep % 15 == 0 or ep == selected_uM_epochs - 1):
+                    progress(f"concentration refit {ep + 1}/{selected_uM_epochs}")
+            net.eval()
+            dist = np.sqrt(np.mean(Xe ** 2, axis=1))
+            ranges = []
+            for j in range(len(conc_subs)):
+                positive = C[hv, j][C[hv, j] > 0]
+                ranges.append([float(positive.min()), float(positive.max())]
+                              if len(positive) else [float("nan"), float("nan")])
+            uM = {"kind": "map_pooled_pixel_concentration_v1",
+                  "state": {k: v.detach().numpy() for k, v in net.state_dict().items()},
+                  "mu": mu, "sd": sd, "subs": list(conc_subs), "pool": "median_log10",
+                  "input_mode": uM_input_mode, "hidden": (128, 32),
+                  "raw_n_feat": Xabs.shape[1], "ratio_n_feat": len(conc_subs),
+                  "ood_threshold": float(np.quantile(dist, 0.99)),
+                  "ranges_M": np.asarray(ranges, float), "train_loss": loss_curve_uM,
+                  "selected_epochs": selected_uM_epochs,
+                  "selection_val_loss": (best_val if selection_uM_val else None),
+                  "selection_val_history": selection_uM_val,
+                  "selection_level": "condition",
+                  "n_maps": len(dict.fromkeys(gp.tolist())), "n_pixels": len(hv)}
+
+            # ---- the VALIDATED window, derived from the file itself -----------------
+            # One condition-grouped 20% holdout of the µM head (cheap - one extra fit,
+            # not the ~100x LOO): a concentration level counts as validated for a
+            # substance when its held-out maps recover within 2-fold at that level.
+            # Real reports inside this window automatically; nothing is typed by hand.
+            try:
+                v_tr, v_va = _group_validation_indices(gcond, seed=seed + 31)
+                if len(v_va) and len(v_tr) >= 3:
+                    if progress:
+                        progress("validating the reportable window (20% held-out)")
+                    vtrain = _concentration_context_features(Xabs[hv][v_tr], gp[v_tr], Rabs[v_tr])
+                    vmu_ = vtrain.mean(0); vsd_ = vtrain.std(0) + 1e-8
+                    vX = torch.tensor(((vtrain - vmu_) / vsd_).astype(np.float32))
+                    vY = torch.tensor((np.log10(np.clip(C[hv][v_tr], 1e-8, None)) + 6.0
+                                       ).astype(np.float32))
+                    torch.manual_seed(seed + 31); vnet = make_conc_net()
+                    vop = torch.optim.Adam(vnet.parameters(), lr=1e-3, weight_decay=3e-3)
+                    for _ in range(selected_uM_epochs):
+                        vnet.train(); vop.zero_grad()
+                        vl = pooled_loss(vnet(vX), vY, gp[v_tr]); vl.backward(); vop.step()
+                    vnet.eval()
+                    vtest = _concentration_context_features(Xabs[hv][v_va], ratios=Rabs[v_va])
+                    with torch.no_grad():
+                        vlog = vnet(torch.tensor(((vtest - vmu_) / vsd_
+                                                  ).astype(np.float32))).numpy()
+                    vgp = gp[v_va]
+                    lv_err = {}                       # (subs j, level µM) -> [fold errors]
+                    for mp in dict.fromkeys(vgp.tolist()):
+                        sel = np.where(vgp == mp)[0]
+                        pred = 10.0 ** np.clip(np.median(vlog[sel], axis=0), -3.0, 6.0)
+                        true = C[hv][v_va[sel[0]]] * 1e6
+                        for j in range(len(conc_subs)):
+                            if true[j] > 0 and np.isfinite(pred[j]) and pred[j] > 0:
+                                lv_err.setdefault((j, round(float(true[j]), 4)),
+                                                  []).append(abs(np.log10(pred[j] / true[j])))
+                    vr = np.full((len(conc_subs), 2), np.nan)
                     for j in range(len(conc_subs)):
-                        if true[j] > 0 and np.isfinite(pred[j]) and pred[j] > 0:
-                            lv_err.setdefault((j, round(float(true[j]), 4)),
-                                              []).append(abs(np.log10(pred[j] / true[j])))
-                vr = np.full((len(conc_subs), 2), np.nan)
-                for j in range(len(conc_subs)):
-                    good = [lvl for (jj, lvl), es in lv_err.items()
-                            if jj == j and 10.0 ** float(np.median(es)) <= 2.0]
-                    if len(good) >= 2:
-                        vr[j] = [min(good) * 1e-6, max(good) * 1e-6]
-                uM["validated_ranges_M"] = vr
-                uM["validated_note"] = ("levels recovered within 2-fold on a 20% "
-                                        "condition-grouped holdout")
+                        good = [lvl for (jj, lvl), es in lv_err.items()
+                                if jj == j and 10.0 ** float(np.median(es)) <= 2.0]
+                        if len(good) >= 2:
+                            vr[j] = [min(good) * 1e-6, max(good) * 1e-6]
+                    uM["validated_ranges_M"] = vr
+                    uM["validated_note"] = ("levels recovered within 2-fold on a 20% "
+                                            "condition-grouped holdout")
+                    if progress:
+                        _txt = " · ".join(
+                            f"{conc_subs[j]} {vr[j][0]*1e6:.3g}-{vr[j][1]*1e6:.3g}uM"
+                            if np.isfinite(vr[j]).all() else f"{conc_subs[j]} n/a"
+                            for j in range(len(conc_subs)))
+                        progress("validated window: " + _txt)
+            except Exception as _e:
                 if progress:
-                    _txt = " · ".join(
-                        f"{conc_subs[j]} {vr[j][0]*1e6:.3g}-{vr[j][1]*1e6:.3g}uM"
-                        if np.isfinite(vr[j]).all() else f"{conc_subs[j]} n/a"
-                        for j in range(len(conc_subs)))
-                    progress("validated window: " + _txt)
-        except Exception as _e:
-            if progress:
-                progress(f"validated-window check skipped ({_e})")
+                    progress(f"validated-window check skipped ({_e})")
 
-        # Concentration validation follows the same leave-one-CONDITION-out boundary as
-        # composition. Each held-out map is pooled from its pixel predictions.
-        if loo:
-            loo_true, loo_pred, loo_paths = [], [], []
-            unique_conds = list(dict.fromkeys(gcond.tolist()))
-            for fold_i, held in enumerate(unique_conds):
-                te = np.where(gcond == held)[0]; tr = np.where(gcond != held)[0]
-                if len(te) == 0 or len(tr) < 3:
-                    continue
-                if progress:
-                    progress(f"concentration leave-one-condition-out {fold_i + 1}/{len(unique_conds)}")
-                ftrain = _concentration_context_features(Xabs[hv][tr], gp[tr], Rabs[tr])
-                fmu = ftrain.mean(0); fsd = ftrain.std(0) + 1e-8
-                fX = torch.tensor(((ftrain - fmu) / fsd).astype(np.float32))
-                fY = torch.tensor((np.log10(np.clip(C[hv][tr], 1e-8, None)) + 6.0).astype(np.float32))
-                fgp = gp[tr]
-                fgroups = [np.where(fgp == g)[0] for g in dict.fromkeys(fgp.tolist())]
-                torch.manual_seed(seed + 1000 + fold_i)
-                fnet = nn.Sequential(nn.Linear(ftrain.shape[1], 256), nn.BatchNorm1d(256), nn.ReLU(),
-                                     nn.Dropout(0.15), nn.Linear(256, 64), nn.ReLU(),
-                                     nn.Linear(64, len(conc_subs)))
-                fop = torch.optim.Adam(fnet.parameters(), lr=1e-3, weight_decay=1e-3)
-                for _ in range(epochs):
-                    fnet.train(); fop.zero_grad(); fp = fnet(fX); fl = []
-                    for fi in fgroups:
-                        fii = torch.as_tensor(fi, dtype=torch.long)
-                        fl.append(torch.nn.functional.smooth_l1_loss(
-                            torch.quantile(fp[fii], 0.5, dim=0), fY[fii[0]], beta=0.25))
-                    fmap = torch.stack(fl).mean()
-                    fcons = torch.nn.functional.smooth_l1_loss(fp, fY, beta=0.5)
-                    (fmap + 0.05 * fcons).backward(); fop.step()
-                fnet.eval()
-                ftest = _concentration_context_features(Xabs[hv][te], ratios=Rabs[te])
-                test_x = torch.tensor(((ftest - fmu) / fsd).astype(np.float32))
-                with torch.no_grad():
-                    logits = fnet(test_x).numpy()
-                # One row per held-out MAP, pooled over that map's own pixels — the
-                # downstream lookup is by file path, and a condition can hold several maps.
-                te_paths = gp[te]
-                for mp in dict.fromkeys(te_paths.tolist()):
-                    sel = np.where(te_paths == mp)[0]
-                    loo_true.append((C[hv][te[sel[0]]] * 1e6).tolist())
-                    loo_pred.append((10.0 ** np.clip(np.median(logits[sel], axis=0),
-                                                     -3.0, 6.0)).tolist())
-                    loo_paths.append(mp)
-            uM["loo_eval"] = {"true_uM": loo_true, "pred_uM": loo_pred,
-                              "paths": loo_paths, "level": "condition"}
+            # Concentration validation follows the same leave-one-CONDITION-out boundary as
+            # composition. Each held-out map is pooled from its pixel predictions.
+            if loo:
+                loo_true, loo_pred, loo_paths = [], [], []
+                unique_conds = list(dict.fromkeys(gcond.tolist()))
+                for fold_i, held in enumerate(unique_conds):
+                    te = np.where(gcond == held)[0]; tr = np.where(gcond != held)[0]
+                    if len(te) == 0 or len(tr) < 3:
+                        continue
+                    if progress:
+                        progress(f"concentration leave-one-condition-out {fold_i + 1}/{len(unique_conds)}")
+                    ftrain = _concentration_context_features(Xabs[hv][tr], gp[tr], Rabs[tr])
+                    fmu = ftrain.mean(0); fsd = ftrain.std(0) + 1e-8
+                    fX = torch.tensor(((ftrain - fmu) / fsd).astype(np.float32))
+                    fY = torch.tensor((np.log10(np.clip(C[hv][tr], 1e-8, None)) + 6.0).astype(np.float32))
+                    fgp = gp[tr]
+                    fgroups = [np.where(fgp == g)[0] for g in dict.fromkeys(fgp.tolist())]
+                    torch.manual_seed(seed + 1000 + fold_i)
+                    fnet = nn.Sequential(nn.Linear(ftrain.shape[1], 256), nn.BatchNorm1d(256), nn.ReLU(),
+                                         nn.Dropout(0.15), nn.Linear(256, 64), nn.ReLU(),
+                                         nn.Linear(64, len(conc_subs)))
+                    fop = torch.optim.Adam(fnet.parameters(), lr=1e-3, weight_decay=1e-3)
+                    for _ in range(epochs):
+                        fnet.train(); fop.zero_grad(); fp = fnet(fX); fl = []
+                        for fi in fgroups:
+                            fii = torch.as_tensor(fi, dtype=torch.long)
+                            fl.append(torch.nn.functional.smooth_l1_loss(
+                                torch.quantile(fp[fii], 0.5, dim=0), fY[fii[0]], beta=0.25))
+                        fmap = torch.stack(fl).mean()
+                        fcons = torch.nn.functional.smooth_l1_loss(fp, fY, beta=0.5)
+                        (fmap + 0.05 * fcons).backward(); fop.step()
+                    fnet.eval()
+                    ftest = _concentration_context_features(Xabs[hv][te], ratios=Rabs[te])
+                    test_x = torch.tensor(((ftest - fmu) / fsd).astype(np.float32))
+                    with torch.no_grad():
+                        logits = fnet(test_x).numpy()
+                    # One row per held-out MAP, pooled over that map's own pixels — the
+                    # downstream lookup is by file path, and a condition can hold several maps.
+                    te_paths = gp[te]
+                    for mp in dict.fromkeys(te_paths.tolist()):
+                        sel = np.where(te_paths == mp)[0]
+                        loo_true.append((C[hv][te[sel[0]]] * 1e6).tolist())
+                        loo_pred.append((10.0 ** np.clip(np.median(logits[sel], axis=0),
+                                                         -3.0, 6.0)).tolist())
+                        loo_paths.append(mp)
+                uM["loo_eval"] = {"true_uM": loo_true, "pred_uM": loo_pred,
+                                  "paths": loo_paths, "level": "condition"}
 
     # carry the calibration INSIDE the model: Real then quantifies µM from the
     # .dlm alone — no separate CSV to re-browse (and no way to pair the wrong one)
@@ -1578,6 +1933,8 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
     u = model.get("uM")
     if not u:
         return None, []
+    if u.get("kind") == "calibration_residual_uM_v1":
+        return _apply_calibration_residual(model, wn, spectra, return_meta)
     usubs = u.get("subs") or model["subs"]
     wn = np.asarray(wn); mask = (wn >= model["lo"]) & (wn <= model["hi"])
     X = np.asarray(spectra, float)
