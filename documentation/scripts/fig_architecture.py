@@ -276,7 +276,7 @@ out_tag(0.905, 0.400)
 box(0.704, 0.200, 0.280, 0.175,
     [("reported concentration", "t"),
      ("the final answer, per pesticide", "p"),
-     (r"$\hat{C}$ = C$_{cal}$ · 10$^{\Delta}$  (µM)", "e"),
+     (r"log$_{10}\hat{C}$ = log$_{10}$C$_{cal}$ + $\Delta$   →   $\hat{C}$ (µM)", "e"),
      ("validated window · out-of-range flagged", "s")], lw=1.4)
 
 # demoted footnote — NOT part of the reported pipeline
