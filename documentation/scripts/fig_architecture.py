@@ -268,8 +268,8 @@ cap(0.530, 0.108,
     r"z = [ log$_{10}$C$_{cal}$ · $\bar{p}$ · log I$_{eq}$ · intensity P10/50/90 ]",
     fs=5.2)
 cap(0.530, 0.082, r"trained on the same mixtures · Huber loss on $\Delta$log$_{10}$C",
-cap(0.530, 0.056, r'$\Delta$ in decades:  0 = no change  ·  +0.3 = x2  ·  -0.3 = x1/2', fs=4.9)
     fs=4.9)
+cap(0.530, 0.056, r'$\Delta$ in decades:  0 = no change  ·  +0.3 = x2  ·  -0.3 = x1/2', fs=4.9)
 
 arrow(0.678, ROW_B, 0.700, ROW_B)
 badge(0.712, 0.400, 9)
