@@ -17,7 +17,7 @@ from matplotlib import cm
 from matplotlib.colors import Normalize
 from matplotlib.path import Path
 from matplotlib.patches import PathPatch
-from scipy.interpolate import griddata
+from scipy.interpolate import RBFInterpolator
 import openpyxl
 
 labfig.setup()
@@ -73,22 +73,24 @@ norm = Normalize(0.0, 1.0)
 cmap = cm.RdYlGn
 
 
-def draw(points):
-    tag = "" if points else "_surface"
+def draw(points, arrows=True):
+    tag = ("" if arrows else "_points") if points else "_surface"
     fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.9))
     for ax, (m, title) in zip(axes, [("nnls", "NNLS unmixing"),
                                      ("mlp", "MLP unmixing")]):
         ax.set_axis_off(); ax.set_aspect("equal")
-        acc = 1.0 - 0.5 * np.abs(PRED[m] - TRUE).sum(1)
+        # reference convention: accuracy = 1 - total L1 composition error
+        acc = np.clip(1.0 - np.abs(PRED[m] - TRUE).sum(1), 0, 1)
         pts = np.array([bary(t) for t in TRUE])
         gx, gy = np.meshgrid(np.linspace(0, 1, 320),
                              np.linspace(0, np.sqrt(3) / 2, 280))
-        lin = griddata(pts, acc, (gx, gy), method="linear")
-        near = griddata(pts, acc, (gx, gy), method="nearest")
-        surf = np.where(np.isnan(lin), near, lin)
+        rbf = RBFInterpolator(pts, acc, kernel="thin_plate_spline",
+                              smoothing=0.015)
+        surf = np.clip(rbf(np.column_stack([gx.ravel(), gy.ravel()])
+                           ).reshape(gx.shape), 0, 1)
         im = ax.imshow(surf, extent=(0, 1, 0, np.sqrt(3) / 2), origin="lower",
-                       cmap=cmap, norm=norm, alpha=0.55 if points else 0.85,
-                       zorder=0.5, interpolation="bilinear")
+                       cmap=cmap, norm=norm, alpha=0.80,
+                       zorder=0.5, interpolation="bicubic")
         im.set_clip_path(PathPatch(Path(tri[:3]), transform=ax.transData))
         ax.plot(tri[:, 0], tri[:, 1], color=INK, lw=1.0, zorder=2)
         for f in (0.25, 0.5, 0.75):
@@ -107,23 +109,25 @@ def draw(points):
         if points:
             for t, p, a_ in zip(TRUE, PRED[m], acc):
                 pt, pp = bary(t), bary(p)
-                ax.annotate("", pp, pt, arrowprops=dict(
-                    arrowstyle="-|>", color="#5b636d", lw=0.7,
-                    mutation_scale=6, shrinkA=2.5, shrinkB=2.5), zorder=3)
+                if arrows:
+                    ax.annotate("", pp, pt, arrowprops=dict(
+                        arrowstyle="-|>", color="#5b636d", lw=0.7,
+                        mutation_scale=6, shrinkA=2.5, shrinkB=2.5), zorder=3)
                 ax.scatter(*pt, s=24, facecolors="white",
                            edgecolors="#6a7178", linewidths=0.8, zorder=4)
                 ax.scatter(*pp, s=28, facecolors=[cmap(norm(a_))],
                            edgecolors=INK, linewidths=0.5, zorder=5)
         ax.set_xlim(-0.14, 1.14); ax.set_ylim(-0.12, 1.02)
         ax.set_title(title, fontsize=10, weight="bold", pad=6)
-        ax.text(0.5, -0.105, f"mean deviation {np.mean(1-acc)*100:.1f} %p",
+        dev = 0.5 * np.abs(PRED[m] - TRUE).sum(1)
+        ax.text(0.5, -0.105, f"mean deviation {np.mean(dev)*100:.1f} %p",
                 fontsize=8, color=MUTE, ha="center")
     cax = fig.add_axes([0.435, 0.90, 0.13, 0.025])
     cb = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax,
                       orientation="horizontal", ticks=[0, 1])
     cb.ax.set_xticklabels(["0", "1"], fontsize=7)
     cb.outline.set_linewidth(0.5)
-    cax.set_title("accuracy", fontsize=7, pad=2)
+    cax.set_title(r"accuracy = 1 $-$ $\Sigma$|pred$-$true|", fontsize=6.2, pad=2)
     note = ("NNLS: apparent surface composition (locked workbook table) · "
             "MLP: condition-held-out, deployed model · all 64 grid conditions")
     if points:
@@ -140,5 +144,6 @@ def draw(points):
 
 
 draw(points=True)
+draw(points=True, arrows=False)
 draw(points=False)
 print("saved fig_ternary_grid64 (+_surface)")
