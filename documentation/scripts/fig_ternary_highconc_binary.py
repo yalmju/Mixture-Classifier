@@ -15,6 +15,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.colors import Normalize
+from matplotlib.path import Path
+from matplotlib.patches import PathPatch
+from scipy.interpolate import griddata
 
 labfig.setup()
 CO = labfig.CO
@@ -55,7 +58,7 @@ SUB_N = {m: subset(ROWS[m]) for m in ROWS}
 n_b = sum(1 for r in SUB_N["mlp"] if (np.asarray(r["true"]) > 0).sum() == 2)
 n_h = len(SUB_N["mlp"]) - n_b
 
-norm = Normalize(vmin=0.4, vmax=1.0)
+norm = Normalize(vmin=0.0, vmax=1.0)
 cmap = cm.RdYlGn
 
 fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.9))
@@ -63,6 +66,22 @@ for ax, (m, title) in zip(axes, [("nnls", "NNLS unmixing"),
                                  ("mlp", "MLP unmixing")]):
     ax.set_axis_off(); ax.set_aspect("equal")
     tri = np.array([V["TBZ"], V["DQ"], V["THI"], V["TBZ"]])
+    # interpolated accuracy surface over the simplex (linear, nearest-filled),
+    # clipped to the triangle — the panel's background, as in the original set
+    pts = np.array([bary(r["true"]) for r in SUB_N[m]])
+    vals = np.array([1.0 - 0.5 * np.abs(np.asarray(r["pred"], float)
+                                        / (np.sum(r["pred"]) + 1e-12)
+                                        - np.asarray(r["true"], float)).sum()
+                     for r in SUB_N[m]])
+    gx, gy = np.meshgrid(np.linspace(0, 1, 320),
+                         np.linspace(0, np.sqrt(3) / 2, 280))
+    lin = griddata(pts, vals, (gx, gy), method="linear")
+    near = griddata(pts, vals, (gx, gy), method="nearest")
+    z = np.where(np.isnan(lin), near, lin)
+    im = ax.imshow(z, extent=(0, 1, 0, np.sqrt(3) / 2), origin="lower",
+                   cmap=cmap, norm=norm, alpha=0.50, zorder=0.5,
+                   interpolation="bilinear")
+    im.set_clip_path(PathPatch(Path(tri[:3]), transform=ax.transData))
     ax.plot(tri[:, 0], tri[:, 1], color=INK, lw=1.0, zorder=2)
     for f in (0.25, 0.5, 0.75):                     # light interior grid
         for a, b, c in ((V["TBZ"], V["DQ"], V["THI"]),
@@ -97,8 +116,8 @@ for ax, (m, title) in zip(axes, [("nnls", "NNLS unmixing"),
 
 cax = fig.add_axes([0.435, 0.90, 0.13, 0.025])
 cb = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax,
-                  orientation="horizontal", ticks=[0.4, 1.0])
-cb.ax.set_xticklabels(["0.4", "1"], fontsize=7)
+                  orientation="horizontal", ticks=[0.0, 1.0])
+cb.ax.set_xticklabels(["0", "1"], fontsize=7)
 cb.outline.set_linewidth(0.5)
 cax.set_title("accuracy", fontsize=7, pad=2)
 fig.text(0.5, 0.015,
