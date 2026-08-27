@@ -12,7 +12,7 @@ from matplotlib import cm
 from matplotlib.colors import Normalize
 from matplotlib.path import Path
 from matplotlib.patches import PathPatch
-from scipy.interpolate import griddata
+from scipy.interpolate import RBFInterpolator
 
 labfig.setup()
 CO = labfig.CO
@@ -58,12 +58,13 @@ def draw(points):
         pts = np.array([bary(t) for t in TRUE])
         gx, gy = np.meshgrid(np.linspace(0, 1, 320),
                              np.linspace(0, np.sqrt(3) / 2, 280))
-        lin = griddata(pts, acc, (gx, gy), method="linear")
-        near = griddata(pts, acc, (gx, gy), method="nearest")
-        surf = np.where(np.isnan(lin), near, lin)
+        rbf = RBFInterpolator(pts, acc, kernel="thin_plate_spline",
+                              smoothing=0.015)
+        surf = np.clip(rbf(np.column_stack([gx.ravel(), gy.ravel()])
+                           ).reshape(gx.shape), 0, 1)
         im = ax.imshow(surf, extent=(0, 1, 0, np.sqrt(3) / 2), origin="lower",
-                       cmap=cmap, norm=norm, alpha=0.55 if points else 0.85,
-                       zorder=0.5, interpolation="bilinear")
+                       cmap=cmap, norm=norm, alpha=0.80,
+                       zorder=0.5, interpolation="bicubic")
         im.set_clip_path(PathPatch(Path(tri[:3]), transform=ax.transData))
         ax.plot(tri[:, 0], tri[:, 1], color=INK, lw=1.0, zorder=2)
         for f in (0.25, 0.5, 0.75):
