@@ -178,7 +178,7 @@ ov.add_patch(FancyBboxPatch((0.232, 0.115), 0.160, 0.745,
                             boxstyle="round,pad=0.002,rounding_size=0.008",
                             facecolor=GREEN_BG, edgecolor=GREEN_E, lw=1.0,
                             zorder=0.6))
-cap(0.312, 0.795, r"shared neural network f(x$_i$)", fs=BOX_T, col=INK,
+cap(0.312, 0.795, r"shared MLP f(x$_i$)", fs=BOX_T, col=INK,
     weight="bold")
 fc_net([0.252, 0.290, 0.328, 0.366],
        heights=[0.44, 0.36, 0.27, 0.19],
@@ -256,7 +256,7 @@ ov.add_patch(FancyBboxPatch((0.792, 0.115), 0.112, 0.745,
                             boxstyle="round,pad=0.002,rounding_size=0.008",
                             facecolor=GREEN_BG, edgecolor=GREEN_E, lw=1.0,
                             zorder=0.6))
-cap(0.848, 0.795, "correction network", fs=BOX_T, col=INK, weight="bold")
+cap(0.848, 0.795, "correction MLP", fs=BOX_T, col=INK, weight="bold")
 fc_net([0.808, 0.834, 0.860, 0.886],
        heights=[0.30, 0.40, 0.27, 0.16],
        slots=[8, 9, 7, 3], ells=[True, True, False, False],
