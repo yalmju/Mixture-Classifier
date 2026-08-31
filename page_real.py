@@ -114,6 +114,12 @@ class RealDataPage(QWidget):
         left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         left_scroll.setFixedWidth(280)
         left_scroll.setWidget(leftw)
+        # 폭이 280 을 넘는 자식이 포커스를 받으면 Qt 가 레일을 수평으로 밀어버리는데,
+        # 가로 스크롤바가 숨겨져 있어 사용자가 되돌릴 수 없다(라벨 앞글자가 잘린 채
+        # "찌그러져" 보이는 증상). 수평 스크롤을 항상 0 에 고정한다.
+        _hbar = left_scroll.horizontalScrollBar()
+        _hbar.rangeChanged.connect(lambda *_: _hbar.setValue(0))
+        _hbar.valueChanged.connect(lambda v: v and _hbar.setValue(0))
         outer.addWidget(left_scroll)
 
         ctl = QVBoxLayout(); ctl.setSpacing(6)
