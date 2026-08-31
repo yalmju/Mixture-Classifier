@@ -2010,6 +2010,44 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
     return (*result, meta)
 
 
+def _presence_gate(model, path, res, comp, wn=None, hit_cube=None):
+    """presence 판정을 res 에 붙이고 ND 성분을 조성 0·µM 0(ND 플래그)으로 게이트한다.
+
+    "NNLS/스크린 근거가 없으면 회귀가 되살리지 않는다" 규칙의 배선. hit_cube 를 안
+    받으면 스크린을 직접 돌린다 — 모델의 nnls_screen 설정과 무관하게 presence
+    feature 는 스크린된 픽셀에서 계산돼야 학습(bundle)과 일치한다. 원값은
+    comp_raw / uM_raw 로 보존한다. 사이드카가 없으면 아무것도 하지 않는다."""
+    if not model.get("_presence_head"):
+        return comp
+    try:
+        if hit_cube is None:
+            wn, hit_cube, _sm = nnls_hit_spectra(
+                model.get("data_dir") or os.path.dirname(path), path,
+                baseline=model.get("baseline", True), trim=model.get("trim"),
+                min_frac=model.get("screen_min_frac", 0.15), progress=None)
+        pres = apply_presence(model, wn, hit_cube)
+    except Exception:
+        return comp
+    if not pres:
+        return comp
+    res["presence"] = pres
+    nd = [sn for sn, p in pres.items() if p.get("state") == "ND" and sn in comp]
+    if nd:
+        res["comp_raw"] = dict(comp)
+        for sn in nd:
+            comp[sn] = 0.0
+        tot = sum(comp.values())
+        if tot > 0:
+            comp = {sn: v / tot for sn, v in comp.items()}
+        if res.get("uM"):
+            res["uM_raw"] = dict(res["uM"])
+            res["uM_nd"] = {sn: (sn in nd) for sn in res["uM"]}
+            for sn in nd:
+                if sn in res["uM"]:
+                    res["uM"][sn] = 0.0
+    return comp
+
+
 def apply_recovery(model, items, progress=None):
     """Apply an already-trained composition model to each known-ratio mixture (NO training)
     → list of {name, nominal, mean[, uM_pred, uM_true]} in composition.SUBSTANCES order,
@@ -2075,9 +2113,6 @@ def apply_recovery(model, items, progress=None):
             comp = {subs[j]: float(pm[j]) for j in range(len(subs))}
             um, unames = apply_uM_pixels(model, wn, hit_cube)
             res = {"uM": None, "hit_fraction": smeta["hit_fraction"]}
-            pres = apply_presence(model, wn, hit_cube)
-            if pres:
-                res["presence"] = pres
             if um is not None:
                 med = np.median(np.asarray(um, float), axis=0)
                 res["uM"] = {sn: float(med[j]) for j, sn in enumerate(unames)}
@@ -2085,9 +2120,11 @@ def apply_recovery(model, items, progress=None):
                                    for j, sn in enumerate(unames)}
                 res["uM_p90"] = {sn: float(np.percentile(um[:, j], 90))
                                    for j, sn in enumerate(unames)}
+            comp = _presence_gate(model, path, res, comp, wn, hit_cube)
         else:
             wn, cube, _m, _c = load_map(path)
-            res = apply_model(model, wn, cube); comp = res["composition"]
+            res = apply_model(model, wn, cube); comp = dict(res["composition"])
+            comp = _presence_gate(model, path, res, comp)
         s = sum(float(ratio.get(sn, 0)) for sn in subs)
         nom = np.zeros(len(subs)); mn = np.zeros(len(subs))
         for sn in subs:
@@ -2098,6 +2135,8 @@ def apply_recovery(model, items, progress=None):
                "nominal": nom, "mean": mn}
         if res.get("presence"):
             row["presence"] = res["presence"]
+        if res.get("uM_nd"):
+            row["uM_nd"] = res["uM_nd"]
         if res.get("uM"):
             row["uM_pred"] = {sn: res["uM"][sn] for sn in subs}
             row["uM_p10"] = res.get("uM_p10")
