@@ -1,0 +1,5 @@
+﻿imbalance_max_min,n_conditions,MLP_allcomp_within2x_pct,PLS_allcomp_within2x_pct,MLP_component_within2x_pct,PLS_component_within2x_pct
+1:1,4,50.0,25.0,75.0,58.3
+2:1,18,66.7,44.4,81.5,72.2
+4:1,24,62.5,33.3,80.6,75.0
+8:1,18,50.0,16.7,75.9,59.3

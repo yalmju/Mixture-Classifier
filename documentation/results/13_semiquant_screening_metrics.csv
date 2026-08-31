@@ -1,0 +1,4 @@
+﻿method,within_2x_pct,w2x_lo,w2x_hi,within_3x_pct,w3x_lo,w3x_hi,within_5x_pct,w5x_lo,w5x_hi,median_fold,p90_fold,THI_within_3x_pct,THI_median_fold,TBZ_within_3x_pct,TBZ_median_fold,DQ_within_3x_pct,DQ_median_fold
+NNLS,29.2,22.9,35.9,53.1,46.4,59.9,73.4,67.7,79.2,2.85,8.87,79.7,1.9,29.7,4.85,50.0,3.01
+PLS,68.8,62.0,75.0,89.6,84.9,93.8,96.4,93.2,99.0,1.51,3.11,96.9,1.26,89.1,1.65,82.8,2.03
+MLP,79.2,71.9,85.9,92.7,88.5,96.9,97.9,94.8,100.0,1.42,2.5,100.0,1.33,90.6,1.48,87.5,1.56

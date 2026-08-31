@@ -2075,6 +2075,9 @@ def apply_recovery(model, items, progress=None):
             comp = {subs[j]: float(pm[j]) for j in range(len(subs))}
             um, unames = apply_uM_pixels(model, wn, hit_cube)
             res = {"uM": None, "hit_fraction": smeta["hit_fraction"]}
+            pres = apply_presence(model, wn, hit_cube)
+            if pres:
+                res["presence"] = pres
             if um is not None:
                 med = np.median(np.asarray(um, float), axis=0)
                 res["uM"] = {sn: float(med[j]) for j, sn in enumerate(unames)}
@@ -2093,6 +2096,8 @@ def apply_recovery(model, items, progress=None):
             mn[o] = comp.get(sn, 0.0)
         row = {"name": os.path.basename(path).replace("_corrected", "").replace(".csv", ""),
                "nominal": nom, "mean": mn}
+        if res.get("presence"):
+            row["presence"] = res["presence"]
         if res.get("uM"):
             row["uM_pred"] = {sn: res["uM"][sn] for sn in subs}
             row["uM_p10"] = res.get("uM_p10")
@@ -2113,4 +2118,95 @@ def save_model(model, path):
 
 def load_model(path):
     with open(path, "rb") as f:
-        return pickle.load(f)
+        model = pickle.load(f)
+    # presence 사이드카(<dlm이름>.presence.json)가 있으면 싣는다 — 없으면 예전 그대로.
+    try:
+        side = os.path.splitext(str(path))[0] + ".presence.json"
+        if os.path.exists(side):
+            import json as _json
+            with open(side, encoding="utf-8") as fh:
+                model["_presence_head"] = _json.load(fh)
+    except Exception:
+        model.pop("_presence_head", None)
+    return model
+
+
+# ------------------------------------------------------------------ presence 헤드
+# 회귀는 0을 출력하지 못한다(softmax·µM 곱셈 보정). 존재/부재는 별도의 성분별
+# 로지스틱 게이트가 판정한다 — 근거와 검증은 documentation/PRESENCE_HEAD_2026-08-31.md.
+_PRESENCE_BANDS = {"DQ": 1570.0, "TBZ": 1270.0, "THI": 1367.0}
+_PRESENCE_REF_CACHE = {}
+
+
+def _presence_refs(model):
+    """_refs/_nuisance_refs 캐시 — 맵마다 순물질을 디스크에서 다시 읽지 않는다
+    (Google Drive 위라 맵당 수 초짜리 I/O 가 된다)."""
+    key = (str(model.get("data_dir")), bool(model.get("baseline", True)),
+           tuple(model.get("trim") or ()))
+    if key not in _PRESENCE_REF_CACHE:
+        subs_r, wn_r, mask_r, P, lo, hi = _refs(model.get("data_dir"),
+                                                model.get("baseline", True), model.get("trim"))
+        NU = _nuisance_refs(model.get("data_dir"), model.get("baseline", True), mask_r)
+        PA = np.vstack([P, NU]) if NU is not None else P
+        _PRESENCE_REF_CACHE[key] = (subs_r, mask_r, PA)
+    return _PRESENCE_REF_CACHE[key]
+
+
+def presence_map_context(model, raw_full, wn):
+    """맵 하나의 presence feature 재료. raw_full: (n_px, n_feat) baseline 제거·음수 클립.
+
+    배경(BLK/INK) 템플릿을 포함해 NNLS 를 풀어야 한다 — 배경 없이 3-템플릿으로
+    풀면 저신호 맵에서 부재 성분 겉보기 분율이 26~36%까지 부풀어 판정이 무너진다."""
+    from scipy.optimize import nnls as _scinnls
+    subs_r, mask_r, PA = _presence_refs(model)
+    raw_full = np.clip(np.asarray(raw_full, float), 0, None)
+    # nnls_hit_spectra 가 준 큐브는 이미 트림 창(mask)으로 잘려 있다 — 폭으로 구분.
+    sub = raw_full if raw_full.shape[1] == int(np.sum(mask_r)) else raw_full[:, mask_r]
+    fr_an, shares = [], []
+    for y in sub:
+        yn = y / (np.linalg.norm(y) + 1e-12)
+        w, _ = _scinnls(PA.T, yn)
+        a = w[:len(subs_r)]
+        shares.append(a.sum() / (w.sum() + 1e-12))
+        fr_an.append(a / (a.sum() + 1e-12))
+    fr_an = np.asarray(fr_an); shares = np.asarray(shares)
+    hit = shares >= float(model.get("screen_min_frac", 0.15))
+    use = hit if hit.any() else np.ones(len(shares), bool)
+    wn = np.asarray(wn, float)
+    band = {}
+    for s, c in _PRESENCE_BANDS.items():
+        m = np.abs(wn - c) <= 10.0
+        band[s] = float(np.median(raw_full[use][:, m].max(1))) if m.any() else 0.0
+    return {"subs": subs_r, "frac": fr_an[use].mean(0),
+            "analyte_share": float(shares[use].mean()),
+            "band": band, "total": float(np.median(raw_full[use].sum(1)))}
+
+
+def presence_feature_vector(ctx, s):
+    """학습·적용이 공유하는 feature 정의 — 순서를 바꾸면 사이드카가 무효가 된다."""
+    subs_r = ctx["subs"]; j = subs_r.index(s)
+    others = [k for k in range(len(subs_r)) if k != j]
+    return [float(ctx["frac"][j]),
+            float(max(ctx["frac"][k] for k in others)),
+            float(np.log1p(ctx["band"].get(s, 0.0))),
+            float(np.log1p(max(ctx["band"].get(subs_r[k], 0.0) for k in others))),
+            float(np.log1p(ctx["total"])),
+            float(ctx["analyte_share"])]
+
+
+def apply_presence(model, wn, cube):
+    """성분별 presence 확률과 3-상태 판정. 사이드카가 없으면 None."""
+    head = model.get("_presence_head")
+    if not head:
+        return None
+    ctx = presence_map_context(model, cube, wn)
+    lo_t = float(head.get("thresholds", {}).get("nd", 0.2))
+    hi_t = float(head.get("thresholds", {}).get("detected", 0.8))
+    out = {}
+    for s, prm in head["components"].items():
+        f = np.asarray(presence_feature_vector(ctx, s), float)
+        z = (f - np.asarray(prm["mu"], float)) / (np.asarray(prm["sd"], float) + 1e-12)
+        p = 1.0 / (1.0 + np.exp(-(float(np.dot(prm["coef"], z)) + float(prm["intercept"]))))
+        out[s] = {"prob": float(p),
+                  "state": ("Detected" if p > hi_t else ("ND" if p < lo_t else "Indeterminate"))}
+    return out

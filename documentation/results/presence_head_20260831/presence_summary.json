@@ -1,0 +1,29 @@
+{
+  "per_component": {
+    "THI": {
+      "auc": 0.9969453990072547,
+      "n_present": 97,
+      "n_absent": 27,
+      "absent_called_detected": 0,
+      "present_called_ND": 0,
+      "indeterminate": 13
+    },
+    "TBZ": {
+      "auc": 0.9398777173913044,
+      "n_present": 92,
+      "n_absent": 32,
+      "absent_called_detected": 2,
+      "present_called_ND": 5,
+      "indeterminate": 24
+    },
+    "DQ": {
+      "auc": 0.9103260869565217,
+      "n_present": 92,
+      "n_absent": 32,
+      "absent_called_detected": 4,
+      "present_called_ND": 5,
+      "indeterminate": 36
+    }
+  },
+  "protocol": "grouped 5-fold (seed 701) · features: bg-aware NNLS + marker bands + intensity · logistic"
+}

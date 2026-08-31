@@ -1,0 +1,373 @@
+﻿component,map,src,true_uM,present,prob,state
+THI,DQ0-TB150-TH50.csv,bundle,50.0,1,0.9825,Detected
+THI,DQ0-TB250-TH50.csv,bundle,50.0,1,0.9994,Detected
+THI,DQ0-TB50-TH150.csv,bundle,150.0,1,0.9999,Detected
+THI,DQ0-TB50-TH250.csv,bundle,250.0,1,1.0,Detected
+THI,DQ0-TB50-TH500.csv,bundle,500.0,1,1.0,Detected
+THI,DQ0-TB500-TH50.csv,bundle,50.0,1,0.3568,Indeterminate
+THI,DQ0-TB500-TH500.csv,bundle,500.0,1,0.9999,Detected
+THI,DQ12-TB12-TH12.csv,bundle,12.0,1,0.9943,Detected
+THI,DQ12-TB12-TH24.csv,bundle,24.0,1,0.9995,Detected
+THI,DQ12-TB12-TH3.csv,bundle,3.0,1,0.4104,Indeterminate
+THI,DQ12-TB12-TH6.csv,bundle,6.0,1,0.9417,Detected
+THI,DQ12-TB24-TH12.csv,bundle,12.0,1,0.9645,Detected
+THI,DQ12-TB24-TH24.csv,bundle,24.0,1,0.974,Detected
+THI,DQ12-TB24-TH3.csv,bundle,3.0,1,0.2317,Indeterminate
+THI,DQ12-TB24-TH6.csv,bundle,6.0,1,0.2291,Indeterminate
+THI,DQ12-TB3-TH12.csv,bundle,12.0,1,0.9989,Detected
+THI,DQ12-TB3-TH24.csv,bundle,24.0,1,0.9997,Detected
+THI,DQ12-TB3-TH3.csv,bundle,3.0,1,0.8895,Detected
+THI,DQ12-TB3-TH6.csv,bundle,6.0,1,0.9611,Detected
+THI,DQ12-TB6-TH12.csv,bundle,12.0,1,0.9951,Detected
+THI,DQ12-TB6-TH24.csv,bundle,24.0,1,0.9996,Detected
+THI,DQ12-TB6-TH3.csv,bundle,3.0,1,0.4202,Indeterminate
+THI,DQ12-TB6-TH6.csv,bundle,6.0,1,0.9738,Detected
+THI,DQ150-TB0-TH50.csv,bundle,50.0,1,0.9988,Detected
+THI,DQ150-TB50-TH0.csv,bundle,0.0,0,0.2966,Indeterminate
+THI,DQ24-TB12-TH12.csv,bundle,12.0,1,0.9984,Detected
+THI,DQ24-TB12-TH24.csv,bundle,24.0,1,0.9987,Detected
+THI,DQ24-TB12-TH3.csv,bundle,3.0,1,0.8265,Detected
+THI,DQ24-TB12-TH6.csv,bundle,6.0,1,0.8966,Detected
+THI,DQ24-TB24-TH12.csv,bundle,12.0,1,0.9974,Detected
+THI,DQ24-TB24-TH24.csv,bundle,24.0,1,0.9955,Detected
+THI,DQ24-TB24-TH3.csv,bundle,3.0,1,0.4875,Indeterminate
+THI,DQ24-TB24-TH6.csv,bundle,6.0,1,0.8888,Detected
+THI,DQ24-TB3-TH12.csv,bundle,12.0,1,0.9999,Detected
+THI,DQ24-TB3-TH24.csv,bundle,24.0,1,0.9998,Detected
+THI,DQ24-TB3-TH3.csv,bundle,3.0,1,0.8705,Detected
+THI,DQ24-TB3-TH6.csv,bundle,6.0,1,0.9939,Detected
+THI,DQ24-TB6-TH12.csv,bundle,12.0,1,0.973,Detected
+THI,DQ24-TB6-TH24.csv,bundle,24.0,1,0.9997,Detected
+THI,DQ24-TB6-TH3.csv,bundle,3.0,1,0.6627,Indeterminate
+THI,DQ24-TB6-TH6.csv,bundle,6.0,1,0.9923,Detected
+THI,DQ250-TB0-TH50.csv,bundle,50.0,1,1.0,Detected
+THI,DQ250-TB50-TH0.csv,bundle,0.0,0,0.0369,ND
+THI,DQ3-TB12-TH12.csv,bundle,12.0,1,0.9991,Detected
+THI,DQ3-TB12-TH24.csv,bundle,24.0,1,0.9998,Detected
+THI,DQ3-TB12-TH3.csv,bundle,3.0,1,0.923,Detected
+THI,DQ3-TB12-TH6.csv,bundle,6.0,1,0.9823,Detected
+THI,DQ3-TB24-TH12.csv,bundle,12.0,1,0.5494,Indeterminate
+THI,DQ3-TB24-TH24.csv,bundle,24.0,1,0.9979,Detected
+THI,DQ3-TB24-TH3.csv,bundle,3.0,1,0.5289,Indeterminate
+THI,DQ3-TB24-TH6.csv,bundle,6.0,1,0.8852,Detected
+THI,DQ3-TB3-TH12.csv,bundle,12.0,1,0.9995,Detected
+THI,DQ3-TB3-TH24.csv,bundle,24.0,1,1.0,Detected
+THI,DQ3-TB3-TH3.csv,bundle,3.0,1,0.9191,Detected
+THI,DQ3-TB3-TH6.csv,bundle,6.0,1,0.9963,Detected
+THI,DQ3-TB6-TH12.csv,bundle,12.0,1,0.9993,Detected
+THI,DQ3-TB6-TH24.csv,bundle,24.0,1,0.9998,Detected
+THI,DQ3-TB6-TH3.csv,bundle,3.0,1,0.9593,Detected
+THI,DQ3-TB6-TH6.csv,bundle,6.0,1,0.9925,Detected
+THI,DQ33-TB333-TH333.csv,bundle,333.0,1,1.0,Detected
+THI,DQ333-TB33-TH333.csv,bundle,333.0,1,1.0,Detected
+THI,DQ333-TB333-TH33.csv,bundle,33.0,1,0.9828,Detected
+THI,DQ333-TB333-TH333.csv,bundle,333.0,1,1.0,Detected
+THI,DQ50-TB0-TH150.csv,bundle,150.0,1,1.0,Detected
+THI,DQ50-TB0-TH250.csv,bundle,250.0,1,1.0,Detected
+THI,DQ50-TB0-TH500.csv,bundle,500.0,1,1.0,Detected
+THI,DQ50-TB150-TH0.csv,bundle,0.0,0,0.1451,ND
+THI,DQ50-TB250-TH0.csv,bundle,0.0,0,0.0154,ND
+THI,DQ50-TB500-TH0.csv,bundle,0.0,0,0.0212,ND
+THI,DQ500-TB0-TH50.csv,bundle,50.0,1,0.983,Detected
+THI,DQ500-TB0-TH500.csv,bundle,500.0,1,1.0,Detected
+THI,DQ500-TB50-TH0.csv,bundle,0.0,0,0.0377,ND
+THI,DQ500-TB500-TH0.csv,bundle,0.0,0,0.3863,Indeterminate
+THI,DQ6-TB12-TH12.csv,bundle,12.0,1,0.9978,Detected
+THI,DQ6-TB12-TH24.csv,bundle,24.0,1,0.9998,Detected
+THI,DQ6-TB12-TH3.csv,bundle,3.0,1,0.883,Detected
+THI,DQ6-TB12-TH6.csv,bundle,6.0,1,0.9107,Detected
+THI,DQ6-TB24-TH12.csv,bundle,12.0,1,0.8551,Detected
+THI,DQ6-TB24-TH24.csv,bundle,24.0,1,0.9586,Detected
+THI,DQ6-TB24-TH3.csv,bundle,3.0,1,0.2996,Indeterminate
+THI,DQ6-TB24-TH6.csv,bundle,6.0,1,0.8748,Detected
+THI,DQ6-TB3-TH12.csv,bundle,12.0,1,0.999,Detected
+THI,DQ6-TB3-TH24.csv,bundle,24.0,1,0.9996,Detected
+THI,DQ6-TB3-TH3.csv,bundle,3.0,1,0.932,Detected
+THI,DQ6-TB3-TH6.csv,bundle,6.0,1,0.9748,Detected
+THI,DQ6-TB6-TH12.csv,bundle,12.0,1,0.9995,Detected
+THI,DQ6-TB6-TH24.csv,bundle,24.0,1,0.9998,Detected
+THI,DQ6-TB6-TH3.csv,bundle,3.0,1,0.89,Detected
+THI,DQ6-TB6-TH6.csv,bundle,6.0,1,0.9694,Detected
+THI,DQ144-1_corrected.csv,calib,0.0,0,0.1041,ND
+THI,DQ144-2_corrected.csv,calib,0.0,0,0.1142,ND
+THI,DQ18-1_corrected.csv,calib,0.0,0,0.1756,ND
+THI,DQ18-2_corrected.csv,calib,0.0,0,0.1476,ND
+THI,DQ36-1_corrected.csv,calib,0.0,0,0.1039,ND
+THI,DQ36-2_corrected.csv,calib,0.0,0,0.0908,ND
+THI,DQ72-1_corrected.csv,calib,0.0,0,0.0809,ND
+THI,DQ72-2_corrected.csv,calib,0.0,0,0.0896,ND
+THI,DQ9-1_corrected.csv,calib,0.0,0,0.148,ND
+THI,DQ9-2_corrected.csv,calib,0.0,0,0.2481,Indeterminate
+THI,TBZ144-1_corrected.csv,calib,0.0,0,0.0065,ND
+THI,TBZ144-2_corrected.csv,calib,0.0,0,0.0062,ND
+THI,TBZ18-1_corrected.csv,calib,0.0,0,0.0181,ND
+THI,TBZ18-2_corrected.csv,calib,0.0,0,0.0181,ND
+THI,TBZ36-1_corrected.csv,calib,0.0,0,0.0098,ND
+THI,TBZ36-2_corrected.csv,calib,0.0,0,0.0089,ND
+THI,TBZ72-1_corrected.csv,calib,0.0,0,0.0065,ND
+THI,TBZ72-2_corrected.csv,calib,0.0,0,0.0075,ND
+THI,TBZ9-1_corrected.csv,calib,0.0,0,0.0294,ND
+THI,TBZ9-2_corrected.csv,calib,0.0,0,0.0193,ND
+THI,THI-144uM_785_80_1000ms_5 points_1_corrected.csv,calib,144.0,1,1.0,Detected
+THI,THI-144uM_785_80_1000ms_5 points_2_corrected.csv,calib,144.0,1,1.0,Detected
+THI,THI-144uM_785_80_1000ms_5 points_3_corrected.csv,calib,144.0,1,1.0,Detected
+THI,THI-18uM_785_80_1000ms_5 points_1_corrected.csv,calib,18.0,1,1.0,Detected
+THI,THI-18uM_785_80_1000ms_5 points_2_corrected.csv,calib,18.0,1,1.0,Detected
+THI,THI-18uM_785_80_1000ms_5 points_3_corrected.csv,calib,18.0,1,1.0,Detected
+THI,THI-36uM_785_80_1000ms_5 points_1_corrected.csv,calib,36.0,1,0.9999,Detected
+THI,THI-36uM_785_80_1000ms_5 points_2_corrected.csv,calib,36.0,1,0.9999,Detected
+THI,THI-36uM_785_80_1000ms_5 points_3_corrected.csv,calib,36.0,1,0.9999,Detected
+THI,THI-72uM_785_80_1000ms_5 points_1_corrected.csv,calib,72.0,1,1.0,Detected
+THI,THI-72uM_785_80_1000ms_5 points_2_corrected.csv,calib,72.0,1,1.0,Detected
+THI,THI-72uM_785_80_1000ms_5 points_3_corrected.csv,calib,72.0,1,0.9998,Detected
+THI,THI-9uM_785_80_1000ms_5 points_1_corrected.csv,calib,9.0,1,1.0,Detected
+THI,THI-9uM_785_80_1000ms_5 points_2_corrected.csv,calib,9.0,1,1.0,Detected
+THI,THI-9uM_785_80_1000ms_5 points_3_corrected.csv,calib,9.0,1,0.9999,Detected
+TBZ,DQ0-TB150-TH50.csv,bundle,150.0,1,0.997,Detected
+TBZ,DQ0-TB250-TH50.csv,bundle,250.0,1,0.9127,Detected
+TBZ,DQ0-TB50-TH150.csv,bundle,50.0,1,0.8898,Detected
+TBZ,DQ0-TB50-TH250.csv,bundle,50.0,1,0.0796,ND
+TBZ,DQ0-TB50-TH500.csv,bundle,50.0,1,0.0881,ND
+TBZ,DQ0-TB500-TH50.csv,bundle,500.0,1,0.9994,Detected
+TBZ,DQ0-TB500-TH500.csv,bundle,500.0,1,0.7231,Indeterminate
+TBZ,DQ12-TB12-TH12.csv,bundle,12.0,1,0.9618,Detected
+TBZ,DQ12-TB12-TH24.csv,bundle,12.0,1,0.9082,Detected
+TBZ,DQ12-TB12-TH3.csv,bundle,12.0,1,0.9976,Detected
+TBZ,DQ12-TB12-TH6.csv,bundle,12.0,1,0.9684,Detected
+TBZ,DQ12-TB24-TH12.csv,bundle,24.0,1,0.9972,Detected
+TBZ,DQ12-TB24-TH24.csv,bundle,24.0,1,0.9936,Detected
+TBZ,DQ12-TB24-TH3.csv,bundle,24.0,1,0.9999,Detected
+TBZ,DQ12-TB24-TH6.csv,bundle,24.0,1,0.9987,Detected
+TBZ,DQ12-TB3-TH12.csv,bundle,3.0,1,0.8903,Detected
+TBZ,DQ12-TB3-TH24.csv,bundle,3.0,1,0.6813,Indeterminate
+TBZ,DQ12-TB3-TH3.csv,bundle,3.0,1,0.9717,Detected
+TBZ,DQ12-TB3-TH6.csv,bundle,3.0,1,0.9882,Detected
+TBZ,DQ12-TB6-TH12.csv,bundle,6.0,1,0.9787,Detected
+TBZ,DQ12-TB6-TH24.csv,bundle,6.0,1,0.916,Detected
+TBZ,DQ12-TB6-TH3.csv,bundle,6.0,1,0.9987,Detected
+TBZ,DQ12-TB6-TH6.csv,bundle,6.0,1,0.9832,Detected
+TBZ,DQ150-TB0-TH50.csv,bundle,0.0,0,0.916,Detected
+TBZ,DQ150-TB50-TH0.csv,bundle,50.0,1,0.9785,Detected
+TBZ,DQ24-TB12-TH12.csv,bundle,12.0,1,0.8283,Detected
+TBZ,DQ24-TB12-TH24.csv,bundle,12.0,1,0.7299,Indeterminate
+TBZ,DQ24-TB12-TH3.csv,bundle,12.0,1,0.9362,Detected
+TBZ,DQ24-TB12-TH6.csv,bundle,12.0,1,0.9008,Detected
+TBZ,DQ24-TB24-TH12.csv,bundle,24.0,1,0.9119,Detected
+TBZ,DQ24-TB24-TH24.csv,bundle,24.0,1,0.9871,Detected
+TBZ,DQ24-TB24-TH3.csv,bundle,24.0,1,0.9995,Detected
+TBZ,DQ24-TB24-TH6.csv,bundle,24.0,1,0.9911,Detected
+TBZ,DQ24-TB3-TH12.csv,bundle,3.0,1,0.4558,Indeterminate
+TBZ,DQ24-TB3-TH24.csv,bundle,3.0,1,0.6465,Indeterminate
+TBZ,DQ24-TB3-TH3.csv,bundle,3.0,1,0.7578,Indeterminate
+TBZ,DQ24-TB3-TH6.csv,bundle,3.0,1,0.9454,Detected
+TBZ,DQ24-TB6-TH12.csv,bundle,6.0,1,0.828,Detected
+TBZ,DQ24-TB6-TH24.csv,bundle,6.0,1,0.75,Indeterminate
+TBZ,DQ24-TB6-TH3.csv,bundle,6.0,1,0.8157,Detected
+TBZ,DQ24-TB6-TH6.csv,bundle,6.0,1,0.9234,Detected
+TBZ,DQ250-TB0-TH50.csv,bundle,0.0,0,0.4556,Indeterminate
+TBZ,DQ250-TB50-TH0.csv,bundle,50.0,1,0.9999,Detected
+TBZ,DQ3-TB12-TH12.csv,bundle,12.0,1,0.8511,Detected
+TBZ,DQ3-TB12-TH24.csv,bundle,12.0,1,0.5767,Indeterminate
+TBZ,DQ3-TB12-TH3.csv,bundle,12.0,1,0.9534,Detected
+TBZ,DQ3-TB12-TH6.csv,bundle,12.0,1,0.9412,Detected
+TBZ,DQ3-TB24-TH12.csv,bundle,24.0,1,0.9983,Detected
+TBZ,DQ3-TB24-TH24.csv,bundle,24.0,1,0.9352,Detected
+TBZ,DQ3-TB24-TH3.csv,bundle,24.0,1,0.9972,Detected
+TBZ,DQ3-TB24-TH6.csv,bundle,24.0,1,0.9982,Detected
+TBZ,DQ3-TB3-TH12.csv,bundle,3.0,1,0.435,Indeterminate
+TBZ,DQ3-TB3-TH24.csv,bundle,3.0,1,0.1243,ND
+TBZ,DQ3-TB3-TH3.csv,bundle,3.0,1,0.7922,Indeterminate
+TBZ,DQ3-TB3-TH6.csv,bundle,3.0,1,0.6359,Indeterminate
+TBZ,DQ3-TB6-TH12.csv,bundle,6.0,1,0.5616,Indeterminate
+TBZ,DQ3-TB6-TH24.csv,bundle,6.0,1,0.6238,Indeterminate
+TBZ,DQ3-TB6-TH3.csv,bundle,6.0,1,0.9751,Detected
+TBZ,DQ3-TB6-TH6.csv,bundle,6.0,1,0.817,Detected
+TBZ,DQ33-TB333-TH333.csv,bundle,333.0,1,0.094,ND
+TBZ,DQ333-TB33-TH333.csv,bundle,33.0,1,0.2379,Indeterminate
+TBZ,DQ333-TB333-TH33.csv,bundle,333.0,1,0.9953,Detected
+TBZ,DQ333-TB333-TH333.csv,bundle,333.0,1,0.0756,ND
+TBZ,DQ50-TB0-TH150.csv,bundle,0.0,0,0.0637,ND
+TBZ,DQ50-TB0-TH250.csv,bundle,0.0,0,0.1921,ND
+TBZ,DQ50-TB0-TH500.csv,bundle,0.0,0,0.191,ND
+TBZ,DQ50-TB150-TH0.csv,bundle,150.0,1,0.9999,Detected
+TBZ,DQ50-TB250-TH0.csv,bundle,250.0,1,0.9999,Detected
+TBZ,DQ50-TB500-TH0.csv,bundle,500.0,1,0.9997,Detected
+TBZ,DQ500-TB0-TH50.csv,bundle,0.0,0,0.8775,Detected
+TBZ,DQ500-TB0-TH500.csv,bundle,0.0,0,0.0874,ND
+TBZ,DQ500-TB50-TH0.csv,bundle,50.0,1,0.9999,Detected
+TBZ,DQ500-TB500-TH0.csv,bundle,500.0,1,0.9942,Detected
+TBZ,DQ6-TB12-TH12.csv,bundle,12.0,1,0.7877,Indeterminate
+TBZ,DQ6-TB12-TH24.csv,bundle,12.0,1,0.7257,Indeterminate
+TBZ,DQ6-TB12-TH3.csv,bundle,12.0,1,0.9913,Detected
+TBZ,DQ6-TB12-TH6.csv,bundle,12.0,1,0.9834,Detected
+TBZ,DQ6-TB24-TH12.csv,bundle,24.0,1,0.9972,Detected
+TBZ,DQ6-TB24-TH24.csv,bundle,24.0,1,0.9787,Detected
+TBZ,DQ6-TB24-TH3.csv,bundle,24.0,1,0.9984,Detected
+TBZ,DQ6-TB24-TH6.csv,bundle,24.0,1,0.9952,Detected
+TBZ,DQ6-TB3-TH12.csv,bundle,3.0,1,0.4957,Indeterminate
+TBZ,DQ6-TB3-TH24.csv,bundle,3.0,1,0.3417,Indeterminate
+TBZ,DQ6-TB3-TH3.csv,bundle,3.0,1,0.8276,Detected
+TBZ,DQ6-TB3-TH6.csv,bundle,3.0,1,0.7975,Indeterminate
+TBZ,DQ6-TB6-TH12.csv,bundle,6.0,1,0.869,Detected
+TBZ,DQ6-TB6-TH24.csv,bundle,6.0,1,0.2935,Indeterminate
+TBZ,DQ6-TB6-TH3.csv,bundle,6.0,1,0.991,Detected
+TBZ,DQ6-TB6-TH6.csv,bundle,6.0,1,0.8846,Detected
+TBZ,DQ144-1_corrected.csv,calib,0.0,0,0.1249,ND
+TBZ,DQ144-2_corrected.csv,calib,0.0,0,0.1453,ND
+TBZ,DQ18-1_corrected.csv,calib,0.0,0,0.0595,ND
+TBZ,DQ18-2_corrected.csv,calib,0.0,0,0.0262,ND
+TBZ,DQ36-1_corrected.csv,calib,0.0,0,0.0472,ND
+TBZ,DQ36-2_corrected.csv,calib,0.0,0,0.1224,ND
+TBZ,DQ72-1_corrected.csv,calib,0.0,0,0.051,ND
+TBZ,DQ72-2_corrected.csv,calib,0.0,0,0.0945,ND
+TBZ,DQ9-1_corrected.csv,calib,0.0,0,0.2484,Indeterminate
+TBZ,DQ9-2_corrected.csv,calib,0.0,0,0.2079,Indeterminate
+TBZ,TBZ144-1_corrected.csv,calib,144.0,1,0.9994,Detected
+TBZ,TBZ144-2_corrected.csv,calib,144.0,1,0.9995,Detected
+TBZ,TBZ18-1_corrected.csv,calib,18.0,1,0.9987,Detected
+TBZ,TBZ18-2_corrected.csv,calib,18.0,1,0.9991,Detected
+TBZ,TBZ36-1_corrected.csv,calib,36.0,1,0.9991,Detected
+TBZ,TBZ36-2_corrected.csv,calib,36.0,1,0.9988,Detected
+TBZ,TBZ72-1_corrected.csv,calib,72.0,1,0.9999,Detected
+TBZ,TBZ72-2_corrected.csv,calib,72.0,1,0.9999,Detected
+TBZ,TBZ9-1_corrected.csv,calib,9.0,1,0.9996,Detected
+TBZ,TBZ9-2_corrected.csv,calib,9.0,1,0.9994,Detected
+TBZ,THI-144uM_785_80_1000ms_5 points_1_corrected.csv,calib,0.0,0,0.1099,ND
+TBZ,THI-144uM_785_80_1000ms_5 points_2_corrected.csv,calib,0.0,0,0.1296,ND
+TBZ,THI-144uM_785_80_1000ms_5 points_3_corrected.csv,calib,0.0,0,0.1589,ND
+TBZ,THI-18uM_785_80_1000ms_5 points_1_corrected.csv,calib,0.0,0,0.157,ND
+TBZ,THI-18uM_785_80_1000ms_5 points_2_corrected.csv,calib,0.0,0,0.0313,ND
+TBZ,THI-18uM_785_80_1000ms_5 points_3_corrected.csv,calib,0.0,0,0.2036,Indeterminate
+TBZ,THI-36uM_785_80_1000ms_5 points_1_corrected.csv,calib,0.0,0,0.1378,ND
+TBZ,THI-36uM_785_80_1000ms_5 points_2_corrected.csv,calib,0.0,0,0.0887,ND
+TBZ,THI-36uM_785_80_1000ms_5 points_3_corrected.csv,calib,0.0,0,0.0953,ND
+TBZ,THI-72uM_785_80_1000ms_5 points_1_corrected.csv,calib,0.0,0,0.1234,ND
+TBZ,THI-72uM_785_80_1000ms_5 points_2_corrected.csv,calib,0.0,0,0.1534,ND
+TBZ,THI-72uM_785_80_1000ms_5 points_3_corrected.csv,calib,0.0,0,0.1592,ND
+TBZ,THI-9uM_785_80_1000ms_5 points_1_corrected.csv,calib,0.0,0,0.1445,ND
+TBZ,THI-9uM_785_80_1000ms_5 points_2_corrected.csv,calib,0.0,0,0.0632,ND
+TBZ,THI-9uM_785_80_1000ms_5 points_3_corrected.csv,calib,0.0,0,0.057,ND
+DQ,DQ0-TB150-TH50.csv,bundle,0.0,0,0.9938,Detected
+DQ,DQ0-TB250-TH50.csv,bundle,0.0,0,0.9114,Detected
+DQ,DQ0-TB50-TH150.csv,bundle,0.0,0,0.9204,Detected
+DQ,DQ0-TB50-TH250.csv,bundle,0.0,0,0.1891,ND
+DQ,DQ0-TB50-TH500.csv,bundle,0.0,0,0.1293,ND
+DQ,DQ0-TB500-TH50.csv,bundle,0.0,0,0.4503,Indeterminate
+DQ,DQ0-TB500-TH500.csv,bundle,0.0,0,0.8024,Detected
+DQ,DQ12-TB12-TH12.csv,bundle,12.0,1,0.7733,Indeterminate
+DQ,DQ12-TB12-TH24.csv,bundle,12.0,1,0.7175,Indeterminate
+DQ,DQ12-TB12-TH3.csv,bundle,12.0,1,0.9202,Detected
+DQ,DQ12-TB12-TH6.csv,bundle,12.0,1,0.9864,Detected
+DQ,DQ12-TB24-TH12.csv,bundle,12.0,1,0.595,Indeterminate
+DQ,DQ12-TB24-TH24.csv,bundle,12.0,1,0.9782,Detected
+DQ,DQ12-TB24-TH3.csv,bundle,12.0,1,0.5369,Indeterminate
+DQ,DQ12-TB24-TH6.csv,bundle,12.0,1,0.4523,Indeterminate
+DQ,DQ12-TB3-TH12.csv,bundle,12.0,1,0.8952,Detected
+DQ,DQ12-TB3-TH24.csv,bundle,12.0,1,0.6874,Indeterminate
+DQ,DQ12-TB3-TH3.csv,bundle,12.0,1,0.9897,Detected
+DQ,DQ12-TB3-TH6.csv,bundle,12.0,1,0.9971,Detected
+DQ,DQ12-TB6-TH12.csv,bundle,12.0,1,0.9846,Detected
+DQ,DQ12-TB6-TH24.csv,bundle,12.0,1,0.8759,Detected
+DQ,DQ12-TB6-TH3.csv,bundle,12.0,1,0.901,Detected
+DQ,DQ12-TB6-TH6.csv,bundle,12.0,1,0.9494,Detected
+DQ,DQ150-TB0-TH50.csv,bundle,150.0,1,0.9766,Detected
+DQ,DQ150-TB50-TH0.csv,bundle,150.0,1,1.0,Detected
+DQ,DQ24-TB12-TH12.csv,bundle,24.0,1,0.9447,Detected
+DQ,DQ24-TB12-TH24.csv,bundle,24.0,1,0.9586,Detected
+DQ,DQ24-TB12-TH3.csv,bundle,24.0,1,0.9957,Detected
+DQ,DQ24-TB12-TH6.csv,bundle,24.0,1,0.9995,Detected
+DQ,DQ24-TB24-TH12.csv,bundle,24.0,1,0.9706,Detected
+DQ,DQ24-TB24-TH24.csv,bundle,24.0,1,0.778,Indeterminate
+DQ,DQ24-TB24-TH3.csv,bundle,24.0,1,0.7179,Indeterminate
+DQ,DQ24-TB24-TH6.csv,bundle,24.0,1,0.9236,Detected
+DQ,DQ24-TB3-TH12.csv,bundle,24.0,1,0.6574,Indeterminate
+DQ,DQ24-TB3-TH24.csv,bundle,24.0,1,0.7469,Indeterminate
+DQ,DQ24-TB3-TH3.csv,bundle,24.0,1,0.9997,Detected
+DQ,DQ24-TB3-TH6.csv,bundle,24.0,1,0.9919,Detected
+DQ,DQ24-TB6-TH12.csv,bundle,24.0,1,0.9985,Detected
+DQ,DQ24-TB6-TH24.csv,bundle,24.0,1,0.8391,Detected
+DQ,DQ24-TB6-TH3.csv,bundle,24.0,1,0.9996,Detected
+DQ,DQ24-TB6-TH6.csv,bundle,24.0,1,0.9886,Detected
+DQ,DQ250-TB0-TH50.csv,bundle,250.0,1,0.3717,Indeterminate
+DQ,DQ250-TB50-TH0.csv,bundle,250.0,1,0.6245,Indeterminate
+DQ,DQ3-TB12-TH12.csv,bundle,3.0,1,0.8574,Detected
+DQ,DQ3-TB12-TH24.csv,bundle,3.0,1,0.7113,Indeterminate
+DQ,DQ3-TB12-TH3.csv,bundle,3.0,1,0.9351,Detected
+DQ,DQ3-TB12-TH6.csv,bundle,3.0,1,0.9602,Detected
+DQ,DQ3-TB24-TH12.csv,bundle,3.0,1,0.6314,Indeterminate
+DQ,DQ3-TB24-TH24.csv,bundle,3.0,1,0.5672,Indeterminate
+DQ,DQ3-TB24-TH3.csv,bundle,3.0,1,0.8137,Detected
+DQ,DQ3-TB24-TH6.csv,bundle,3.0,1,0.6899,Indeterminate
+DQ,DQ3-TB3-TH12.csv,bundle,3.0,1,0.7363,Indeterminate
+DQ,DQ3-TB3-TH24.csv,bundle,3.0,1,0.2645,Indeterminate
+DQ,DQ3-TB3-TH3.csv,bundle,3.0,1,0.9949,Detected
+DQ,DQ3-TB3-TH6.csv,bundle,3.0,1,0.943,Detected
+DQ,DQ3-TB6-TH12.csv,bundle,3.0,1,0.8688,Detected
+DQ,DQ3-TB6-TH24.csv,bundle,3.0,1,0.6963,Indeterminate
+DQ,DQ3-TB6-TH3.csv,bundle,3.0,1,0.6684,Indeterminate
+DQ,DQ3-TB6-TH6.csv,bundle,3.0,1,0.982,Detected
+DQ,DQ33-TB333-TH333.csv,bundle,33.0,1,0.1902,ND
+DQ,DQ333-TB33-TH333.csv,bundle,333.0,1,0.2943,Indeterminate
+DQ,DQ333-TB333-TH33.csv,bundle,333.0,1,0.9971,Detected
+DQ,DQ333-TB333-TH333.csv,bundle,333.0,1,0.2259,Indeterminate
+DQ,DQ50-TB0-TH150.csv,bundle,50.0,1,0.1212,ND
+DQ,DQ50-TB0-TH250.csv,bundle,50.0,1,0.1269,ND
+DQ,DQ50-TB0-TH500.csv,bundle,50.0,1,0.2038,Indeterminate
+DQ,DQ50-TB150-TH0.csv,bundle,50.0,1,0.9476,Detected
+DQ,DQ50-TB250-TH0.csv,bundle,50.0,1,0.4384,Indeterminate
+DQ,DQ50-TB500-TH0.csv,bundle,50.0,1,0.1843,ND
+DQ,DQ500-TB0-TH50.csv,bundle,500.0,1,0.9991,Detected
+DQ,DQ500-TB0-TH500.csv,bundle,500.0,1,0.1995,ND
+DQ,DQ500-TB50-TH0.csv,bundle,500.0,1,0.7868,Indeterminate
+DQ,DQ500-TB500-TH0.csv,bundle,500.0,1,0.9998,Detected
+DQ,DQ6-TB12-TH12.csv,bundle,6.0,1,0.8374,Detected
+DQ,DQ6-TB12-TH24.csv,bundle,6.0,1,0.3713,Indeterminate
+DQ,DQ6-TB12-TH3.csv,bundle,6.0,1,0.8403,Detected
+DQ,DQ6-TB12-TH6.csv,bundle,6.0,1,0.9836,Detected
+DQ,DQ6-TB24-TH12.csv,bundle,6.0,1,0.6571,Indeterminate
+DQ,DQ6-TB24-TH24.csv,bundle,6.0,1,0.9778,Detected
+DQ,DQ6-TB24-TH3.csv,bundle,6.0,1,0.635,Indeterminate
+DQ,DQ6-TB24-TH6.csv,bundle,6.0,1,0.9416,Detected
+DQ,DQ6-TB3-TH12.csv,bundle,6.0,1,0.8437,Detected
+DQ,DQ6-TB3-TH24.csv,bundle,6.0,1,0.6661,Indeterminate
+DQ,DQ6-TB3-TH3.csv,bundle,6.0,1,0.9736,Detected
+DQ,DQ6-TB3-TH6.csv,bundle,6.0,1,0.9885,Detected
+DQ,DQ6-TB6-TH12.csv,bundle,6.0,1,0.7565,Indeterminate
+DQ,DQ6-TB6-TH24.csv,bundle,6.0,1,0.554,Indeterminate
+DQ,DQ6-TB6-TH3.csv,bundle,6.0,1,0.957,Detected
+DQ,DQ6-TB6-TH6.csv,bundle,6.0,1,0.9469,Detected
+DQ,DQ144-1_corrected.csv,calib,144.0,1,1.0,Detected
+DQ,DQ144-2_corrected.csv,calib,144.0,1,1.0,Detected
+DQ,DQ18-1_corrected.csv,calib,18.0,1,1.0,Detected
+DQ,DQ18-2_corrected.csv,calib,18.0,1,1.0,Detected
+DQ,DQ36-1_corrected.csv,calib,36.0,1,1.0,Detected
+DQ,DQ36-2_corrected.csv,calib,36.0,1,1.0,Detected
+DQ,DQ72-1_corrected.csv,calib,72.0,1,1.0,Detected
+DQ,DQ72-2_corrected.csv,calib,72.0,1,1.0,Detected
+DQ,DQ9-1_corrected.csv,calib,9.0,1,1.0,Detected
+DQ,DQ9-2_corrected.csv,calib,9.0,1,1.0,Detected
+DQ,TBZ144-1_corrected.csv,calib,0.0,0,0.1751,ND
+DQ,TBZ144-2_corrected.csv,calib,0.0,0,0.1751,ND
+DQ,TBZ18-1_corrected.csv,calib,0.0,0,0.1008,ND
+DQ,TBZ18-2_corrected.csv,calib,0.0,0,0.1097,ND
+DQ,TBZ36-1_corrected.csv,calib,0.0,0,0.0623,ND
+DQ,TBZ36-2_corrected.csv,calib,0.0,0,0.0499,ND
+DQ,TBZ72-1_corrected.csv,calib,0.0,0,0.1637,ND
+DQ,TBZ72-2_corrected.csv,calib,0.0,0,0.1626,ND
+DQ,TBZ9-1_corrected.csv,calib,0.0,0,0.2106,Indeterminate
+DQ,TBZ9-2_corrected.csv,calib,0.0,0,0.1977,ND
+DQ,THI-144uM_785_80_1000ms_5 points_1_corrected.csv,calib,0.0,0,0.2543,Indeterminate
+DQ,THI-144uM_785_80_1000ms_5 points_2_corrected.csv,calib,0.0,0,0.3039,Indeterminate
+DQ,THI-144uM_785_80_1000ms_5 points_3_corrected.csv,calib,0.0,0,0.2768,Indeterminate
+DQ,THI-18uM_785_80_1000ms_5 points_1_corrected.csv,calib,0.0,0,0.0991,ND
+DQ,THI-18uM_785_80_1000ms_5 points_2_corrected.csv,calib,0.0,0,0.0824,ND
+DQ,THI-18uM_785_80_1000ms_5 points_3_corrected.csv,calib,0.0,0,0.1197,ND
+DQ,THI-36uM_785_80_1000ms_5 points_1_corrected.csv,calib,0.0,0,0.1236,ND
+DQ,THI-36uM_785_80_1000ms_5 points_2_corrected.csv,calib,0.0,0,0.0529,ND
+DQ,THI-36uM_785_80_1000ms_5 points_3_corrected.csv,calib,0.0,0,0.0422,ND
+DQ,THI-72uM_785_80_1000ms_5 points_1_corrected.csv,calib,0.0,0,0.1168,ND
+DQ,THI-72uM_785_80_1000ms_5 points_2_corrected.csv,calib,0.0,0,0.1906,ND
+DQ,THI-72uM_785_80_1000ms_5 points_3_corrected.csv,calib,0.0,0,0.1191,ND
+DQ,THI-9uM_785_80_1000ms_5 points_1_corrected.csv,calib,0.0,0,0.105,ND
+DQ,THI-9uM_785_80_1000ms_5 points_2_corrected.csv,calib,0.0,0,0.0839,ND
+DQ,THI-9uM_785_80_1000ms_5 points_3_corrected.csv,calib,0.0,0,0.08,ND
