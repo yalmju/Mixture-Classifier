@@ -15,6 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from matplotlib.colors import Normalize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RES = os.path.join(os.path.dirname(HERE), "results")
@@ -59,13 +60,16 @@ def draw(method, ax):
         ax.plot(*zip(xy(f, 1 - f, 0), xy(0, 1 - f, f)), color=GRID, lw=0.6, zorder=1)
         ax.plot(*zip(xy(f, 0, 1 - f), xy(0, f, 1 - f)), color=GRID, lw=0.6, zorder=1)
     ax.plot(tri[:, 0], tri[:, 1], color=INK, lw=1.6, zorder=2)
-    cmap = cm.get_cmap("RdYlGn")
+    cmap = matplotlib.colormaps["RdYlGn"]
+    norm = Normalize(vmin=0.4, vmax=1.0, clip=True)   # 관측범위 스트레치 — 0-1 전체론 전부 황록으로 뭉개진다
     for q in pairs:
-        ax.plot([q["t"][0], q["p"][0]], [q["t"][1], q["p"][1]],
-                color=MUTE, lw=0.9, alpha=0.75, zorder=3)
+        ax.annotate("", xy=q["p"], xytext=q["t"], zorder=3,
+                    arrowprops=dict(arrowstyle="-|>", color=MUTE, lw=1.0,
+                                    alpha=0.8, shrinkA=4, shrinkB=5,
+                                    mutation_scale=9))
     for q in pairs:
         ax.scatter(*q["t"], s=46, facecolor="white", edgecolor=MUTE, linewidth=1.1, zorder=4)
-        ax.scatter(*q["p"], s=52, facecolor=cmap(q["acc"]), edgecolor="white",
+        ax.scatter(*q["p"], s=64, facecolor=cmap(norm(q["acc"])), edgecolor="white",
                    linewidth=0.6, zorder=5)
     ax.set_xlim(-0.05, 1.05); ax.set_ylim(-0.05, TOP[1] + 0.05)
     ax.set_aspect("equal"); ax.axis("off")
