@@ -1368,6 +1368,10 @@ def apply_model(model, wn, cube):
         if per_px is not None and len(per_px):
             med = np.median(np.asarray(per_px, float), axis=0)
             out["uM"] = {usubs[k]: float(med[k]) for k in range(len(usubs))}
+            frac, nd = surface_detection(model, wn, cube)
+            if nd is not None:
+                out["surface_frac"] = frac
+                out["uM_nd"] = nd
     return out
 
 
@@ -1919,6 +1923,43 @@ def apply_model_pixels(model, wn, spectra):
     return np.vstack(out)
 
 
+# Not-detected flag for the µM display layer. A component whose NNLS surface
+# fraction falls below this has no surface support: its µM readout is reported
+# but must be shown as ND/<LOD, never trusted as quantitation. Held-out check
+# on mlp_composition_260826 (115 maps, 2026-08-28): 0.04 catches 27/27 truly
+# absent components (DQ/TBZ/THI 9/9 each); the 22/262 present components it
+# flags are the known surface-suppression cases (THI≥50 µM saturation, TBZ/DQ
+# displacement) whose held-out µM error is 2.4× median vs 1.6× unflagged —
+# see documentation/UM_ND_FLAG_2026-08-28.md. The MLP composition head cannot
+# do this job (absent DQ reads up to 17% comp on high-conc binaries).
+UM_ND_FRAC = 0.04
+
+
+def surface_detection(model, wn, spectra, max_px=400):
+    """NNLS surface fraction per substance (mean over subsampled pixels) plus a
+    not-detected flag. Display layer ONLY — nothing gates or rewrites the µM
+    values, so cached evaluations and present-only benchmarks are untouched.
+    Returns (frac_dict, nd_dict), or (None, None) when the model has no NNLS
+    template matrix."""
+    from dl_quantify import surface_composition
+    if model.get("P") is None:
+        return None, None
+    wn = np.asarray(wn, float)
+    mask = (wn >= model["lo"]) & (wn <= model["hi"])
+    X = np.atleast_2d(np.asarray(spectra, float))
+    if X.shape[1] == len(wn):
+        X = X[:, mask]
+    X = np.clip(X, 0, None)
+    if len(X) > max_px:                       # deterministic stride subsample
+        X = X[:: int(np.ceil(len(X) / max_px))]
+    R = surface_composition(_composition_features(X, "legacy_l2"), model["P"])
+    frac = np.asarray(R, float).mean(axis=0)
+    subs = list(model["subs"])[:len(frac)]     # P columns exclude the blank class
+    thr = float(model.get("uM_nd_frac", UM_ND_FRAC))
+    return ({s: float(frac[j]) for j, s in enumerate(subs)},
+            {s: bool(frac[j] < thr) for j, s in enumerate(subs)})
+
+
 def apply_uM_pixels(model, wn, spectra, return_meta=False):
     """Per-pixel absolute concentration from the model's µM head: (n_px, n_conc) in µM,
     plus the substance names that head covers. The head is trained on log10 µM labels,
@@ -2042,6 +2083,7 @@ def apply_recovery(model, items, progress=None):
             progress(f"applying model — {k + 1}/{len(items)}")
         path, ratio = it[0], it[1]
         conc = it[2] if len(it) > 2 else None
+        det_wn = det_px = None            # full-map pixels for the ND flag, if loaded
         key = os.path.normcase(os.path.normpath(path))
         if key in held:                                  # held-out composition from training
             comp = {sn: float(held[key][all_subs.index(sn)]) for sn in subs}
@@ -2052,14 +2094,22 @@ def apply_recovery(model, items, progress=None):
                 vals = held_uM[key]
                 unames = (model.get("uM") or {}).get("subs", subs)
                 res["uM"] = {sn: float(vals[j]) for j, sn in enumerate(unames)}
-            elif model.get("nnls_screen") and model.get("uM") and key not in train_held:
-                wn, hit_cube, smeta = nnls_hit_spectra(
-                    model.get("data_dir") or os.path.dirname(path), path,
-                    baseline=model.get("baseline", True), trim=model.get("trim"),
-                    min_frac=model.get("screen_min_frac", 0.15), progress=None)
-                um, unames = apply_uM_pixels(model, wn, hit_cube)
-                if um is not None:
-                    med = np.median(np.asarray(um, float), axis=0)
+            elif model.get("uM") and key not in train_held:
+                # Test-role map (held composition but never trained on, and no cached
+                # µM LOO row): the deployed µM head is still honestly held-out here,
+                # so score it with the same pixel path an unseen map would take.
+                if model.get("nnls_screen"):
+                    wn, px, _smeta = nnls_hit_spectra(
+                        model.get("data_dir") or os.path.dirname(path), path,
+                        baseline=model.get("baseline", True), trim=model.get("trim"),
+                        min_frac=model.get("screen_min_frac", 0.15), progress=None)
+                else:
+                    wn, px, _m2, _c2 = load_map(path)
+                    det_wn, det_px = wn, px
+                um, unames = apply_uM_pixels(model, wn, px)
+                if um is not None and len(um):
+                    um = np.asarray(um, float)
+                    med = np.median(um, axis=0)
                     res["uM"] = {sn: float(med[j]) for j, sn in enumerate(unames)}
                     res["uM_p10"] = {sn: float(np.percentile(um[:, j], 10))
                                        for j, sn in enumerate(unames)}
@@ -2084,7 +2134,17 @@ def apply_recovery(model, items, progress=None):
                                    for j, sn in enumerate(unames)}
         else:
             wn, cube, _m, _c = load_map(path)
+            det_wn, det_px = wn, cube
             res = apply_model(model, wn, cube); comp = res["composition"]
+        nd_frac = nd = None
+        if res.get("uM"):
+            # ND flag for the display layer: NNLS surface support per component.
+            # Full-map recipe regardless of branch — the held-out validation ran
+            # on unscreened maps, and cached-µM maps never loaded pixels above.
+            if det_px is None:
+                wn_d, det_px, _md, _cd = load_map(path)
+                det_wn = wn_d
+            nd_frac, nd = surface_detection(model, det_wn, det_px)
         s = sum(float(ratio.get(sn, 0)) for sn in subs)
         nom = np.zeros(len(subs)); mn = np.zeros(len(subs))
         for sn in subs:
@@ -2097,6 +2157,10 @@ def apply_recovery(model, items, progress=None):
             row["uM_pred"] = {sn: res["uM"][sn] for sn in subs}
             row["uM_p10"] = res.get("uM_p10")
             row["uM_p90"] = res.get("uM_p90")
+            if nd is not None:
+                row["uM_nd"] = {sn: bool(nd.get(sn, False)) for sn in subs}
+                row["surface_frac"] = {sn: float(nd_frac.get(sn, float("nan")))
+                                       for sn in subs}
             if conc:
                 dilution = (max(1, sum(float(conc.get(sn, 0)) > 0 for sn in subs))
                             if model.get("equal_volume_mix", False) else 1)

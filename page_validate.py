@@ -696,6 +696,11 @@ class ValidatePage(QWidget):
                 txt += ("<br><b style='color:%s'>approx. concentration (DL, semi-quantitative)</b>: "
                         "median within ~%.1f× of true, %.0f%% within order-of-magnitude "
                         "— screening level (not precise µM)." % (BLUE, fac, 100 * wo))
+            nd_n = sum(1 for r in dres for f in (r.get("uM_nd") or {}).values() if f)
+            if nd_n:
+                txt += ("<br><span style='color:%s'>⚠ %d component readout(s) flagged "
+                        "ND — no NNLS surface support; report as &lt;LOD, not as µM "
+                        "(value kept in the CSV for the record).</span>" % (FAINT, nd_n))
         self.readout.setText(txt)
 
     @staticmethod
@@ -977,16 +982,18 @@ class ValidatePage(QWidget):
             for r in self._cres:
                 true_u = r.get("uM_true") or {}
                 pred_u = r.get("uM_pred") or {}
+                nd_u = r.get("uM_nd") or {}
                 for s, tv in true_u.items():
                     pv = pred_u.get(s)
                     if tv and pv is not None and tv > 0 and pv > 0:
                         ae = abs(float(np.log10(pv / tv)))
                         detail.append([r.get("name", ""), s, f"{tv:.6g}",
-                                       f"{pv:.6g}", f"{ae:.6f}"])
+                                       f"{pv:.6g}", f"{ae:.6f}",
+                                       "ND" if nd_u.get(s) else ""])
             if detail:
                 write_csv(os.path.join(d, "concentration_log_errors.csv"),
                           ["map", "substance", "true_uM", "pred_uM",
-                           "abs_log10_error"], detail)
+                           "abs_log10_error", "surface_nd"], detail)
                 summary = []
                 for s in subs:
                     e = np.array([float(row[4]) for row in detail if row[1] == s])
