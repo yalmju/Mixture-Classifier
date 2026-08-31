@@ -706,6 +706,12 @@ class ValidatePage(QWidget):
                         "reported as composition 0 · &lt;LOD (raw values kept in the "
                         "export) · %d indeterminate (p 0.2–0.8, unconfirmed)</span>"
                         % (FAINT, nd_n, ind_n))
+        if dres:
+            snd_n = sum(1 for r in dres for f in (r.get("surface_nd") or {}).values() if f)
+            if snd_n:
+                txt += ("<br><span style='color:%s'>⚠ %d readout(s) lack NNLS surface "
+                        "support (frac &lt; 4%%) — report those µM as &lt;LOD "
+                        "(values kept in the export).</span>" % (FAINT, snd_n))
         self.readout.setText(txt)
 
     @staticmethod
@@ -987,16 +993,18 @@ class ValidatePage(QWidget):
             for r in self._cres:
                 true_u = r.get("uM_true") or {}
                 pred_u = r.get("uM_pred") or {}
+                nd_u = r.get("surface_nd") or {}
                 for s, tv in true_u.items():
                     pv = pred_u.get(s)
                     if tv and pv is not None and tv > 0 and pv > 0:
                         ae = abs(float(np.log10(pv / tv)))
                         detail.append([r.get("name", ""), s, f"{tv:.6g}",
-                                       f"{pv:.6g}", f"{ae:.6f}"])
+                                       f"{pv:.6g}", f"{ae:.6f}",
+                                       "ND" if nd_u.get(s) else ""])
             if detail:
                 write_csv(os.path.join(d, "concentration_log_errors.csv"),
                           ["map", "substance", "true_uM", "pred_uM",
-                           "abs_log10_error"], detail)
+                           "abs_log10_error", "surface_nd"], detail)
                 summary = []
                 for s in subs:
                     e = np.array([float(row[4]) for row in detail if row[1] == s])
@@ -1013,15 +1021,20 @@ class ValidatePage(QWidget):
             for r in self._cres:
                 for s, p in (r.get("presence") or {}).items():
                     nd = (r.get("uM_nd") or {}).get(s, False)
+                    snd = (r.get("surface_nd") or {}).get(s, False)
+                    sf = (r.get("surface_frac") or {}).get(s, "")
                     raw_u = (r.get("uM_raw") or r.get("uM_pred") or {}).get(s, "")
                     pres_rows.append([r.get("name", ""), s,
                                       f"{p.get('prob', float('nan')):.4f}",
                                       p.get("state", ""), "1" if nd else "0",
+                                      "1" if snd else "0",
+                                      f"{sf:.4f}" if sf != "" else "",
                                       f"{raw_u:.6g}" if raw_u != "" else ""])
             if pres_rows:
                 write_csv(os.path.join(d, "presence_states.csv"),
                           ["map", "substance", "presence_prob", "state",
-                           "uM_gated_ND", "uM_raw"], pres_rows)
+                           "uM_gated_ND", "surface_nd", "surface_frac",
+                           "uM_raw"], pres_rows)
         figs = [("validate_parity", self.c_parity),
                 ("validate_corrected", self.c_corr),
                 ("validate_response", self.c_resp)]
