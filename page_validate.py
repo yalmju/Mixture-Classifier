@@ -696,6 +696,16 @@ class ValidatePage(QWidget):
                 txt += ("<br><b style='color:%s'>approx. concentration (DL, semi-quantitative)</b>: "
                         "median within ~%.1f× of true, %.0f%% within order-of-magnitude "
                         "— screening level (not precise µM)." % (BLUE, fac, 100 * wo))
+        if dres and any(r.get("presence") for r in dres):
+            nd_n = sum(1 for r in dres for p in (r.get("presence") or {}).values()
+                       if p.get("state") == "ND")
+            ind_n = sum(1 for r in dres for p in (r.get("presence") or {}).values()
+                        if p.get("state") == "Indeterminate")
+            if nd_n or ind_n:
+                txt += ("<br><span style='color:%s'>presence gate: %d readout(s) ND — "
+                        "reported as composition 0 · &lt;LOD (raw values kept in the "
+                        "export) · %d indeterminate (p 0.2–0.8, unconfirmed)</span>"
+                        % (FAINT, nd_n, ind_n))
         self.readout.setText(txt)
 
     @staticmethod
@@ -999,6 +1009,19 @@ class ValidatePage(QWidget):
                           ["substance", "n_maps", "median_abs_log10_error",
                            "rmse_log10", "fraction_within_2x",
                            "fraction_within_10x"], summary)
+            pres_rows = []
+            for r in self._cres:
+                for s, p in (r.get("presence") or {}).items():
+                    nd = (r.get("uM_nd") or {}).get(s, False)
+                    raw_u = (r.get("uM_raw") or r.get("uM_pred") or {}).get(s, "")
+                    pres_rows.append([r.get("name", ""), s,
+                                      f"{p.get('prob', float('nan')):.4f}",
+                                      p.get("state", ""), "1" if nd else "0",
+                                      f"{raw_u:.6g}" if raw_u != "" else ""])
+            if pres_rows:
+                write_csv(os.path.join(d, "presence_states.csv"),
+                          ["map", "substance", "presence_prob", "state",
+                           "uM_gated_ND", "uM_raw"], pres_rows)
         figs = [("validate_parity", self.c_parity),
                 ("validate_corrected", self.c_corr),
                 ("validate_response", self.c_resp)]
@@ -1123,6 +1146,8 @@ class ValidatePage(QWidget):
                 "(→ validate_parity, validate_corrected).",
                 "- `composition_view.csv` — true & measured composition, per-substance recovery %, and "
                 "drift per mixture (→ drift_triangle, relative_drift, recovery).",
+                "- `presence_states.csv` — per-substance presence gate (prob · Detected/Indeterminate/ND); "
+                "ND readouts are reported as composition 0 · <LOD, raw µM kept in the uM_raw column.",
                 "Each PNG is a rendering of one of these tables — re-plot from the CSV in any tool."],
         }
         figures = [(fn, fig_docs[fn]) for fn in fig_names if fn in fig_docs]
