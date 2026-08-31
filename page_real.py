@@ -1562,7 +1562,12 @@ class RealDataPage(QWidget):
         Aall = np.asarray(getattr(r, "A_evidence", r.A), float)
         nb_idx = list(r.nonbg)
         nbcols = self._nb_colors(r)
-        Anb = Aall[:, nb_idx]
+        # dlpx 기본 표시: stage-1 NNLS 증거 대신 모델 조성(분석물 간 재정규화)을
+        # 그린다. raw 확률은 BLK 몫이 희석해 채널이 흐려진다(260812 SERS 글씨맵
+        # 사건) — ratio_nb 는 hit 픽셀에서 항상 분석물 합=1 이라 글자가 살아난다.
+        model_view = (getattr(r, "method", "") == "dlpx"
+                      and getattr(r, "ratio_nb", None) is not None)
+        Anb = (np.asarray(r.ratio_nb, float) if model_view else Aall[:, nb_idx])
         hit = self._hit(r)
         # Values remain available in the export for every measured pixel, but an
         # analyte prediction has no meaning after the gate called that pixel
@@ -1572,8 +1577,8 @@ class RealDataPage(QWidget):
         mscale = float(np.quantile(_mass, 0.99)) if _mass.size else 1.0
         mscale = mscale or 1.0
 
-        panels = [("merged", None, None)]
-        panels.extend((r.comps[k], np.where(hit, Aall[:, k], np.nan), nbcols[i])
+        panels = [("merged" + (" · model comp" if model_view else ""), None, None)]
+        panels.extend((r.comps[k], np.where(hit, Anb[:, i], np.nan), nbcols[i])
                       for i, k in enumerate(nb_idx))
         bg_idx = np.flatnonzero(np.asarray(r.bg_mask, bool))
         if bg_idx.size:
@@ -1590,6 +1595,10 @@ class RealDataPage(QWidget):
         vlo = manual[0] if manual is not None else 0.0
         if manual is not None:
             vshared = manual[1]
+        elif model_view:
+            # 조성 0-1 에서 등몰 글씨(~0.33)가 절반 이상의 채도로 오도록 — 29c 렌더와
+            # 같은 관례. manual scale 이 있으면 그쪽이 이긴다.
+            vshared = 0.6
 
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)

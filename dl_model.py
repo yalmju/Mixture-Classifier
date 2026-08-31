@@ -2115,6 +2115,11 @@ def apply_recovery(model, items, progress=None):
     uev = (model.get("uM") or {}).get("loo_eval") or {}
     for pth, pred in zip(uev.get("paths", []), uev.get("pred_uM", [])):
         held_uM[os.path.normcase(os.path.normpath(pth))] = pred
+    # 학습맵의 파일명 집합 — 경로가 달라 held 캐시를 놓친 "학습맵 사본"을 잡는다.
+    # 2026-08-24 워크북 사건: 사본 폴더/다른 머신에서 로드하면 캐시 미스 → 전체
+    # 모델이 자기 학습맵을 다시 채점(in-sample, recovery ~100%)하는데 아무 표시가
+    # 없었다. 값은 그대로 두되 in_sample_risk 플래그로 표면화한다.
+    held_base = {os.path.basename(p) for p in held}
     out = []
     for k, it in enumerate(items):
         if progress:
@@ -2185,6 +2190,13 @@ def apply_recovery(model, items, progress=None):
                 wn_d, det_px, _md, _cd = load_map(path)
                 det_wn = wn_d
             nd_frac, nd = surface_detection(model, det_wn, det_px)
+        # 보고 조성은 분석물 간 재정규화 — held/스크린/전체모델 어느 갈래든 raw
+        # softmax 에는 BLK 몫이 섞여 있어(저농도 맵 held 캐시는 BLK ~90%까지),
+        # 그대로 표시하면 조성이 1/10 스케일로 보인다. 벤치마크 추출(16/17)과
+        # 같은 규약으로 맞춘다. µM 경로는 내부에서 이미 재정규화하므로 불변.
+        _tot = sum(float(comp.get(sn, 0.0)) for sn in subs)
+        if _tot > 0:
+            comp = {sn: float(comp.get(sn, 0.0)) / _tot for sn in subs}
         s = sum(float(ratio.get(sn, 0)) for sn in subs)
         nom = np.zeros(len(subs)); mn = np.zeros(len(subs))
         for sn in subs:
@@ -2193,6 +2205,8 @@ def apply_recovery(model, items, progress=None):
             mn[o] = comp.get(sn, 0.0)
         row = {"name": os.path.basename(path).replace("_corrected", "").replace(".csv", ""),
                "nominal": nom, "mean": mn}
+        if key not in held and os.path.basename(key) in held_base:
+            row["in_sample_risk"] = True
         if res.get("presence"):
             row["presence"] = res["presence"]
         if res.get("uM_nd"):
