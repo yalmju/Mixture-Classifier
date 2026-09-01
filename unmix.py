@@ -516,6 +516,7 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     # "raw µM은 외삽" 경고를 띄울 근거로 결과에 실어 보낸다.
     try:
         res.conc_batch_mismatch = bool(um_meta.get("batch_mismatch"))
+        res.conc_feature_z = um_meta.get("feature_z")
     except Exception:
         pass
     return res

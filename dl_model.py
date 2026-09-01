@@ -752,6 +752,7 @@ def _apply_calibration_residual(model, wn, spectra, return_meta, hit=None):
             "component_ood": component_ood, "ranges_M": rngs_out,
             "map_uM": {s_: float(c_map[j]) for j, s_ in enumerate(usubs)},
             "feature_zmax": float(np.abs(_z).max()),
+            "feature_z": _z.tolist(),
             "batch_mismatch": bool(np.abs(_z).max() > 3.0)}
     return (*result, meta)
 
@@ -2262,6 +2263,16 @@ def load_model(path):
                 model["_presence_head"] = _json.load(fh)
     except Exception:
         model.pop("_presence_head", None)
+    # k-NN 라이브러리 사이드카(<dlm이름>.knn.json): 학습 맵들의 피처 z + 실측 µM.
+    # µM 판독의 조회(라이브러리) 모드가 이걸 쓴다 — 없으면 그 모드만 비활성.
+    try:
+        side = os.path.splitext(str(path))[0] + ".knn.json"
+        if os.path.exists(side):
+            import json as _json
+            with open(side, encoding="utf-8") as fh:
+                model["_knn_library"] = _json.load(fh)
+    except Exception:
+        model.pop("_knn_library", None)
     return model
 
 

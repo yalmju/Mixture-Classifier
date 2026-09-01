@@ -424,6 +424,21 @@ class RealDataPage(QWidget):
         vrow.addSpacing(10)
         vrow.addWidget(self.anchor_b); vrow.addWidget(self.anchor_lbl)
         vrow.addWidget(self.anchor_x)
+        # µM 판독 경로 선택: model head(정확도 우선) vs library k-NN(측정값 조회 —
+        # 반환이 학습 맵 실측치의 내분점이라 외삽 불가). 무응답 규칙은 공통.
+        _rl = QLabel("   µM readout"); _rl.setObjectName("field")
+        self.cmb_umroute = QComboBox()
+        self.cmb_umroute.addItem("model head", "model")
+        self.cmb_umroute.addItem("library k-NN", "knn")
+        self.cmb_umroute.setToolTip(
+            "model head: residual-net estimate (validated 7.5 µM RMSE in-window).\n"
+            "library k-NN: distance-weighted lookup of the 3 nearest TRAINING maps' "
+            "measured concentrations (LOO 21.8 µM RMSE, but every value is an "
+            "interpolation of measured maps — no extrapolation possible).\n"
+            "Both refuse to answer when the map is outside the library (distance > 3).")
+        self.cmb_umroute.currentIndexChanged.connect(
+            lambda _=0: self._plot_conc(self._res) if self._res is not None else None)
+        vrow.addWidget(_rl); vrow.addWidget(self.cmb_umroute)
         # the reportable window is NOT typed here — the model file carries it
         # (validated_ranges_M: levels recovered within 2-fold on a held-out split),
         # and the summary shows which window it used
@@ -1706,6 +1721,33 @@ class RealDataPage(QWidget):
             self._click_axes.append(ax)
         self.c_abund.draw_idle()
 
+    KNN_MAX_DIST = 3.0        # 이 z-거리 밖이면 라이브러리에 닮은 맵이 없다 — 무응답
+
+    def _knn_lookup(self, r):
+        """학습 맵 라이브러리(k=3, 거리가중) 조회. 반환: dict(dmin, uM, names) 또는
+        None(라이브러리/피처 없음). 자기 자신(파일명 일치)은 제외해 LOO 의미 유지."""
+        lib = (self.dl_model.get("_knn_library")
+               if isinstance(self.dl_model, dict) else None)
+        z = getattr(r, "conc_feature_z", None)
+        if not lib or z is None:
+            return None
+        z = np.asarray(z, float)
+        base = os.path.basename(self.test or "")
+        rows = [e for e in lib if not e.get("imb100")]
+        if len(rows) < 3:
+            return None
+        Z = np.array([e["z"] for e in rows], float)
+        Y = np.array([e["y"] for e in rows], float)
+        d = np.linalg.norm(Z - z[None, :], axis=1)
+        for j, e in enumerate(rows):
+            if e["name"] == base:
+                d[j] = np.inf
+        idx = np.argsort(d)[:3]
+        w = 1.0 / np.maximum(d[idx], 1e-9); w = w / w.sum()
+        return {"dmin": float(d[idx][0]),
+                "uM": (Y[idx] * w[:, None]).sum(0),
+                "names": [rows[j]["name"] for j in idx]}
+
     def _apparent_medians(self, r):
         """Median RAW apparent µM per non-background substance, mirroring the
         distribution panel's filtering (hit px, finite, positive, OOD/above-range
@@ -1811,6 +1853,23 @@ class RealDataPage(QWidget):
                 _hs = hit & (_T > 0) if hit.any() else (_T > 0)
                 if _hs.any():
                     est_total = float(np.median(_T[_hs]))
+        # ── 판독 경로: model head vs library k-NN — 무응답 규칙은 공통 ──
+        route = (self.cmb_umroute.currentData()
+                 if hasattr(self, "cmb_umroute") else "model")
+        knn = self._knn_lookup(r)
+        out_of_lib = (knn["dmin"] > self.KNN_MAX_DIST) if knn is not None \
+            else bool(getattr(r, "conc_batch_mismatch", False))
+        knn_used = False
+        if route == "knn" and knn is not None and not out_of_lib:
+            # k-NN 모드의 값 = 이웃 학습 맵 실측 농도의 내분점. 픽셀 패턴은 그대로
+            # 두고 성분별 중앙값만 조회값에 맞춘다.
+            for i in range(len(nb)):
+                v = um_all[hit, i] if hit.any() else um_all[:, i]
+                fin = np.isfinite(v) & (v > 0)
+                mmed = float(np.median(v[fin])) if fin.any() else 0.0
+                if mmed > 0 and np.isfinite(knn["uM"][i]):
+                    um_all[:, i] = um_all[:, i] * (float(knn["uM"][i]) / mmed)
+            knn_used = True
         anch = getattr(self, "_anchor", None)
         anchored = anch is not None and anch.get("subs") == nb
         afac = (np.asarray(anch["factor"], float) if anchored else None)
@@ -1978,7 +2037,12 @@ class RealDataPage(QWidget):
             # 줄과 제목이 뜻을 설명한다).
             mm = bool(getattr(r, "conc_batch_mismatch", False))
             _flag = " ⚠" if (mm or over_major or sat) else ""
-            if not ok[i]:
+            if out_of_lib:
+                # 라이브러리에 닮은 맵이 없다 — 농도는 무응답이다. 숫자 없음.
+                raw_line = "no answer — outside library"
+            elif knn_used:
+                raw_line = f"library {knn['uM'][i]:.1f} µM"
+            elif not ok[i]:
                 raw_line = "no signal"
             elif hi_um is not None and np.isfinite(hi_um[i]) and med[i] > hi_um[i]:
                 # 검증 천장 캡: 상한 위는 어떤 값도 주장하지 않는다 — 보고는
@@ -2001,9 +2065,9 @@ class RealDataPage(QWidget):
             # A reading outside the validated window / batch is a WARNING —
             # coloured so nobody quotes the number. The reported (declared-total)
             # line stays ink-black above it.
-            _warn = "#b3421a" if (over_major or sat or mm) else MUTE
-            _mcol = INK if has_kt else ("#b3421a" if (over_major or sat or mm)
-                                        else INK)
+            _bad = out_of_lib or over_major or sat or mm
+            _warn = "#b3421a" if _bad else MUTE
+            _mcol = INK if has_kt else ("#b3421a" if _bad else INK)
             axb.annotate(main, (float(xs[i]), 0.995),
                          xycoords=("data", "axes fraction"),
                          ha="center", va="top", fontsize=7.2, color=_mcol)
@@ -2016,11 +2080,13 @@ class RealDataPage(QWidget):
         xt = ([f"{nm}\ntruth {tv[i]:g}" for i, nm in enumerate(nb)]
               if tv is not None else nb)
         axb.set_xticklabels(xt, fontsize=7)
-        if getattr(r, "conc_batch_mismatch", False):
+        if out_of_lib:
+            _dtxt = (f"nearest training map at distance {knn['dmin']:.1f} "
+                     f"(limit {self.KNN_MAX_DIST:g})" if knn is not None
+                     else "intensity scale does not match the calibration batch")
             axb.text(0.5, 0.015,
-                     "⚠ this map's intensity scale does not match the calibration "
-                     "batch — raw µM is extrapolated; use a batch anchor or a "
-                     "declared total",
+                     f"⚠ outside the training library — {_dtxt}; concentration "
+                     "not answered. Use a batch anchor or a declared total.",
                      transform=axb.transAxes, ha="center", va="bottom",
                      fontsize=7.5, color=RED, zorder=6)
         # 두 경로의 차이는 총량 스칼라 하나다 — 그걸 제목이 직접 보여준다.
@@ -2031,8 +2097,10 @@ class RealDataPage(QWidget):
         _dtot = self._known_total_uM()
         if _dtot:
             _tparts.append(f"declared total {_dtot:g} µM")
+        _rt = ("library k-NN" if route == "knn" else "model head") \
+            + (f" · nearest d={knn['dmin']:.1f}" if knn is not None else "")
         axb.set_title((" · ".join(_tparts) + "  —  " if _tparts else "")
-                      + "per-pixel µM · black – median"
+                      + f"readout: {_rt} · per-pixel µM · black – median"
                       + (" · orange – anchored" if anchored else "")
                       + (" · red – truth" if tv is not None else "")
                       + (" · blue – declared-total" if kt is not None else ""),
