@@ -1,0 +1,4 @@
+﻿method,THI_recovery_median_pct,THI_IQR_low,THI_IQR_high,TBZ_recovery_median_pct,TBZ_IQR_low,TBZ_IQR_high,DQ_recovery_median_pct,DQ_IQR_low,DQ_IQR_high,n_conditions
+NNLS,109.6,91.1,145.5,112.8,81.5,145.2,71.5,47.3,115.8,85
+PLS-R,98.1,78.8,150.5,106.7,78.0,147.8,96.9,75.3,128.1,85
+MLP,103.2,86.3,140.7,100.6,72.9,133.9,91.1,68.7,114.6,85
