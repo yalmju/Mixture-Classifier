@@ -430,6 +430,7 @@ class RealDataPage(QWidget):
         self.cmb_umroute = QComboBox()
         self.cmb_umroute.addItem("model head", "model")
         self.cmb_umroute.addItem("library k-NN", "knn")
+        self.cmb_umroute.addItem("pixel k-NN", "pxknn")
         self.cmb_umroute.setToolTip(
             "model head: residual-net estimate (validated 7.5 µM RMSE in-window).\n"
             "library k-NN: distance-weighted lookup of the 3 nearest TRAINING maps' "
@@ -1748,6 +1749,37 @@ class RealDataPage(QWidget):
                 "uM": (Y[idx] * w[:, None]).sum(0),
                 "names": [rows[j]["name"] for j in idx]}
 
+    def _pxknn_lookup(self, r):
+        """픽셀 하나 = 액적 하나: hit 픽셀 각각을 학습 맵 픽셀 라이브러리에서 조회.
+        반환: (P (n_hit,3) µM, d_med) 또는 None. 자기 파일명 조건 픽셀은 제외."""
+        lib = (self.dl_model.get("_pxknn")
+               if isinstance(self.dl_model, dict) else None)
+        if not lib or getattr(r, "ratio_nb", None) is None:
+            return None
+        from dl_model import _band_signal
+        u = self.dl_model.get("uM") or {}
+        bands = np.asarray(u.get("bands_cm", ()), float)
+        if bands.size != 3:
+            return None
+        hitm = r.hit if r.hit.any() else np.ones(r.n_pixels, bool)
+        wn = np.asarray(r.wn, float)
+        X = np.clip(np.asarray(r.spectra, float), 0, None)[hitm]
+        sig = np.log1p(np.clip(_band_signal(X, wn, bands), 0, None))
+        tot = np.log1p(X.sum(1))[:, None]
+        Rq = np.clip(np.asarray(r.ratio_nb, float), 0, None)[hitm]
+        F = (np.hstack([sig, tot, Rq]) - lib["mu"]) / lib["sd"]
+        Fz = np.asarray(lib["Fz"], float); Y = np.asarray(lib["Y"], float)
+        cond = np.asarray(lib["cond"]).astype(str)
+        excl = cond == os.path.basename(self.test or "")
+        Zl = Fz[~excl]; Yl = Y[~excl]
+        P = np.zeros((len(F), 3)); dmin = np.zeros(len(F))
+        for i, q in enumerate(F):
+            d = np.linalg.norm(Zl - q[None, :], axis=1)
+            idx = np.argpartition(d, 5)[:5]
+            w = 1.0 / np.maximum(d[idx], 1e-9); w = w / w.sum()
+            P[i] = (Yl[idx] * w[:, None]).sum(0); dmin[i] = d[idx].min()
+        return {"P": P, "hit": hitm, "d_med": float(np.median(dmin))}
+
     def _apparent_medians(self, r):
         """Median RAW apparent µM per non-background substance, mirroring the
         distribution panel's filtering (hit px, finite, positive, OOD/above-range
@@ -1860,6 +1892,18 @@ class RealDataPage(QWidget):
         out_of_lib = (knn["dmin"] > self.KNN_MAX_DIST) if knn is not None \
             else bool(getattr(r, "conc_batch_mismatch", False))
         knn_used = False
+        px_used = False
+        if route == "pxknn":
+            _px = self._pxknn_lookup(r)
+            if _px is not None:
+                out_of_lib = _px["d_med"] > self.KNN_MAX_DIST
+                if not out_of_lib:
+                    # 픽셀 값 자체가 조회 결과: hit 픽셀만 채우고 나머지는 0
+                    um_all = np.zeros_like(um_all)
+                    um_all[_px["hit"]] = _px["P"]
+                    px_used = True
+                knn = knn or {"dmin": _px["d_med"]}
+                knn["dmin"] = _px["d_med"]
         if route == "knn" and knn is not None and not out_of_lib:
             # k-NN 모드의 값 = 이웃 학습 맵 실측 농도의 내분점. 픽셀 패턴은 그대로
             # 두고 성분별 중앙값만 조회값에 맞춘다.
@@ -2040,6 +2084,8 @@ class RealDataPage(QWidget):
             if out_of_lib:
                 # 라이브러리에 닮은 맵이 없다 — 농도는 무응답이다. 숫자 없음.
                 raw_line = "no answer — outside library"
+            elif px_used:
+                raw_line = f"pixel-library {med[i]:.1f} µM"
             elif knn_used:
                 raw_line = f"library {knn['uM'][i]:.1f} µM"
             elif not ok[i]:
@@ -2097,7 +2143,7 @@ class RealDataPage(QWidget):
         _dtot = self._known_total_uM()
         if _dtot:
             _tparts.append(f"declared total {_dtot:g} µM")
-        _rt = ("library k-NN" if route == "knn" else "model head") \
+        _rt = ({"knn": "library k-NN", "pxknn": "pixel k-NN"}.get(route, "model head")) \
             + (f" · nearest d={knn['dmin']:.1f}" if knn is not None else "")
         axb.set_title((" · ".join(_tparts) + "  —  " if _tparts else "")
                       + f"readout: {_rt} · per-pixel µM · black – median"

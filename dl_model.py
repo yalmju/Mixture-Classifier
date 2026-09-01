@@ -2273,6 +2273,16 @@ def load_model(path):
                 model["_knn_library"] = _json.load(fh)
     except Exception:
         model.pop("_knn_library", None)
+    # 픽셀 k-NN 사이드카(<dlm이름>.pxknn.npz): 학습 맵 픽셀 2,136개의 서명
+    # (밴드 3 + 총강도 + 픽셀 조성 3, z-정규화)과 맵 실측 µM. "픽셀 하나 =
+    # 액적 하나" 판독 모드가 쓴다.
+    try:
+        side = os.path.splitext(str(path))[0] + ".pxknn.npz"
+        if os.path.exists(side):
+            _d = np.load(side, allow_pickle=False)
+            model["_pxknn"] = {k: _d[k] for k in ("Fz", "Y", "cond", "mu", "sd")}
+    except Exception:
+        model.pop("_pxknn", None)
     return model
 
 
