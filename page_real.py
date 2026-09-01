@@ -1976,6 +1976,10 @@ class RealDataPage(QWidget):
             _flag = " ⚠" if (mm or over_major or sat) else ""
             if not ok[i]:
                 raw_line = "no signal"
+            elif hi_um is not None and np.isfinite(hi_um[i]) and med[i] > hi_um[i]:
+                # 검증 천장 캡: 상한 위는 어떤 값도 주장하지 않는다 — 보고는
+                # "최소 천장"까지다.
+                raw_line = f"signal ≥{hi_um[i]:g} µM{_flag}"
             else:
                 raw_line = f"signal {med[i]:.1f} µM{_flag}"
             sub_lines = []
