@@ -1828,7 +1828,9 @@ class RealDataPage(QWidget):
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
         # ---- pixel distribution: show the measurements, not only one median bar ----
-        dist_start = min(len(nb), map_slots - 1)
+        # +1 leaves an empty spacer column so the graph's y-axis label never sits
+        # on top of the last spatial map.
+        dist_start = min(len(nb) + 1, map_slots - 1)
         axb = self.c_conc.style(
             self.c_conc.fig.add_subplot(gs[:, dist_start:map_slots]))
         med = np.full(len(nb), np.nan); q1 = med.copy(); q3 = med.copy()
@@ -1910,27 +1912,36 @@ class RealDataPage(QWidget):
         _ytop = axb.get_ylim()[1] * 1.18
         axb.set_ylim(0, _ytop)
         for i in np.where(ok)[0]:
-            # Plain-language labels, one fact per line, always leading with the
-            # number the user reports.
-            lab = f"median {med[i]:.1f} µM"
-            if lo_um is not None and np.isfinite(med[i]) and med[i] < lo_um[i]:
-                lab = f"below range (< {lo_um[i]:g} µM)"
-            if hi_um is not None and np.isfinite(hi_um[i]) \
-                    and np.isfinite(med[i]) and med[i] >= 0.8 * hi_um[i]:
-                # A saturating response (THI ≥ ~25 µM) pins the inversion at its
-                # ceiling, so the honest apparent reading is a lower bound.
-                lab = f"at least {med[i]:.0f} µM (signal saturated)"
-            if kt is not None:
-                lab += f"\nwith declared total: {kt[i]:.1f} µM"
-            if amed is not None and np.isfinite(amed[i]):
-                lab += (f"\nanchored: {amed[i]:.1f} µM" if afac[i] != 1.0
-                        else "\nanchor n/a (saturated)")
-            if vol > 0:                                    # µM × µL = pmol
-                lab += f"\n≈{med[i] * vol:.0f} pmol"
+            # One reported number per substance. With a declared total, the
+            # known-total value IS the report; the signal-only reading becomes a
+            # secondary diagnostic line. A signal beyond the validated window
+            # (grid64, ≤24 µM — competition breaks above ~50) is never shown as
+            # a bare number.
             n_above = total_n[i] - valid_n[i]
-            if n_above:
-                # Plain language: OOD is implementation jargon and looked like
-                # "weak/no signal", while it usually means the opposite here.
+            over_major = bad_frac[i] > 0.5
+            sat = (hi_um is not None and np.isfinite(hi_um[i])
+                   and np.isfinite(med[i]) and med[i] >= 0.8 * hi_um[i])
+            if over_major:
+                raw_line = (f"above validated range (> {hi_um[i]:g} µM · "
+                            f"{n_above} of {total_n[i]} px)")
+            elif sat:
+                raw_line = f"at least {med[i]:.0f} µM (signal saturated)"
+            elif lo_um is not None and np.isfinite(med[i]) and med[i] < lo_um[i]:
+                raw_line = f"below range (< {lo_um[i]:g} µM)"
+            else:
+                raw_line = f"median {med[i]:.1f} µM"
+            if kt is not None:
+                lab = f"reported {kt[i]:.1f} µM (declared total)"
+                lab += "\nsignal-only: " + raw_line
+            else:
+                lab = raw_line
+            if amed is not None and np.isfinite(amed[i]) and not (over_major or sat):
+                lab += (f"\nanchored: {amed[i]:.1f} µM" if afac[i] != 1.0
+                        else "")
+            if vol > 0:                                    # µM × µL = pmol
+                _v = kt[i] if kt is not None else med[i]
+                lab += f"\n≈{_v * vol:.0f} pmol"
+            if n_above and not over_major:
                 lab += f"\n{n_above} of {total_n[i]} px over range, dropped"
             if np.isfinite(q3[i]) and q3[i] > 0.72 * _ytop:   # label below, not into title
                 axb.annotate(lab, (xs[i], q1[i]), xytext=(0, -5),
