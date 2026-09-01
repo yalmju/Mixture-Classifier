@@ -707,6 +707,13 @@ class ValidatePage(QWidget):
                         "export) · %d indeterminate (p 0.2–0.8, unconfirmed)</span>"
                         % (FAINT, nd_n, ind_n))
         if dres:
+            risk_n = sum(1 for r in dres if r.get("in_sample_risk"))
+            if risk_n:
+                txt += ("<br><b style='color:%s'>⚠ %d map(s) share a TRAINING map's "
+                        "filename but missed the held-out cache (copied folder / other "
+                        "machine?) — these numbers may be IN-SAMPLE. Load them from the "
+                        "original training folder to get held-out values.</b>"
+                        % ("#b3421a", risk_n))
             snd_n = sum(1 for r in dres for f in (r.get("surface_nd") or {}).values() if f)
             if snd_n:
                 txt += ("<br><span style='color:%s'>⚠ %d readout(s) lack NNLS surface "
