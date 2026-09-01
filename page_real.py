@@ -1985,6 +1985,13 @@ class RealDataPage(QWidget):
         xt = ([f"{nm}\ntruth {tv[i]:g}" for i, nm in enumerate(nb)]
               if tv is not None else nb)
         axb.set_xticklabels(xt, fontsize=7)
+        if getattr(r, "conc_batch_mismatch", False):
+            axb.text(0.5, 0.015,
+                     "⚠ this map's intensity scale does not match the calibration "
+                     "batch — raw µM is extrapolated; use a batch anchor or a "
+                     "declared total",
+                     transform=axb.transAxes, ha="center", va="bottom",
+                     fontsize=7.5, color=RED, zorder=6)
         axb.set_title("Each dot = one pixel's apparent µM · black – median"
                       + (" · orange – anchored" if anchored else "")
                       + (" · red – truth" if tv is not None else "")

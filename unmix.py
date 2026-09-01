@@ -499,7 +499,7 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         conc_ci_high = np.nanpercentile(boot, 97.5, axis=0)
         conc_se = np.nanstd(boot, axis=0, ddof=1)
 
-    return UnmixResult(
+    res = UnmixResult(
         comps=names, bg_mask=bg_mask, nonbg=nonbg, method=method, wn=wn,
         coords=coord, spectra=spectra.astype(np.float32), templates=templates,
         A=A, A_evidence=A_ls, ratio_nb=ratio_nb, hit=hit, reliab=reliab, n_pixels=len(X),
@@ -511,6 +511,13 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         pp_theta=pp_theta, calib_r2=calib_r2,
         calib_slope=calib_slope, conc_ood=conc_ood, conc_ranges=conc_ranges,
         sat_frac=sat_frac, bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
+    # µM 헤드의 배치 불일치 판정(밴드 신호가 검량 곡선의 신호창 밖) — 표시층이
+    # "raw µM은 외삽" 경고를 띄울 근거로 결과에 실어 보낸다.
+    try:
+        res.conc_batch_mismatch = bool(um_meta.get("batch_mismatch"))
+    except Exception:
+        pass
+    return res
 
 
 def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,

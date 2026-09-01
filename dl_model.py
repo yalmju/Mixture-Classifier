@@ -733,9 +733,18 @@ def _apply_calibration_residual(model, wn, spectra, return_meta):
     for k in range(min(len(usubs), len(r_um))):
         if np.isfinite(r_um[k][1]) and r_um[k][1] > 0:
             component_ood[:, k] = um[:, k] > r_um[k][1]
+    # 배치/분포 불일치 감지: residual 넷 입력 피처를 저장된 표준화(mu/sd)로
+    # z-점수화한다. 검량 배치의 held-out 맵은 험지(고농도·binary)조차 max|z|≤2.6,
+    # 다른 세션 맵(260812 글씨맵, 세기 7~14배 차이)은 3.9 — 문턱 3.0. 값은 바꾸지
+    # 않고 플래그만 든다: 화면이 "raw µM은 외삽, 앵커/총량 필요"를 말할 근거.
+    _mu = np.asarray(u["mu"], float)
+    _sd = np.where(np.asarray(u["sd"], float) > 0, np.asarray(u["sd"], float), 1.0)
+    _z = (np.asarray(F[0], float) - _mu) / _sd
     meta = {"feature_ood": np.zeros(len(um), bool),
             "component_ood": component_ood, "ranges_M": rngs_out,
-            "map_uM": {s_: float(c_map[j]) for j, s_ in enumerate(usubs)}}
+            "map_uM": {s_: float(c_map[j]) for j, s_ in enumerate(usubs)},
+            "feature_zmax": float(np.abs(_z).max()),
+            "batch_mismatch": bool(np.abs(_z).max() > 3.0)}
     return (*result, meta)
 
 
