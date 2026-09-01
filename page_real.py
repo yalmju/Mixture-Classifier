@@ -395,6 +395,28 @@ class RealDataPage(QWidget):
         self.vol_spin.valueChanged.connect(
             lambda _=0: self._plot_conc(self._res) if self._res is not None else None)
         vrow.addWidget(_vl); vrow.addWidget(self.vol_spin)
+        # One-point batch recalibration: sessions measured far from the calibration
+        # batch shift the whole intensity axis (the 260812 cross-batch smoke: ×8 on
+        # absolute µM while composition held). Anchoring on ONE map with known truth
+        # rescales apparent µM per substance for the rest of the session — standard
+        # one-point recalibration, honestly labelled on the panel.
+        self._anchor = None
+        self.anchor_b = QPushButton("Set batch anchor"); self.anchor_b.setObjectName("ghost")
+        self.anchor_b.setToolTip(
+            "Use the CURRENT unmixed map as the session's batch anchor: enter its "
+            "true µM (a,b,c) first, then click. Per-substance factors = truth / "
+            "median apparent µM are applied to apparent µM on every following map. "
+            "A substance sitting at its validated ceiling (saturated, e.g. THI at "
+            "high µM) is skipped — its factor stays 1. Clear with ✕.")
+        self.anchor_b.clicked.connect(self._set_anchor)
+        self.anchor_lbl = QLabel(""); self.anchor_lbl.setObjectName("field")
+        self.anchor_x = QPushButton("✕"); self.anchor_x.setObjectName("ghost")
+        self._compact_x(self.anchor_x, "clear batch anchor")
+        self.anchor_x.setVisible(False)
+        self.anchor_x.clicked.connect(self._clear_anchor)
+        vrow.addSpacing(10)
+        vrow.addWidget(self.anchor_b); vrow.addWidget(self.anchor_lbl)
+        vrow.addWidget(self.anchor_x)
         # the reportable window is NOT typed here — the model file carries it
         # (validated_ranges_M: levels recovered within 2-fold on a held-out split),
         # and the summary shows which window it used
@@ -1673,6 +1695,73 @@ class RealDataPage(QWidget):
             self._click_axes.append(ax)
         self.c_abund.draw_idle()
 
+    def _apparent_medians(self, r):
+        """Median RAW apparent µM per non-background substance, mirroring the
+        distribution panel's filtering (hit px, finite, positive, OOD/above-range
+        dropped). Returns (names, medians, at_ceiling) — ceiling = median ≥ 80 % of
+        the validated hi bound, where a saturating response pins the inversion."""
+        nb = [r.comps[i] for i in r.nonbg]
+        um_all = r.conc * 1e6
+        hit = self._hit(r)
+        ood = getattr(r, "conc_ood", None)
+        rngs = getattr(r, "conc_ranges", None)
+        hi_um = None
+        if rngs is not None:
+            _h = np.asarray(rngs, float)[:, 1] * 1e6
+            hi_um = np.where(np.isfinite(_h), _h, np.inf)
+        med = np.full(len(nb), np.nan)
+        at_ceiling = np.zeros(len(nb), bool)
+        for i in range(len(nb)):
+            sel = hit if hit.any() else np.ones(r.n_pixels, bool)
+            v = um_all[sel, i]
+            fin = np.isfinite(v) & (v > 0)
+            bad = np.zeros(len(v), bool)
+            if ood is not None:
+                bad |= np.asarray(ood, bool)[sel, i]
+            if hi_um is not None and np.isfinite(hi_um[i]):
+                bad |= fin & (v > hi_um[i])
+            vv = v[fin & ~bad]
+            if vv.size:
+                med[i] = float(np.median(vv))
+                if hi_um is not None and np.isfinite(hi_um[i]) \
+                        and med[i] >= 0.8 * hi_um[i]:
+                    at_ceiling[i] = True
+        return nb, med, at_ceiling
+
+    def _set_anchor(self):
+        """Adopt the CURRENT map as the session's one-point batch recalibration."""
+        r = self._res
+        if r is None or not getattr(r, "calibrated", False) or r.conc is None:
+            self.status.setText("unmix a map with a µM model first, then set the anchor")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        nb, med, ceil = self._apparent_medians(r)
+        txt = self.true_edit.text().strip()
+        try:
+            parts = [float(t) for t in txt.replace(" ", "").split(",")] if txt else []
+        except ValueError:
+            parts = []
+        if len(parts) != len(nb) or any(p <= 0 for p in parts):
+            self.status.setText("batch anchor needs this map's true µM (a,b,c) typed first")
+            self.status.setStyleSheet(f"color:{RED};"); return
+        factor = np.ones(len(nb)); tags = []
+        for i, nm in enumerate(nb):
+            if np.isfinite(med[i]) and med[i] > 0 and not ceil[i]:
+                factor[i] = parts[i] / med[i]
+                tags.append(f"{nm} ×{factor[i]:.2f}")
+            else:                       # saturated/empty — no honest factor exists
+                tags.append(f"{nm} skipped")
+        self._anchor = {"file": os.path.basename(self.test or "?"),
+                        "subs": list(nb), "factor": factor}
+        self.anchor_lbl.setText("anchor: " + " · ".join(tags))
+        self.anchor_x.setVisible(True)
+        self._plot_conc(r)
+
+    def _clear_anchor(self):
+        self._anchor = None
+        self.anchor_lbl.setText(""); self.anchor_x.setVisible(False)
+        if self._res is not None:
+            self._plot_conc(self._res)
+
     def _plot_conc(self, r):
         """Per-substance apparent SERS-equivalent concentration (µM) heat-maps — only when a
         dilution-series calibration has been applied."""
@@ -1692,6 +1781,12 @@ class RealDataPage(QWidget):
         hit = self._hit(r)                                 # exclude saturated/low-R² px
         # SHARED µM colour axis across substances, so the maps are directly comparable
         um_all = r.conc * 1e6
+        # session batch anchor (one-point recalibration) — display-layer, clearly labelled
+        anch = getattr(self, "_anchor", None)
+        anchored = False
+        if anch is not None and anch.get("subs") == nb:
+            um_all = um_all * np.asarray(anch["factor"], float)[None, :]
+            anchored = True
         # the model's own out-of-range judgment: per-pixel OOD flags plus the stored
         # reportable range. A weak binder (DQ) has a nearly flat response, so its
         # inversion EXPLODES on spurious signal — thousands of µM on a 3–500 µM
@@ -1852,6 +1947,7 @@ class RealDataPage(QWidget):
               if tv is not None else nb)
         axb.set_xticklabels(xt, fontsize=7)
         axb.set_title(f"Pixel µM distribution · maps share 0–{vmax:.1f} µM"
+                      + (f" · batch-anchored ({anch['file']})" if anchored else "")
                       + (" · red = filename truth" if tv is not None else "")
                       + (" · blue = known-total (comp × total, constrained)"
                          if kt is not None else ""),
