@@ -452,6 +452,7 @@ class RealDataPage(QWidget):
         self.c_abund.mpl_connect("button_press_event", self._on_click)
         self.c_pie.mpl_connect("button_press_event", self._on_click)
         self.c_conc.mpl_connect("button_press_event", self._on_click)
+        self._autoload_default_model()
 
 
     # ---- small builders ----
@@ -1005,6 +1006,31 @@ class RealDataPage(QWidget):
                              + self._blank_tag() + self._um_tag())
         self.dlm_lbl.setStyleSheet(""); self._sync_controls()
         self._refresh_calib_label()          # the model may carry its own calibration
+
+    # Real is the day-to-day tab; it must stand alone. The deployed FINAL bundle is
+    # adopted at startup so an operator can open the app, load a map, and Unmix —
+    # no trip through Model/Recovery first. $UNMIXR_DLM overrides the location.
+    DEFAULT_DLM = os.path.join(r"S:\Google Drive\내 드라이브\ACF_PEST_DB",
+                               "260831_Model_FINAL", "mlp_composition_260831_final.dlm")
+
+    def _autoload_default_model(self):
+        path = os.environ.get("UNMIXR_DLM") or self.DEFAULT_DLM
+        if self.dl_model is not None or not os.path.exists(path):
+            return
+        try:
+            from dl_model import load_model
+            self.dl_model = load_model(path)
+        except Exception as e:
+            print("default DL model load:", e, file=sys.stderr)
+            return
+        self._activate_dl_method()
+        self.dlm_lbl.setText("DL: " + os.path.basename(path) + self._blank_tag()
+                             + self._um_tag())
+        self.dlm_lbl.setStyleSheet("")
+        self._sync_controls()
+        self._refresh_calib_label()
+        self.status.setText("deployed model ready — load a test map and Unmix")
+        self.status.setStyleSheet(f"color:{MUTE};")
 
     def _browse_dl(self):
         p, _ = QFileDialog.getOpenFileName(self, "DL model (.dlm from Recovery)", "",

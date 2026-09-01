@@ -121,7 +121,9 @@ class MainWindow(QMainWindow):
         for page in self.pages.values():          # type numbers instead of clicking arrows
             type_in_spinboxes(page)
 
-        self.select("samples")
+        # Day-to-day use is map analysis; open there. The other tabs are for
+        # (re)training campaigns and stay one click away.
+        self.select("real")
 
     def select(self, key):
         self._refresh_build_status()
@@ -131,7 +133,12 @@ class MainWindow(QMainWindow):
         folder = getattr(self.pages["samples"], "data_dir", None)
         page = self.pages[key]
         if folder and hasattr(page, "set_data_dir"):
-            page.set_data_dir(folder)
+            # A page's adoption hook must never block navigation: an exception here
+            # used to leave the previous tab on screen with no visible cause.
+            try:
+                page.set_data_dir(folder)
+            except Exception as exc:
+                print(f"set_data_dir({key}):", exc, file=sys.stderr)
         if folder != self._color_folder:                  # refresh swatches on new data
             self._color_folder = folder
             self._refresh_colors()
