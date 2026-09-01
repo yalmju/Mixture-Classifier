@@ -1007,6 +1007,10 @@ class RealDataPage(QWidget):
             self.true_edit.setToolTip(
                 "auto-read from the test-map filename in panel order: "
                 + ", ".join(f"{name}={amounts[name]:g} µM" for name in subs))
+            # The declared total follows for free — no re-typing what the
+            # filename already states.
+            if hasattr(self, "total_edit"):
+                self.total_edit.setText(f"{sum(amounts[n] for n in subs):g}")
         else:
             self.true_edit.clear()
 
@@ -1911,12 +1915,22 @@ class RealDataPage(QWidget):
         axb.set_ylim(bottom=0)
         _ytop = axb.get_ylim()[1] * 1.18
         axb.set_ylim(0, _ytop)
-        for i in np.where(ok)[0]:
+        for i in range(len(nb)):
             # One reported number per substance. With a declared total, the
-            # known-total value IS the report; the signal-only reading becomes a
-            # secondary diagnostic line. A signal beyond the validated window
-            # (grid64, ≤24 µM — competition breaks above ~50) is never shown as
-            # a bare number.
+            # composition-based reconstruction IS the report — that is the whole
+            # point of the trained composition — and it never depends on whether
+            # the signal-only inversion stayed in range. The signal reading is a
+            # diagnostic line, and beyond the validated window (grid64, ≤24 µM —
+            # competition breaks above ~50) it is never shown as a bare number.
+            has_kt = kt is not None and np.isfinite(kt[i])
+            if not ok[i] and not has_kt:
+                if bad_frac[i] > 0:
+                    axb.annotate("no readable concentration —\n"
+                                 + f"all {total_n[i]} px over the calibrated range",
+                                 (xs[i], 0), xytext=(0, 8),
+                                 textcoords="offset points",
+                                 ha="center", fontsize=8, color=RED)
+                continue
             n_above = total_n[i] - valid_n[i]
             over_major = bad_frac[i] > 0.5
             sat = (hi_um is not None and np.isfinite(hi_um[i])
@@ -1924,40 +1938,37 @@ class RealDataPage(QWidget):
             if over_major:
                 raw_line = (f"above validated range (> {hi_um[i]:g} µM · "
                             f"{n_above} of {total_n[i]} px)")
+            elif not ok[i]:
+                raw_line = "no usable signal"
             elif sat:
                 raw_line = f"at least {med[i]:.0f} µM (signal saturated)"
             elif lo_um is not None and np.isfinite(med[i]) and med[i] < lo_um[i]:
                 raw_line = f"below range (< {lo_um[i]:g} µM)"
             else:
                 raw_line = f"median {med[i]:.1f} µM"
-            if kt is not None:
+            if has_kt:
                 lab = f"reported {kt[i]:.1f} µM (declared total)"
                 lab += "\nsignal-only: " + raw_line
             else:
                 lab = raw_line
-            if amed is not None and np.isfinite(amed[i]) and not (over_major or sat):
-                lab += (f"\nanchored: {amed[i]:.1f} µM" if afac[i] != 1.0
-                        else "")
+            if amed is not None and np.isfinite(amed[i]) \
+                    and not (over_major or sat) and afac[i] != 1.0:
+                lab += f"\nanchored: {amed[i]:.1f} µM"
             if vol > 0:                                    # µM × µL = pmol
-                _v = kt[i] if kt is not None else med[i]
+                _v = kt[i] if has_kt else med[i]
                 lab += f"\n≈{_v * vol:.0f} pmol"
             if n_above and not over_major:
                 lab += f"\n{n_above} of {total_n[i]} px over range, dropped"
-            if np.isfinite(q3[i]) and q3[i] > 0.72 * _ytop:   # label below, not into title
-                axb.annotate(lab, (xs[i], q1[i]), xytext=(0, -5),
+            ypos = q3[i] if np.isfinite(q3[i]) else (kt[i] if has_kt else 0.0)
+            ylow = q1[i] if np.isfinite(q1[i]) else ypos
+            if ypos > 0.72 * _ytop:                       # label below, not into title
+                axb.annotate(lab, (xs[i], ylow), xytext=(0, -5),
                              textcoords="offset points", ha="center", va="top",
                              fontsize=7, color=INK)
             else:
-                axb.annotate(lab, (xs[i], q3[i]), xytext=(0, 3),
+                axb.annotate(lab, (xs[i], ypos), xytext=(0, 3),
                              textcoords="offset points", ha="center", fontsize=7,
                              color=INK)
-        # If no reportable point remains, state exactly how many exceeded the range.
-        for i in np.where(~ok)[0]:
-            if bad_frac[i] > 0:
-                axb.annotate("no readable concentration —\n"
-                             + f"all {total_n[i]} px over the calibrated range",
-                             (xs[i], 0), xytext=(0, 8), textcoords="offset points",
-                             ha="center", fontsize=8, color=RED)
         axb.set_xticks(xs)
         xt = ([f"{nm}\ntruth {tv[i]:g}" for i, nm in enumerate(nb)]
               if tv is not None else nb)
