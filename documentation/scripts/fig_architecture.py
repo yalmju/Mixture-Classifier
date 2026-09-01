@@ -188,6 +188,7 @@ fc_net([0.252, 0.290, 0.328, 0.366],
        label_y=0.255, desc_y=0.195, out_colors=CLASS_COLORS)
 cap(0.312, 0.140, "trained on prepared mixtures · weighted L1 · held-out by condition",
     fs=5.8)
+cap(0.312, 0.082, "hidden widths selected by capacity sweep", fs=5.6)
 for (yy, s_, c_) in zip(np.linspace(CY + 0.072, CY - 0.072, 4),
                         SUBS + ["BLK"], CLASS_COLORS):
     ov.text(0.373, yy, s_, fontsize=6.2, color=c_, ha="left", va="center",
@@ -227,6 +228,7 @@ for k, (f0, f1) in enumerate([(0, 0.45), (0.45, 0.75), (0.75, 1.0)]):
                                edgecolor="white", lw=0.6, zorder=3))
 cap(0.527, 0.235, "% of each pesticide", fs=PL_FS, col=PLAIN)
 cap(0.527, 0.155, r"$\bar{p}$ = pixel mean · BLK removed")
+cap(0.527, 0.085, "absence gate: P(present) < 0.2 → 0 (ND)", fs=5.6)
 
 # ============================ stage 3 — concentration ============================
 # per-pixel scores and spectra feed the band read-out (routed under the panels)
@@ -238,7 +240,7 @@ box(0.590, 0.175, 0.092, 0.575,
     [("marker-band brightness", "t"),
      ("how strong is each band?", "p"),
      (r"I$_{eq,k}$ = $\Sigma_i$p$_{ik}$I$_i$($\nu_k$) / $\Sigma_i$p$_{ik}$", "e"),
-     (r"$\nu_k$: 1570 / 1270 / 1370 cm$^{-1}$", "s")])
+     (r"$\nu_k$: 1570 / 1270 / 1367 cm$^{-1}$", "s")])
 arrow(0.684, CY, 0.694, CY)
 badge(0.702, 0.80, 7)
 box(0.696, 0.385, 0.080, 0.365,
@@ -272,12 +274,16 @@ out_tag(0.985, 0.915)
 box(0.918, 0.335, 0.076, 0.415,
     [("reported", "t"),
      ("concentration", "t"),
-     (r"log$_{10}\hat{C}$ = log$_{10}$C$_{cal}$ + $\Delta$", "e"),
-     (r"$\hat{C}$ (µM) · validated", "s")], lw=1.4)
-cap(0.918, 0.255, r"$\Delta$ in decades: +0.3 = ×2", fs=5.6, ha="left")
-cap(0.918, 0.185, "known total (optional):", fs=5.6, ha="left")
-cap(0.918, 0.115, r"$\hat{C}_i$ = $\bar{p}_i$·C$_{total}$ — constrained",
-    fs=5.6, ha="left")
+     (r"$\hat{C}_i$ = $\bar{p}_i$·C$_{declared}$", "e"),
+     ("declared-total · validated", "s")], lw=1.4)
+cap(0.918, 0.255, "no declared total — fallback:", fs=5.4, ha="left")
+cap(0.918, 0.185, r"log$_{10}\hat{C}$ = log$_{10}$C$_{cal}$ + $\Delta$ (semi-quant)",
+    fs=5.4, ha="left")
+cap(0.918, 0.115, r"$\Delta$ in decades: +0.3 = ×2", fs=5.4, ha="left")
+# 주 경로: ⑤ 조성 × 선언 총량 → ⑨ (패널 사이 거터로 내려가 바닥을 타고 간다)
+elbow([(0.558, CY - 0.02), (0.577, CY - 0.02), (0.577, 0.032),
+       (0.990, 0.032), (0.990, 0.330)])
+cap(0.700, 0.008, r"main route: composition $\bar{p}_i$ × declared total", fs=5.6)
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
