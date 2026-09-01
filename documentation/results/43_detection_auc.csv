@@ -1,0 +1,10 @@
+﻿method,detection_auc
+null,0.3751
+band,0.9346
+nnls,0.9439
+nnls_rf,0.9558
+mcr,0.9286
+pls,0.9470
+rf,0.9330
+cnn,0.8778
+mlp,0.9567
