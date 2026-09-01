@@ -228,7 +228,7 @@ for k, (f0, f1) in enumerate([(0, 0.45), (0.45, 0.75), (0.75, 1.0)]):
                                edgecolor="white", lw=0.6, zorder=3))
 cap(0.527, 0.235, "% of each pesticide", fs=PL_FS, col=PLAIN)
 cap(0.527, 0.155, r"$\bar{p}$ = pixel mean · BLK removed")
-cap(0.527, 0.085, "absence gate: P(present) < 0.2 → 0 (ND)", fs=5.6)
+cap(0.508, 0.030, "absence gate: P(present) < 0.2 → reported 0 (ND)", fs=5.6)
 
 # ============================ stage 3 — concentration ============================
 # per-pixel scores and spectra feed the band read-out (routed under the panels)
@@ -283,7 +283,7 @@ cap(0.918, 0.115, r"$\Delta$ in decades: +0.3 = ×2", fs=5.4, ha="left")
 # 주 경로: ⑤ 조성 × 선언 총량 → ⑨ (패널 사이 거터로 내려가 바닥을 타고 간다)
 elbow([(0.558, CY - 0.02), (0.577, CY - 0.02), (0.577, 0.032),
        (0.990, 0.032), (0.990, 0.330)])
-cap(0.700, 0.008, r"main route: composition $\bar{p}_i$ × declared total", fs=5.6)
+cap(0.760, 0.014, r"main route: composition $\bar{p}_i$ × declared total", fs=5.6)
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
