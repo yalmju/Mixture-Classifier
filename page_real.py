@@ -1797,6 +1797,16 @@ class RealDataPage(QWidget):
         # The maps and dots stay RAW (what signal + learning alone report); the batch
         # anchor is drawn as an OVERLAY so the before/after is visible in one panel.
         um_all = r.conc * 1e6
+        # 판독 레시피(채택): 각 픽셀의 모델 조성 비율 × 그 픽셀의 µM 총량.
+        # 픽셀 단위에서 농도 비율이 조성과 정확히 정합한다. (외부 정보 없음 —
+        # 두 값 모두 모델 자신의 출력이다.)
+        _Rnb = getattr(r, "ratio_nb", None)
+        if _Rnb is not None:
+            _Rpx = np.clip(np.asarray(_Rnb, float), 0, None)
+            if _Rpx.shape == um_all.shape:
+                _fin = np.isfinite(um_all) & (um_all > 0)
+                _T = np.where(_fin, um_all, 0.0).sum(axis=1)
+                um_all = _Rpx * _T[:, None]
         anch = getattr(self, "_anchor", None)
         anchored = anch is not None and anch.get("subs") == nb
         afac = (np.asarray(anch["factor"], float) if anchored else None)
@@ -1881,17 +1891,6 @@ class RealDataPage(QWidget):
                                         float(np.quantile(vv, 0.75)))
         xs = np.arange(len(nb))
         ok = np.isfinite(med)
-        # 검증창(3–24 µM)을 음영 밴드로: "농도 제한"이 축 위에 보이게. 밴드 밖의
-        # 점·중앙값은 정의상 ⚠ 영역이다.
-        if lo_um is not None and hi_um is not None:
-            _fin = np.isfinite(lo_um) & np.isfinite(hi_um)
-            if _fin.any():
-                _blo = float(np.min(lo_um[_fin])); _bhi = float(np.max(hi_um[_fin]))
-                axb.axhspan(_blo, _bhi, color="#1a9850", alpha=0.07, zorder=0)
-                axb.axhline(_bhi, color="#8fbf9f", lw=0.8, ls=":", zorder=1)
-                axb.text(0.002, _bhi, f" validated {_blo:g}–{_bhi:g} µM",
-                         transform=axb.get_yaxis_transform(), fontsize=6.2,
-                         color="#2e8b62", va="bottom", ha="left", zorder=1)
         rng = np.random.default_rng(260819)       # stable jitter across redraws
         # Violin body (the pixel distribution's shape) + jittered dots + black
         # IQR/median marks: "the pixels ran from small to large, and centred here".
