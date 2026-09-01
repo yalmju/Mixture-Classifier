@@ -1851,13 +1851,14 @@ class RealDataPage(QWidget):
                 bad |= np.asarray(ood, bool)[sel, i]
             if hi_um is not None and np.isfinite(hi_um[i]):
                 bad |= fin & (v > hi_um[i])
-            # LOW side stays in the median — cutting it biased minors up 3–9×.
-            # A median that lands below the validated lo is reported as "< lo".
-            keep = fin & ~bad
+            # The DISPLAY shows every pixel — small and large — and the median of
+            # all of them: censoring over-range pixels out of the plot left whole
+            # substances looking empty. Over-range is a caveat on the number, not
+            # a reason to hide the measurements.
             bad_frac[i] = float(bad[fin].mean()) if fin.any() else 0.0
-            vv = v[keep]
+            vv = v[fin]
             total_n[i] = int(fin.sum())
-            valid_n[i] = int(vv.size)
+            valid_n[i] = int((fin & ~bad).sum())
             distributions.append(vv)
             if vv.size:
                 med[i], q1[i], q3[i] = (float(np.median(vv)),
@@ -1866,14 +1867,21 @@ class RealDataPage(QWidget):
         xs = np.arange(len(nb))
         ok = np.isfinite(med)
         rng = np.random.default_rng(260819)       # stable jitter across redraws
-        # Beeswarm-style dots (the settled figure style): wide jitter, small
-        # translucent points. The old violin body + tight jitter fused into one
-        # thick bar whenever a map's pixels were homogeneous.
+        # Violin body (the pixel distribution's shape) + jittered dots + black
+        # IQR/median marks: "the pixels ran from small to large, and centred here".
         for i, vv in enumerate(distributions):
+            if vv.size >= 2:
+                violin = axb.violinplot(vv, positions=[i], widths=0.7,
+                                        showmeans=False, showmedians=False,
+                                        showextrema=False)
+                for body_part in violin["bodies"]:
+                    body_part.set_facecolor(nbcols[i])
+                    body_part.set_edgecolor("none")
+                    body_part.set_alpha(0.20)
             if vv.size:
-                jitter = rng.uniform(-0.32, 0.32, size=vv.size)
+                jitter = rng.uniform(-0.26, 0.26, size=vv.size)
                 axb.scatter(np.full(vv.size, i) + jitter, vv, s=9,
-                            color=nbcols[i], alpha=0.45, edgecolors="white",
+                            color=nbcols[i], alpha=0.40, edgecolors="white",
                             linewidths=0.3, zorder=2)
                 # black IQR and median marks are a compact summary on top of all dots
                 axb.vlines(i, q1[i], q3[i], color=INK, lw=1.2, zorder=3)
@@ -1935,20 +1943,21 @@ class RealDataPage(QWidget):
             over_major = bad_frac[i] > 0.5
             sat = (hi_um is not None and np.isfinite(hi_um[i])
                    and np.isfinite(med[i]) and med[i] >= 0.8 * hi_um[i])
-            if over_major:
-                raw_line = (f"above validated range (> {hi_um[i]:g} µM · "
-                            f"{n_above} of {total_n[i]} px)")
-            elif not ok[i]:
-                raw_line = "no usable signal"
-            elif sat:
-                raw_line = f"at least {med[i]:.0f} µM (signal saturated)"
-            elif lo_um is not None and np.isfinite(med[i]) and med[i] < lo_um[i]:
-                raw_line = f"below range (< {lo_um[i]:g} µM)"
+            # The signal number is ALWAYS printed; range problems are caveats
+            # appended to it, never a reason to withhold the value.
+            if not ok[i]:
+                raw_line = "signal: none usable"
             else:
-                raw_line = f"median {med[i]:.1f} µM"
+                raw_line = f"signal: median {med[i]:.1f} µM"
+                if over_major:
+                    raw_line += f" — above validated {hi_um[i]:g} µM"
+                elif sat:
+                    raw_line += " — at saturation ceiling"
+                elif lo_um is not None and med[i] < lo_um[i]:
+                    raw_line += f" — below validated {lo_um[i]:g} µM"
             if has_kt:
                 lab = f"reported {kt[i]:.1f} µM (declared total)"
-                lab += "\nsignal-only: " + raw_line
+                lab += "\n" + raw_line
             else:
                 lab = raw_line
             if amed is not None and np.isfinite(amed[i]) \
@@ -1958,7 +1967,7 @@ class RealDataPage(QWidget):
                 _v = kt[i] if has_kt else med[i]
                 lab += f"\n≈{_v * vol:.0f} pmol"
             if n_above and not over_major:
-                lab += f"\n{n_above} of {total_n[i]} px over range, dropped"
+                lab += f"\n{n_above} of {total_n[i]} px over validated range"
             ypos = q3[i] if np.isfinite(q3[i]) else (kt[i] if has_kt else 0.0)
             ylow = q1[i] if np.isfinite(q1[i]) else ypos
             if ypos > 0.72 * _ytop:                       # label below, not into title
