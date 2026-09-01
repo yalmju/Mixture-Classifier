@@ -1821,7 +1821,14 @@ class RealDataPage(QWidget):
             vmax = min(vmax, float(np.nanmax(hi_um[np.isfinite(hi_um)])))
         vmax = vmax or 1.0
         from matplotlib.colors import LinearSegmentedColormap
-        gs = self._row_gs(self.c_conc.fig, map_slots, ny, nx)
+        # Full-width spec of its own: _row_gs centres this row to the OTHER cards'
+        # map width, which left both gutters empty. This row uses everything.
+        _old_cid = getattr(self.c_conc, "_rowgs_cid", None)
+        if _old_cid is not None:
+            self.c_conc.mpl_disconnect(_old_cid); self.c_conc._rowgs_cid = None
+        gs = self.c_conc.fig.add_gridspec(
+            2, map_slots, height_ratios=[1.0, 0.08], hspace=0.04, wspace=0.05,
+            left=0.012, right=0.988, bottom=0.16, top=0.86)
         for i, nm in enumerate(nb):
             ax = self.c_conc.style(self.c_conc.fig.add_subplot(gs[0, i]))
             self.c_conc.fig.add_subplot(gs[1, i]).set_axis_off()
@@ -1948,40 +1955,49 @@ class RealDataPage(QWidget):
             over_major = bad_frac[i] > 0.5
             sat = (hi_um is not None and np.isfinite(hi_um[i])
                    and np.isfinite(med[i]) and med[i] >= 0.8 * hi_um[i])
-            # The signal number is ALWAYS printed; range problems are caveats
-            # appended to it, never a reason to withhold the value.
+            # The signal number is ALWAYS printed; range/batch problems are caveats
+            # appended to it, never a reason to withhold the value. When the batch
+            # detector fired, the signal line says so in as many words.
+            mm = bool(getattr(r, "conc_batch_mismatch", False))
+            _sig = "signal (extrapolated)" if mm else "signal"
             if not ok[i]:
-                raw_line = "signal: none usable"
+                raw_line = f"{_sig}: none usable"
             else:
-                raw_line = f"signal: median {med[i]:.1f} µM"
+                raw_line = f"{_sig}: median {med[i]:.1f} µM"
                 if over_major:
-                    raw_line += f"\n(over the {hi_um[i]:g} µM window)"
+                    raw_line += f" · over {hi_um[i]:g} µM window"
                 elif sat:
-                    raw_line += "\n(saturation ceiling)"
+                    raw_line += " · saturation ceiling"
                 elif lo_um is not None and med[i] < lo_um[i]:
-                    raw_line += f"\n(below the {lo_um[i]:g} µM window)"
+                    raw_line += f" · below {lo_um[i]:g} µM window"
+            sub_lines = []
             if has_kt:
-                lab = f"reported {kt[i]:.1f} µM (declared total)"
-                lab += "\n" + raw_line
+                main = f"reported {kt[i]:.1f} µM (declared total)"
+                sub_lines.append(raw_line)
             else:
-                lab = raw_line
+                main = raw_line
             if amed is not None and np.isfinite(amed[i]) \
                     and not (over_major or sat) and afac[i] != 1.0:
-                lab += f"\nanchored: {amed[i]:.1f} µM"
+                sub_lines.append(f"anchored: {amed[i]:.1f} µM")
             if vol > 0:                                    # µM × µL = pmol
                 _v = kt[i] if has_kt else med[i]
-                lab += f"\n≈{_v * vol:.0f} pmol"
+                sub_lines.append(f"≈{_v * vol:.0f} pmol")
             if n_above and not over_major:
-                lab += f"\n{n_above} of {total_n[i]} px over validated range"
-            # A blind reading outside the validated window is a WARNING, not a
-            # result — colour it so nobody quotes the number.
-            _lcol = ("#b3421a" if (not has_kt and (over_major or sat)) else INK)
-            # Fixed slot at the top of each category column: labels floated at
-            # data height collided with each other whenever two substances read
-            # similar values.
-            axb.annotate(lab, (float(xs[i]), 0.99),
+                sub_lines.append(f"{n_above} of {total_n[i]} px over range")
+            # A reading outside the validated window / batch is a WARNING —
+            # coloured so nobody quotes the number. The reported (declared-total)
+            # line stays ink-black above it.
+            _warn = "#b3421a" if (over_major or sat or mm) else MUTE
+            _mcol = INK if has_kt else ("#b3421a" if (over_major or sat or mm)
+                                        else INK)
+            axb.annotate(main, (float(xs[i]), 0.995),
                          xycoords=("data", "axes fraction"),
-                         ha="center", va="top", fontsize=7, color=_lcol)
+                         ha="center", va="top", fontsize=7.2, color=_mcol)
+            if sub_lines:
+                axb.annotate("\n".join(sub_lines), (float(xs[i]), 0.995),
+                             xycoords=("data", "axes fraction"),
+                             xytext=(0, -11), textcoords="offset points",
+                             ha="center", va="top", fontsize=6.6, color=_warn)
         axb.set_xticks(xs)
         xt = ([f"{nm}\ntruth {tv[i]:g}" for i, nm in enumerate(nb)]
               if tv is not None else nb)
