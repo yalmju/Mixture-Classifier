@@ -1801,12 +1801,16 @@ class RealDataPage(QWidget):
         # 픽셀 단위에서 농도 비율이 조성과 정확히 정합한다. (외부 정보 없음 —
         # 두 값 모두 모델 자신의 출력이다.)
         _Rnb = getattr(r, "ratio_nb", None)
+        est_total = None
         if _Rnb is not None:
             _Rpx = np.clip(np.asarray(_Rnb, float), 0, None)
             if _Rpx.shape == um_all.shape:
                 _fin = np.isfinite(um_all) & (um_all > 0)
                 _T = np.where(_fin, um_all, 0.0).sum(axis=1)
                 um_all = _Rpx * _T[:, None]
+                _hs = hit & (_T > 0) if hit.any() else (_T > 0)
+                if _hs.any():
+                    est_total = float(np.median(_T[_hs]))
         anch = getattr(self, "_anchor", None)
         anchored = anch is not None and anch.get("subs") == nb
         afac = (np.asarray(anch["factor"], float) if anchored else None)
@@ -2019,9 +2023,16 @@ class RealDataPage(QWidget):
                      "declared total",
                      transform=axb.transAxes, ha="center", va="bottom",
                      fontsize=7.5, color=RED, zorder=6)
-        axb.set_title("per-pixel µM · black – median"
-                      + (" · ⚠ outside validated window/batch"
-                         if getattr(r, "conc_batch_mismatch", False) else "")
+        # 두 경로의 차이는 총량 스칼라 하나다 — 그걸 제목이 직접 보여준다.
+        _mmt = bool(getattr(r, "conc_batch_mismatch", False))
+        _tparts = []
+        if est_total is not None:
+            _tparts.append(f"signal total ≈{est_total:.0f} µM" + (" ⚠" if _mmt else ""))
+        _dtot = self._known_total_uM()
+        if _dtot:
+            _tparts.append(f"declared total {_dtot:g} µM")
+        axb.set_title((" · ".join(_tparts) + "  —  " if _tparts else "")
+                      + "per-pixel µM · black – median"
                       + (" · orange – anchored" if anchored else "")
                       + (" · red – truth" if tv is not None else "")
                       + (" · blue – declared-total" if kt is not None else ""),
