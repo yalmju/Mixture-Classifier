@@ -1858,19 +1858,15 @@ class RealDataPage(QWidget):
         xs = np.arange(len(nb))
         ok = np.isfinite(med)
         rng = np.random.default_rng(260819)       # stable jitter across redraws
+        # Beeswarm-style dots (the settled figure style): wide jitter, small
+        # translucent points. The old violin body + tight jitter fused into one
+        # thick bar whenever a map's pixels were homogeneous.
         for i, vv in enumerate(distributions):
-            if vv.size >= 2:
-                violin = axb.violinplot(vv, positions=[i], widths=0.66,
-                                        showmeans=False, showmedians=False,
-                                        showextrema=False)
-                for body_part in violin["bodies"]:
-                    body_part.set_facecolor(nbcols[i])
-                    body_part.set_edgecolor(nbcols[i])
-                    body_part.set_alpha(0.18)
             if vv.size:
-                jitter = rng.uniform(-0.20, 0.20, size=vv.size)
-                axb.scatter(np.full(vv.size, i) + jitter, vv, s=11,
-                            color=nbcols[i], alpha=0.65, edgecolors="none", zorder=2)
+                jitter = rng.uniform(-0.32, 0.32, size=vv.size)
+                axb.scatter(np.full(vv.size, i) + jitter, vv, s=9,
+                            color=nbcols[i], alpha=0.45, edgecolors="white",
+                            linewidths=0.3, zorder=2)
                 # black IQR and median marks are a compact summary on top of all dots
                 axb.vlines(i, q1[i], q3[i], color=INK, lw=1.2, zorder=3)
                 axb.hlines([q1[i], q3[i]], i - 0.08, i + 0.08,
@@ -1912,29 +1908,28 @@ class RealDataPage(QWidget):
         _ytop = axb.get_ylim()[1] * 1.18
         axb.set_ylim(0, _ytop)
         for i in np.where(ok)[0]:
-            lab = f"{med[i]:.1f} µM\nn={valid_n[i]}/{total_n[i]}"
+            # Plain-language labels, one fact per line, always leading with the
+            # number the user reports.
+            lab = f"median {med[i]:.1f} µM"
             if lo_um is not None and np.isfinite(med[i]) and med[i] < lo_um[i]:
-                lab = f"< {lo_um[i]:g} µM\nn={valid_n[i]}/{total_n[i]}"
+                lab = f"below range (< {lo_um[i]:g} µM)"
             if hi_um is not None and np.isfinite(hi_um[i]) \
                     and np.isfinite(med[i]) and med[i] >= 0.8 * hi_um[i]:
                 # A saturating response (THI ≥ ~25 µM) pins the inversion at its
                 # ceiling, so the honest apparent reading is a lower bound.
-                lab = (f"≥ {med[i]:.0f} µM — at validated ceiling"
-                       f"\nn={valid_n[i]}/{total_n[i]}")
+                lab = f"at least {med[i]:.0f} µM (signal saturated)"
             if kt is not None:
-                lab += f"\nKT {kt[i]:.1f} µM"
-                if total_uM is not None and np.isfinite(med[i]) and med[i] > total_uM:
-                    lab += f" · capped {total_uM:g}"
+                lab += f"\nwith declared total: {kt[i]:.1f} µM"
             if amed is not None and np.isfinite(amed[i]):
-                lab += (f"\nanchored {amed[i]:.1f} µM" if afac[i] != 1.0
-                        else "\nanchor skipped (ceiling)")
+                lab += (f"\nanchored: {amed[i]:.1f} µM" if afac[i] != 1.0
+                        else "\nanchor n/a (saturated)")
             if vol > 0:                                    # µM × µL = pmol
                 lab += f"\n≈{med[i] * vol:.0f} pmol"
             n_above = total_n[i] - valid_n[i]
             if n_above:
                 # Plain language: OOD is implementation jargon and looked like
                 # "weak/no signal", while it usually means the opposite here.
-                lab += f"\n{n_above}/{total_n[i]} above valid range"
+                lab += f"\n{n_above} of {total_n[i]} px over range, dropped"
             if np.isfinite(q3[i]) and q3[i] > 0.72 * _ytop:   # label below, not into title
                 axb.annotate(lab, (xs[i], q1[i]), xytext=(0, -5),
                              textcoords="offset points", ha="center", va="top",
@@ -1946,21 +1941,18 @@ class RealDataPage(QWidget):
         # If no reportable point remains, state exactly how many exceeded the range.
         for i in np.where(~ok)[0]:
             if bad_frac[i] > 0:
-                axb.annotate("no concentration in valid range\n"
-                             + f"0/{total_n[i]} usable · "
-                             + f"{total_n[i]}/{total_n[i]} above range",
+                axb.annotate("no readable concentration —\n"
+                             + f"all {total_n[i]} px over the calibrated range",
                              (xs[i], 0), xytext=(0, 8), textcoords="offset points",
                              ha="center", fontsize=8, color=RED)
         axb.set_xticks(xs)
         xt = ([f"{nm}\ntruth {tv[i]:g}" for i, nm in enumerate(nb)]
               if tv is not None else nb)
         axb.set_xticklabels(xt, fontsize=7)
-        axb.set_title(f"Pixel µM distribution (raw) · maps share 0–{vmax:.1f} µM"
-                      + (f" · orange = batch-anchored ({anch['file']})"
-                         if anchored else "")
-                      + (" · red = filename truth" if tv is not None else "")
-                      + (" · blue = known-total (comp × total, constrained)"
-                         if kt is not None else ""),
+        axb.set_title("Each dot = one pixel's apparent µM · black – median"
+                      + (" · orange – anchored" if anchored else "")
+                      + (" · red – truth" if tv is not None else "")
+                      + (" · blue – declared-total" if kt is not None else ""),
                       fontsize=7)
         axb.set_ylabel("µM per pixel", fontsize=7)
         axb.tick_params(labelsize=8)
