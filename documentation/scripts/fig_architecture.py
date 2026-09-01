@@ -220,7 +220,7 @@ cap(0.443, 0.155, r"p$_i$ = softmax(f(x$_i$))")
 arrow(0.478, CY, 0.492, CY)
 badge(0.492, 0.795, 5)
 out_tag(0.545, 0.915)
-cap(0.529, 0.795, "map composition", fs=BOX_T, col=INK, weight="bold")
+cap(0.536, 0.795, "map composition", fs=BOX_T, col=INK, weight="bold")
 bx, bw = 0.496, 0.062
 for k, (f0, f1) in enumerate([(0, 0.45), (0.45, 0.75), (0.75, 1.0)]):
     ov.add_patch(plt.Rectangle((bx + f0 * bw, CY - 0.055), (f1 - f0) * bw,
@@ -283,7 +283,7 @@ cap(0.918, 0.115, r"$\Delta$ in decades: +0.3 = ×2", fs=5.4, ha="left")
 # 주 경로: ⑤ 조성 × 선언 총량 → ⑨ (패널 사이 거터로 내려가 바닥을 타고 간다)
 elbow([(0.558, CY - 0.02), (0.577, CY - 0.02), (0.577, 0.032),
        (0.990, 0.032), (0.990, 0.330)])
-cap(0.760, 0.014, r"main route: composition $\bar{p}_i$ × declared total", fs=5.6)
+cap(0.848, 0.048, r"main route: composition $\bar{p}_i$ × declared total", fs=5.6)
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
