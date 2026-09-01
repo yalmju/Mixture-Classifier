@@ -1779,14 +1779,13 @@ class RealDataPage(QWidget):
         # Nine slots match raw (4) + stage-1 (5), fixing every map's physical size.
         map_slots = 9
         hit = self._hit(r)                                 # exclude saturated/low-R² px
-        # SHARED µM colour axis across substances, so the maps are directly comparable
+        # SHARED µM colour axis across substances, so the maps are directly comparable.
+        # The maps and dots stay RAW (what signal + learning alone report); the batch
+        # anchor is drawn as an OVERLAY so the before/after is visible in one panel.
         um_all = r.conc * 1e6
-        # session batch anchor (one-point recalibration) — display-layer, clearly labelled
         anch = getattr(self, "_anchor", None)
-        anchored = False
-        if anch is not None and anch.get("subs") == nb:
-            um_all = um_all * np.asarray(anch["factor"], float)[None, :]
-            anchored = True
+        anchored = anch is not None and anch.get("subs") == nb
+        afac = (np.asarray(anch["factor"], float) if anchored else None)
         # the model's own out-of-range judgment: per-pixel OOD flags plus the stored
         # reportable range. A weak binder (DQ) has a nearly flat response, so its
         # inversion EXPLODES on spurious signal — thousands of µM on a 3–500 µM
@@ -1900,6 +1899,13 @@ class RealDataPage(QWidget):
         if kt is not None:                                 # blue tick = known-total
             axb.plot(xs, kt, ls="none", marker="_", ms=16, mew=1.8, color=BLUE,
                      zorder=5)
+        amed = med * afac if anchored else None
+        if amed is not None:                               # orange tick = batch-anchored
+            _ai = [i for i in range(len(nb))
+                   if np.isfinite(amed[i]) and afac[i] != 1.0]
+            if _ai:
+                axb.plot(np.asarray(xs)[_ai], amed[_ai], ls="none", marker="_",
+                         ms=16, mew=1.8, color="#e08214", zorder=5)
         # Headroom BEFORE the labels: without it a distribution near the top of the
         # axis pushed its annotation into the title (the letters-map THI/TBZ case).
         axb.set_ylim(bottom=0)
@@ -1919,6 +1925,9 @@ class RealDataPage(QWidget):
                 lab += f"\nKT {kt[i]:.1f} µM"
                 if total_uM is not None and np.isfinite(med[i]) and med[i] > total_uM:
                     lab += f" · capped {total_uM:g}"
+            if amed is not None and np.isfinite(amed[i]):
+                lab += (f"\nanchored {amed[i]:.1f} µM" if afac[i] != 1.0
+                        else "\nanchor skipped (ceiling)")
             if vol > 0:                                    # µM × µL = pmol
                 lab += f"\n≈{med[i] * vol:.0f} pmol"
             n_above = total_n[i] - valid_n[i]
@@ -1946,8 +1955,9 @@ class RealDataPage(QWidget):
         xt = ([f"{nm}\ntruth {tv[i]:g}" for i, nm in enumerate(nb)]
               if tv is not None else nb)
         axb.set_xticklabels(xt, fontsize=7)
-        axb.set_title(f"Pixel µM distribution · maps share 0–{vmax:.1f} µM"
-                      + (f" · batch-anchored ({anch['file']})" if anchored else "")
+        axb.set_title(f"Pixel µM distribution (raw) · maps share 0–{vmax:.1f} µM"
+                      + (f" · orange = batch-anchored ({anch['file']})"
+                         if anchored else "")
                       + (" · red = filename truth" if tv is not None else "")
                       + (" · blue = known-total (comp × total, constrained)"
                          if kt is not None else ""),
