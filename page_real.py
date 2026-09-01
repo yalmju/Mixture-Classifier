@@ -1958,32 +1958,26 @@ class RealDataPage(QWidget):
             # The signal number is ALWAYS printed; range/batch problems are caveats
             # appended to it, never a reason to withhold the value. When the batch
             # detector fired, the signal line says so in as many words.
+            # 최소 텍스트: 숫자 하나 + 상태 기호. ⚠ = 검증창/배치 밖 (하단 빨간
+            # 줄과 제목이 뜻을 설명한다).
             mm = bool(getattr(r, "conc_batch_mismatch", False))
-            _sig = "signal (extrapolated)" if mm else "signal"
+            _flag = " ⚠" if (mm or over_major or sat) else ""
             if not ok[i]:
-                raw_line = f"{_sig}: none usable"
+                raw_line = "no signal"
             else:
-                raw_line = f"{_sig}: median {med[i]:.1f} µM"
-                if over_major:
-                    raw_line += f" · over {hi_um[i]:g} µM window"
-                elif sat:
-                    raw_line += " · saturation ceiling"
-                elif lo_um is not None and med[i] < lo_um[i]:
-                    raw_line += f" · below {lo_um[i]:g} µM window"
+                raw_line = f"signal {med[i]:.1f} µM{_flag}"
             sub_lines = []
             if has_kt:
-                main = f"reported {kt[i]:.1f} µM (declared total)"
+                main = f"reported {kt[i]:.1f} µM"
                 sub_lines.append(raw_line)
             else:
                 main = raw_line
             if amed is not None and np.isfinite(amed[i]) \
                     and not (over_major or sat) and afac[i] != 1.0:
-                sub_lines.append(f"anchored: {amed[i]:.1f} µM")
+                sub_lines.append(f"anchored {amed[i]:.1f}")
             if vol > 0:                                    # µM × µL = pmol
                 _v = kt[i] if has_kt else med[i]
                 sub_lines.append(f"≈{_v * vol:.0f} pmol")
-            if n_above and not over_major:
-                sub_lines.append(f"{n_above} of {total_n[i]} px over range")
             # A reading outside the validated window / batch is a WARNING —
             # coloured so nobody quotes the number. The reported (declared-total)
             # line stays ink-black above it.
@@ -2009,7 +2003,9 @@ class RealDataPage(QWidget):
                      "declared total",
                      transform=axb.transAxes, ha="center", va="bottom",
                      fontsize=7.5, color=RED, zorder=6)
-        axb.set_title("Each dot = one pixel's apparent µM · black – median"
+        axb.set_title("per-pixel µM · black – median"
+                      + (" · ⚠ outside validated window/batch"
+                         if getattr(r, "conc_batch_mismatch", False) else "")
                       + (" · orange – anchored" if anchored else "")
                       + (" · red – truth" if tv is not None else "")
                       + (" · blue – declared-total" if kt is not None else ""),

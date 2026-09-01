@@ -718,12 +718,14 @@ def _apply_calibration_residual(model, wn, spectra, return_meta, hit=None):
     _, F, Ccal = _residual_context(X[sel], R[sel], np.zeros(len(sel), int),
                                    wn_axis, bands, ab, cal_rng)
     c_map = _predict_residual_uM(net, u["mu"], u["sd"], F, Ccal)[0]   # (n_subs,) µM
-    # Per-pixel display: each pixel's own calibration inversion, rescaled per component
-    # so the median equals the map estimate — the spatial pattern is the pixels', the
-    # reported number is the validated map-level one.
-    ccal_px = _invert_calibration(_band_signal(X, wn_axis, bands), ab, cal_rng)
-    med = np.median(ccal_px, axis=0)
-    um = ccal_px * (c_map / np.where(med > 0, med, 1.0))[None, :]
+    # Per-pixel display: allocate the validated map-level estimate across pixels in
+    # proportion to each pixel's own band signal. The inverted-Ccal scaling used
+    # before collapsed to a flat line whenever the inversion clipped at the range
+    # edge (every pixel identical); raw band signal keeps the real pixel-to-pixel
+    # spread while the median still equals the validated map number.
+    sig_px = np.clip(_band_signal(X, wn_axis, bands), 0.0, None)
+    med_sig = np.median(sig_px[sel], axis=0)
+    um = c_map[None, :] * sig_px / np.where(med_sig > 0, med_sig, 1.0)[None, :]
     um = np.clip(um, 1e-3, 5e3)
     result = (um, usubs)
     if not return_meta:
