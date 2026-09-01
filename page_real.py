@@ -169,8 +169,9 @@ class RealDataPage(QWidget):
         hitcol.addWidget(_hl); hitcol.addWidget(self.chk_auto)
         self.thr = self._spin_col("min substance fraction", QDoubleSpinBox())
         sp = self.thr.itemAt(1).widget()
-        # 0.20 settled on the 260812 trio map: 100% of the lettering, 5% stray hits
-        sp.setDecimals(2); sp.setSingleStep(0.05); sp.setRange(0.01, 0.9); sp.setValue(0.20)
+        # 0.15 — the settled letter-map recipe (NNLS 0.15 gate + model composition):
+        # keeps all of the lettering while the ink/background stays dropped.
+        sp.setDecimals(2); sp.setSingleStep(0.05); sp.setRange(0.01, 0.9); sp.setValue(0.15)
         sp.setToolTip("a pixel counts as a substance (not background) when the "
                       "substances make up at least this fraction of it — lower to "
                       "catch weaker signal")
@@ -357,7 +358,33 @@ class RealDataPage(QWidget):
         self.card_conc, lay_conc = _card(
             "Apparent concentration (µM) — spatial maps + pixel distribution")
         vrow = QHBoxLayout(); vrow.setSpacing(6)
-        _vl = QLabel("dispensed volume (µL) — 0 = off"); _vl.setObjectName("field")
+        # Reading order = reporting priority: declared total drives the main
+        # (constrained) numbers, truth ticks are for validation runs, volume is a
+        # convenience conversion. The old order buried the main input last.
+        _ktl = QLabel("declared total µM (main route)"); _ktl.setObjectName("field")
+        self.total_edit = QLineEdit(); self.total_edit.setFixedWidth(64)
+        self.total_edit.setPlaceholderText("e.g. 36")
+        self.total_edit.setToolTip(
+            "sample-prep metadata: the KNOWN summed analyte concentration (e.g. "
+            "12+12+12 = 36). When set, the panel adds the known-total reconstruction "
+            "(composition × total, held-out ≤100 µM: within-2× 78→91%) and caps the "
+            "spectrum-only µM at the total. Both are CONSTRAINED numbers — the "
+            "improvement comes from the added information, not the model — and the "
+            "export flags them so. Unknown field samples: leave blank, spectrum-only "
+            "(semi-quantitative) reporting stands.")
+        self.total_edit.editingFinished.connect(
+            lambda: self._plot_conc(self._res) if self._res is not None else None)
+        vrow.addWidget(_ktl); vrow.addWidget(self.total_edit)
+        _tl = QLabel("   true µM (a,b,c) for validation"); _tl.setObjectName("field")
+        self.true_edit = QLineEdit(); self.true_edit.setFixedWidth(110)
+        self.true_edit.setPlaceholderText("12,12,12")
+        self.true_edit.setToolTip("dispensed truth per substance, comma-separated in "
+                                  "the panel order. Adds a red tick at each true value "
+                                  "and a red truth tick beneath each substance.")
+        self.true_edit.editingFinished.connect(
+            lambda: self._plot_conc(self._res) if self._res is not None else None)
+        vrow.addWidget(_tl); vrow.addWidget(self.true_edit)
+        _vl = QLabel("   dispensed volume µL (0 = off)"); _vl.setObjectName("field")
         self.vol_spin = QDoubleSpinBox(); self.vol_spin.setDecimals(1)
         self.vol_spin.setRange(0.0, 100.0); self.vol_spin.setSingleStep(0.5)
         self.vol_spin.setValue(0.0); self.vol_spin.setFixedWidth(84)
@@ -368,28 +395,6 @@ class RealDataPage(QWidget):
         self.vol_spin.valueChanged.connect(
             lambda _=0: self._plot_conc(self._res) if self._res is not None else None)
         vrow.addWidget(_vl); vrow.addWidget(self.vol_spin)
-        _tl = QLabel("true µM (a,b,c) — blank = off"); _tl.setObjectName("field")
-        self.true_edit = QLineEdit(); self.true_edit.setFixedWidth(110)
-        self.true_edit.setPlaceholderText("12,12,12")
-        self.true_edit.setToolTip("dispensed truth per substance, comma-separated in "
-                                  "the panel order. Adds a red tick at each true value "
-                                  "and a red truth tick beneath each substance.")
-        self.true_edit.editingFinished.connect(
-            lambda: self._plot_conc(self._res) if self._res is not None else None)
-        vrow.addWidget(_tl); vrow.addWidget(self.true_edit)
-        _ktl = QLabel("known total µM — blank = off"); _ktl.setObjectName("field")
-        self.total_edit = QLineEdit(); self.total_edit.setFixedWidth(64)
-        self.total_edit.setPlaceholderText("60")
-        self.total_edit.setToolTip(
-            "sample-prep metadata: the KNOWN summed analyte concentration. When set, "
-            "the panel adds the known-total reconstruction (composition × total, "
-            "held-out ≤100 µM: within-2× 78→91%) and caps the spectrum-only µM at "
-            "the total. Both are CONSTRAINED numbers — the improvement comes from "
-            "the added information, not the model — and the export flags them so. "
-            "Unknown field samples: leave blank, spectrum-only reporting stands.")
-        self.total_edit.editingFinished.connect(
-            lambda: self._plot_conc(self._res) if self._res is not None else None)
-        vrow.addWidget(_ktl); vrow.addWidget(self.total_edit)
         # the reportable window is NOT typed here — the model file carries it
         # (validated_ranges_M: levels recovered within 2-fold on a held-out split),
         # and the summary shows which window it used
@@ -406,7 +411,13 @@ class RealDataPage(QWidget):
         lay_conc.addWidget(self.conc_opt_tgl)
         lay_conc.addWidget(self.conc_optbox)
         lay_conc.addWidget(self.c_conc)
-        self.c_conc.setFixedHeight(185)
+        # The µM row used to be pinned at 185 px inside a stretching card, so on a
+        # tall window the plots sat squashed at the top of an empty card. Let the
+        # canvas take the card's height instead.
+        self.c_conc.setMinimumHeight(210)
+        self.c_conc.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                  QSizePolicy.Policy.Expanding)
+        self.conc_opt_tgl.setChecked(True)     # declared total is the main input
         # Long headings used to become hard minimum widths (over 2,100 px for the
         # whole page). Wrap them inside their cards so a normal laptop window can
         # show the complete wording without a horizontal scrollbar.
@@ -1794,10 +1805,21 @@ class RealDataPage(QWidget):
         if kt is not None:                                 # blue tick = known-total
             axb.plot(xs, kt, ls="none", marker="_", ms=16, mew=1.8, color=BLUE,
                      zorder=5)
+        # Headroom BEFORE the labels: without it a distribution near the top of the
+        # axis pushed its annotation into the title (the letters-map THI/TBZ case).
+        axb.set_ylim(bottom=0)
+        _ytop = axb.get_ylim()[1] * 1.18
+        axb.set_ylim(0, _ytop)
         for i in np.where(ok)[0]:
             lab = f"{med[i]:.1f} µM\nn={valid_n[i]}/{total_n[i]}"
             if lo_um is not None and np.isfinite(med[i]) and med[i] < lo_um[i]:
                 lab = f"< {lo_um[i]:g} µM\nn={valid_n[i]}/{total_n[i]}"
+            if hi_um is not None and np.isfinite(hi_um[i]) \
+                    and np.isfinite(med[i]) and med[i] >= 0.8 * hi_um[i]:
+                # A saturating response (THI ≥ ~25 µM) pins the inversion at its
+                # ceiling, so the honest apparent reading is a lower bound.
+                lab = (f"≥ {med[i]:.0f} µM — at validated ceiling"
+                       f"\nn={valid_n[i]}/{total_n[i]}")
             if kt is not None:
                 lab += f"\nKT {kt[i]:.1f} µM"
                 if total_uM is not None and np.isfinite(med[i]) and med[i] > total_uM:
@@ -1809,9 +1831,14 @@ class RealDataPage(QWidget):
                 # Plain language: OOD is implementation jargon and looked like
                 # "weak/no signal", while it usually means the opposite here.
                 lab += f"\n{n_above}/{total_n[i]} above valid range"
-            axb.annotate(lab, (xs[i], q3[i]), xytext=(0, 3),
-                         textcoords="offset points", ha="center", fontsize=7,
-                         color=INK)
+            if np.isfinite(q3[i]) and q3[i] > 0.72 * _ytop:   # label below, not into title
+                axb.annotate(lab, (xs[i], q1[i]), xytext=(0, -5),
+                             textcoords="offset points", ha="center", va="top",
+                             fontsize=7, color=INK)
+            else:
+                axb.annotate(lab, (xs[i], q3[i]), xytext=(0, 3),
+                             textcoords="offset points", ha="center", fontsize=7,
+                             color=INK)
         # If no reportable point remains, state exactly how many exceeded the range.
         for i in np.where(~ok)[0]:
             if bad_frac[i] > 0:
@@ -1831,7 +1858,6 @@ class RealDataPage(QWidget):
                       fontsize=7)
         axb.set_ylabel("µM per pixel", fontsize=7)
         axb.tick_params(labelsize=8)
-        axb.set_ylim(bottom=0)
         self._exp_conc.append(("uM_pixel_distribution", axb, None))
         self.c_conc.draw_idle()
 
