@@ -1,0 +1,7 @@
+﻿axis,metric,NNLS,PLS-R,MLP,direction
+Composition accuracy,comp,20.8,17.0,16.1,lower=better
+Absent-component rejection,binary,21.8,23.0,17.5,lower=better
+Detection (AUC),auc,0.944,0.947,0.957,higher=better
+Quantification (within-2×),w2x,29.2,68.8,79.2,higher=better
+Imbalance robustness (8:1),imb,0.0,16.666666666666664,50.0,higher=better
+Recovery centring,bias,51,12,13,lower=better
