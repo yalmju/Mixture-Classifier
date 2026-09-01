@@ -377,7 +377,7 @@ class RealDataPage(QWidget):
         vrow.addWidget(_ktl); vrow.addWidget(self.total_edit)
         _tl = QLabel("   true µM (a,b,c) for validation"); _tl.setObjectName("field")
         self.true_edit = QLineEdit(); self.true_edit.setFixedWidth(110)
-        self.true_edit.setPlaceholderText("12,12,12")
+        self.true_edit.setPlaceholderText("e.g. 12,12,12")
         self.true_edit.setToolTip("dispensed truth per substance, comma-separated in "
                                   "the panel order. Adds a red tick at each true value "
                                   "and a red truth tick beneath each substance.")
@@ -1741,8 +1741,10 @@ class RealDataPage(QWidget):
         except ValueError:
             parts = []
         if len(parts) != len(nb) or any(p <= 0 for p in parts):
-            self.status.setText("batch anchor needs this map's true µM (a,b,c) typed first")
-            self.status.setStyleSheet(f"color:{RED};"); return
+            self.status.setText("type this map's true µM (a,b,c) in the box first — "
+                                "the grey text is only an example")
+            self.status.setStyleSheet(f"color:{RED};")
+            self.true_edit.setFocus(); return
         factor = np.ones(len(nb)); tags = []
         for i, nm in enumerate(nb):
             if np.isfinite(med[i]) and med[i] > 0 and not ceil[i]:
