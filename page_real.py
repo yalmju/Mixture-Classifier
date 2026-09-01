@@ -438,12 +438,9 @@ class RealDataPage(QWidget):
         lay_conc.addWidget(self.conc_opt_tgl)
         lay_conc.addWidget(self.conc_optbox)
         lay_conc.addWidget(self.c_conc)
-        # The µM row used to be pinned at 185 px inside a stretching card, so on a
-        # tall window the plots sat squashed at the top of an empty card. Let the
-        # canvas take the card's height instead.
-        self.c_conc.setMinimumHeight(210)
-        self.c_conc.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                  QSizePolicy.Policy.Expanding)
+        # Fixed height: letting this canvas expand smeared the row across a tall
+        # card — tiny maps floating in whitespace. 240 px fits maps + labels.
+        self.c_conc.setFixedHeight(240)
         self.conc_opt_tgl.setChecked(True)     # declared total is the main input
         # Long headings used to become hard minimum widths (over 2,100 px for the
         # whole page). Wrap them inside their cards so a normal laptop window can
@@ -1926,11 +1923,10 @@ class RealDataPage(QWidget):
             if _ai:
                 axb.plot(np.asarray(xs)[_ai], amed[_ai], ls="none", marker="_",
                          ms=16, mew=1.8, color="#e08214", zorder=5)
-        # Headroom BEFORE the labels: without it a distribution near the top of the
-        # axis pushed its annotation into the title (the letters-map THI/TBZ case).
+        # Clear headroom band at the top of the axes where the per-substance
+        # labels live, so text never sits on the dots.
         axb.set_ylim(bottom=0)
-        _ytop = axb.get_ylim()[1] * 1.18
-        axb.set_ylim(0, _ytop)
+        axb.set_ylim(0, axb.get_ylim()[1] * 1.45)
         for i in range(len(nb)):
             # One reported number per substance. With a declared total, the
             # composition-based reconstruction IS the report — that is the whole
@@ -1958,11 +1954,11 @@ class RealDataPage(QWidget):
             else:
                 raw_line = f"signal: median {med[i]:.1f} µM"
                 if over_major:
-                    raw_line += f" — above validated {hi_um[i]:g} µM"
+                    raw_line += f"\n(over the {hi_um[i]:g} µM window)"
                 elif sat:
-                    raw_line += " — at saturation ceiling"
+                    raw_line += "\n(saturation ceiling)"
                 elif lo_um is not None and med[i] < lo_um[i]:
-                    raw_line += f" — below validated {lo_um[i]:g} µM"
+                    raw_line += f"\n(below the {lo_um[i]:g} µM window)"
             if has_kt:
                 lab = f"reported {kt[i]:.1f} µM (declared total)"
                 lab += "\n" + raw_line
@@ -1979,16 +1975,12 @@ class RealDataPage(QWidget):
             # A blind reading outside the validated window is a WARNING, not a
             # result — colour it so nobody quotes the number.
             _lcol = ("#b3421a" if (not has_kt and (over_major or sat)) else INK)
-            ypos = q3[i] if np.isfinite(q3[i]) else (kt[i] if has_kt else 0.0)
-            ylow = q1[i] if np.isfinite(q1[i]) else ypos
-            if ypos > 0.72 * _ytop:                       # label below, not into title
-                axb.annotate(lab, (xs[i], ylow), xytext=(0, -5),
-                             textcoords="offset points", ha="center", va="top",
-                             fontsize=7, color=_lcol)
-            else:
-                axb.annotate(lab, (xs[i], ypos), xytext=(0, 3),
-                             textcoords="offset points", ha="center", fontsize=7,
-                             color=_lcol)
+            # Fixed slot at the top of each category column: labels floated at
+            # data height collided with each other whenever two substances read
+            # similar values.
+            axb.annotate(lab, (float(xs[i]), 0.99),
+                         xycoords=("data", "axes fraction"),
+                         ha="center", va="top", fontsize=7, color=_lcol)
         axb.set_xticks(xs)
         xt = ([f"{nm}\ntruth {tv[i]:g}" for i, nm in enumerate(nb)]
               if tv is not None else nb)
