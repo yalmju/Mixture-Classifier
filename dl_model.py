@@ -677,7 +677,7 @@ def _train_calibration_residual_head(Xraw, Rabs, gp, gcond, C_uM_rows, conc_subs
     return uM
 
 
-def _apply_calibration_residual(model, wn, spectra, return_meta):
+def _apply_calibration_residual(model, wn, spectra, return_meta, hit=None):
     """Apply path for the calibration-residual head. The batch is treated as ONE map
     (the same contract the pixel head's context features rely on). Returns per-pixel
     µM whose per-component median equals the map-level corrected estimate, so every
@@ -696,11 +696,17 @@ def _apply_calibration_residual(model, wn, spectra, return_meta):
     cols = [subs_all.index(s_) for s_ in usubs if s_ in subs_all]
     analyte_mass = pk[:, cols].sum(axis=1)
     R = pk[:, cols] / (pk[:, cols].sum(axis=1, keepdims=True) + 1e-12)
-    # Map context from analyte-dominant pixels only: Real hands EVERY pixel through
-    # here (background included), while training saw hit-screened pixels. The model's
-    # own blank channel is the closest stand-in for that gate; without a blank class
-    # every pixel passes, which matches the all-hit training sets.
-    sel = np.where(analyte_mass >= 0.5)[0]
+    # Map context from the SAME pixel population training saw. Training pixels were
+    # NNLS-screened, so when the caller (Real tab) hands its gate, use it — the
+    # concentration context is then built from gate-passing pixels only. Without a
+    # gate, fall back to the model's own blank channel as the closest stand-in.
+    if hit is not None and np.asarray(hit, bool).any():
+        h = np.asarray(hit, bool)
+        sel = np.where(h & (analyte_mass >= 0.5))[0]
+        if not len(sel):
+            sel = np.where(h)[0]
+    else:
+        sel = np.where(analyte_mass >= 0.5)[0]
     if not len(sel):
         sel = np.arange(len(X))
     ab = np.asarray(u["loglinear_ab"], float)
@@ -1969,7 +1975,7 @@ def surface_detection(model, wn, spectra, max_px=400):
             {s: bool(frac[j] < thr) for j, s in enumerate(subs)})
 
 
-def apply_uM_pixels(model, wn, spectra, return_meta=False):
+def apply_uM_pixels(model, wn, spectra, return_meta=False, hit=None):
     """Per-pixel absolute concentration from the model's µM head: (n_px, n_conc) in µM,
     plus the substance names that head covers. The head is trained on log10 µM labels,
     so it is an order-of-magnitude estimate — but it is the SAME estimator the map-level
@@ -1984,7 +1990,7 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False):
     if not u:
         return None, []
     if u.get("kind") == "calibration_residual_uM_v1":
-        return _apply_calibration_residual(model, wn, spectra, return_meta)
+        return _apply_calibration_residual(model, wn, spectra, return_meta, hit=hit)
     usubs = u.get("subs") or model["subs"]
     wn = np.asarray(wn); mask = (wn >= model["lo"]) & (wn <= model["hi"])
     X = np.asarray(spectra, float)

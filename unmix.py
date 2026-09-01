@@ -395,7 +395,8 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         from dl_model import apply_uM_pixels
         if progress:
             progress("composition model — per-pixel concentration")
-        um, unames, um_meta = apply_uM_pixels(dl_model, wn, spectra, return_meta=True)
+        um, unames, um_meta = apply_uM_pixels(dl_model, wn, spectra, return_meta=True,
+                                              hit=hit)
         if um is not None:
             conc = np.zeros((len(spectra), len(nonbg)))
             conc_ood = np.zeros((len(spectra), len(nonbg)), dtype=bool)
