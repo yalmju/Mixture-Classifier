@@ -1976,16 +1976,19 @@ class RealDataPage(QWidget):
                 lab += f"\n≈{_v * vol:.0f} pmol"
             if n_above and not over_major:
                 lab += f"\n{n_above} of {total_n[i]} px over validated range"
+            # A blind reading outside the validated window is a WARNING, not a
+            # result — colour it so nobody quotes the number.
+            _lcol = ("#b3421a" if (not has_kt and (over_major or sat)) else INK)
             ypos = q3[i] if np.isfinite(q3[i]) else (kt[i] if has_kt else 0.0)
             ylow = q1[i] if np.isfinite(q1[i]) else ypos
             if ypos > 0.72 * _ytop:                       # label below, not into title
                 axb.annotate(lab, (xs[i], ylow), xytext=(0, -5),
                              textcoords="offset points", ha="center", va="top",
-                             fontsize=7, color=INK)
+                             fontsize=7, color=_lcol)
             else:
                 axb.annotate(lab, (xs[i], ypos), xytext=(0, 3),
                              textcoords="offset points", ha="center", fontsize=7,
-                             color=INK)
+                             color=_lcol)
         axb.set_xticks(xs)
         xt = ([f"{nm}\ntruth {tv[i]:g}" for i, nm in enumerate(nb)]
               if tv is not None else nb)
