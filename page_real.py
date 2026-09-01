@@ -164,7 +164,9 @@ class RealDataPage(QWidget):
         self._compact_x(self.cal_x, "clear calibration")
         self.cal_x.clicked.connect(self._clear_calib); self.cal_x.setVisible(False)
         self.chk_auto = QCheckBox("auto background gate")
-        self.chk_auto.setChecked(True)
+        # Default OFF: the settled recipe is the 0.15 fraction gate, and with auto
+        # on the threshold spin is (correctly) greyed out — which read as "broken".
+        self.chk_auto.setChecked(False)
         self.chk_auto.setToolTip(
             "Uses the full spectrum: signal only when summed analyte evidence "
             "exceeds summed BLK + INK evidence. Unchecked = fraction threshold.")
