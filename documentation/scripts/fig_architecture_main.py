@@ -184,19 +184,22 @@ cap(0.563, 0.320, r"$\bar{p}_i$ = pixel mean · BLK removed", fs=PL_FS,
 cap(0.563, 0.235, "absent component → reported 0", fs=PL_FS, col=PLAIN)
 cap(0.563, 0.155, "(absence gate, P < 0.2)", fs=SUB_FS)
 arrow(0.612, CY, 0.726, CY)
-cap(0.668, CY + 0.06, r"× declared total C$_{total}$", fs=6.6, col=INK)
+cap(0.668, CY + 0.06, "per-pixel signature", fs=6.4, col=INK)
+cap(0.668, CY - 0.09, "(bands + composition)", fs=5.6)
 
-# ── concentration ────────────────────────────────────────────────────────
+# ── concentration: 측정 픽셀 라이브러리 조회 — 외삽 구조적 불가 ─────────
 out_tag(0.958, 0.915)
 box(0.732, 0.415, 0.130, 0.345,
     [("reported concentration", "t"),
-     (r"$\hat{C}_i$ = $\bar{p}_i$ · C$_{total}$", "e"),
-     ("declared-total reconstruction", "s")], lw=1.4)
+     ("nearest measured pixels", "p"),
+     ("= weighted avg of MEASURED µM", "e"),
+     ("no match → no answer", "s")], lw=1.4)
 box(0.732, 0.085, 0.130, 0.255,
-    [("total unknown?", "t"),
-     ("calibration + learned correction", "p"),
-     ("semi-quantitative (SI)", "s")], ls="--", lw=0.9)
+    [("declared total (optional)", "t"),
+     (r"$\hat{C}_i$ = $\bar{p}_i$ · C$_{total}$", "e"),
+     ("overlay when formulation known", "s")], ls="--", lw=0.9)
 arrow(0.797, 0.41, 0.797, 0.35, ls="--", lw=0.8)
+cap(0.797, 0.045, "library: 92 mixture maps + calibration series", fs=5.6)
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
