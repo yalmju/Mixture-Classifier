@@ -439,8 +439,8 @@ class RealDataPage(QWidget):
         lay_conc.addWidget(self.conc_optbox)
         lay_conc.addWidget(self.c_conc)
         # Fixed height: letting this canvas expand smeared the row across a tall
-        # card — tiny maps floating in whitespace. 240 px fits maps + labels.
-        self.c_conc.setFixedHeight(240)
+        # card — tiny maps floating in whitespace. Tall enough to use the row.
+        self.c_conc.setFixedHeight(300)
         self.conc_opt_tgl.setChecked(True)     # declared total is the main input
         # Long headings used to become hard minimum widths (over 2,100 px for the
         # whole page). Wrap them inside their cards so a normal laptop window can
@@ -1787,8 +1787,9 @@ class RealDataPage(QWidget):
         nb = [r.comps[i] for i in r.nonbg]; nbcols = self._nb_colors(r)
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
-        # Nine slots match raw (4) + stage-1 (5), fixing every map's physical size.
-        map_slots = 9
+        # This row does not need to match the other rows' map size — use the width:
+        # 3 wide map cells + spacer + a wide distribution graph.
+        map_slots = 7
         hit = self._hit(r)                                 # exclude saturated/low-R² px
         # SHARED µM colour axis across substances, so the maps are directly comparable.
         # The maps and dots stay RAW (what signal + learning alone report); the batch
