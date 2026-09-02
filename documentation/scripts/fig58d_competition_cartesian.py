@@ -2,7 +2,8 @@
 """58d — 경쟁과 복원, 데카르트 최종형 (스파이럴 배제).
 
 x = 용액의 참 THI 조성(%), y = 참값 대비 배율(log2).
-실측 표면(굵은 저채도) = 경쟁흡착의 왜곡, 복원(가는 고채도) = MLP held-out.
+점(저채도) = raw NNLS 표면 = 경쟁흡착의 왜곡,
+굵은 곡선(고채도) = MLP held-out 복원 running median.
 데이터: documentation/results/17_composition_all_conditions_master.csv
 (92조건, imbalance 100x 제외; Ratio_* 열은 % 단위 → 행 정규화).
 
@@ -68,24 +69,25 @@ def runmed(x, e, win=9):
 fig, ax = plt.subplots(figsize=(7.0, 4.3))
 ax.set_yscale("log", base=2)
 ax.axhspan(q1, q3, color="#7d848c", alpha=0.13, zorder=1)
-ax.axhline(1.0, color=INK, lw=1.1, ls=(0, (4, 3)), zorder=3)
+ax.axhline(1.0, color="#9aa3ad", lw=1.3, ls=(0, (4, 3)), zorder=3)
 for f in (0.5, 2.0):
     ax.axhline(f, color="0.84", lw=0.6, ls=":", zorder=1)
 for s in ("DQ", "TBZ", "THI"):
-    xs, ys = runmed(np.array(data[s]["x"]), np.array(data[s]["e0"]))
-    ax.plot(xs, np.clip(ys, 0.15, None), color=mute(CO[s]), lw=4.0, zorder=2,
-            solid_capstyle="round")
+    x = np.array(data[s]["x"])
+    e0 = np.array(data[s]["e0"])
+    ax.scatter(x, np.clip(e0, 0.16, None), s=13, color=mute(CO[s], 0.45),
+               alpha=0.8, edgecolor="none", zorder=2)
 for s in ("DQ", "TBZ", "THI"):
     xs, ys = runmed(np.array(data[s]["x"]), np.array(data[s]["e1"]))
-    ax.plot(xs, ys, color=CO[s], lw=2.6, alpha=0.95, zorder=5,
+    ax.plot(xs, ys, color=CO[s], lw=3.6, alpha=0.95, zorder=5,
             solid_capstyle="round")
 ax.text(11, 2.55, "surface: THI wins", fontsize=9.5,
-        color=mute(CO["THI"], 0.45), fontweight="bold", ha="left")
+        color=mute(CO["THI"], 0.35), fontweight="bold", ha="left")
 ax.text(72, 0.30, "surface: DQ·TBZ lose", fontsize=9,
-        color=mute(CO["DQ"], 0.45), ha="left")
+        color=mute(CO["DQ"], 0.35), ha="left")
 ax.text(97, 1.24, "restored", fontsize=9, color=INK, fontweight="bold",
         ha="right")
-ax.text(99.2, 1.0, "truth", fontsize=8, color=INK, va="center", ha="left",
+ax.text(99.2, 1.0, "truth", fontsize=8, color="#9aa3ad", va="center", ha="left",
         clip_on=False)
 ax.set_xlim(0, 100)
 ax.set_ylim(0.15, 4.6)

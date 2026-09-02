@@ -2,8 +2,8 @@
 """60 — 잉크 글씨맵의 활성 픽셀들을 스파이럴(폴라) 문법으로.
 
 제조 진실 12:12:12 → 참 조성 1/3씩. 픽셀마다
-  표면(NNLS ratio) = 저채도 굵은 running-median 곡선,
-  복원(MLP)       = 고채도 점 + 가는 running-median 곡선,
+  raw(NNLS ratio) = 저채도 점,
+  복원(MLP)       = 고채도 굵은 running-median 곡선,
 반지름 = 참값(1/3) 대비 배율(log2, ±2 클립), 점선 원 = truth.
 각도 = 표면 THI 분율 순위(310° 스팬). 색 = Pure/colors.json.
 
@@ -95,26 +95,23 @@ def runmed(vals, win=6.0):
 
 fig, ax = plt.subplots(figsize=(7.0, 7.0), subplot_kw=dict(polar=True))
 th = np.linspace(0, 2 * np.pi, 240)
-ax.plot(th, np.full_like(th, RMAX), color=INK, lw=1.1, ls=(0, (4, 3)), zorder=3)
+ax.plot(th, np.full_like(th, RMAX), color="#9aa3ad", lw=1.3, ls=(0, (4, 3)), zorder=3)
 for f in (0.5, 2.0):
     ax.plot(th, np.full_like(th, rad(f)), color="0.84", lw=0.6, ls=":", zorder=1)
 
-# 표면(NNLS): 저채도 굵은 곡선
+# raw(NNLS): 저채도 점
 for k, s in enumerate(ORDER):
     e = Rsurf[sel, k] / TRUE_SHARE
-    xs, ys = runmed(e)
-    ax.plot(ang(xs), np.clip(rad(ys), 0.06, 2 * RMAX + 0.1), color=mute(CO[s]),
-            lw=4.0, zorder=2, solid_capstyle="round")
-# 복원(MLP): 고채도 점 + 가는 곡선
+    ax.scatter(ang(p), np.clip(rad(e), 0.06, 2 * RMAX + 0.10), s=4.5,
+               color=mute(CO[s], 0.45), alpha=0.55, edgecolor="none", zorder=2)
+# 복원(MLP): 고채도 굵은 running-median 곡선
 for k, s in enumerate(ORDER):
     e = Rres[sel, k] / TRUE_SHARE
-    ax.scatter(ang(p), np.clip(rad(e), 0.06, 2 * RMAX - 0.04), s=4.5,
-               color=CO[s], alpha=0.30, edgecolor="none", zorder=4)
     xs, ys = runmed(e)
     ax.plot(ang(xs), np.clip(rad(ys), 0.06, 2 * RMAX - 0.04), color=CO[s],
-            lw=2.2, alpha=0.95, zorder=5, solid_capstyle="round")
+            lw=3.6, alpha=0.95, zorder=5, solid_capstyle="round")
 
-ax.text(np.deg2rad(A0 - 15), RMAX + 0.02, "truth", fontsize=8, color=INK,
+ax.text(np.deg2rad(A0 - 15), RMAX + 0.02, "truth", fontsize=8, color="#9aa3ad",
         ha="center", va="center")
 ax.text(np.deg2rad(A0 - 15), rad(2.0) + 0.10, "2×", fontsize=7.5,
         color="#8a919b", ha="center")
@@ -123,8 +120,8 @@ ax.text(np.deg2rad(A0 - 15), rad(0.5) - 0.16, "0.5×", fontsize=7.5,
 ax.text(float(ang(50)), 2 * RMAX + 0.55,
         f"{len(sel)} active pixels · sorted by surface THI fraction →",
         fontsize=8.5, color="#8a919b", ha="center")
-ax.text(float(ang(88)), rad(2.9), "surface (NNLS)", fontsize=9,
-        color=mute(CO["THI"], 0.4), fontweight="bold", ha="center")
+ax.text(float(ang(88)), rad(2.9), "raw pixels (NNLS)", fontsize=9,
+        color=mute(CO["THI"], 0.35), fontweight="bold", ha="center")
 ax.text(float(ang(12)), rad(0.55), "restored (MLP)", fontsize=9, color=INK,
         fontweight="bold", ha="center")
 ax.set_xticks([])
