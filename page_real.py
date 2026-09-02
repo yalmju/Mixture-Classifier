@@ -2063,10 +2063,15 @@ class RealDataPage(QWidget):
             if _ai:
                 axb.plot(np.asarray(xs)[_ai], amed[_ai], ls="none", marker="_",
                          ms=16, mew=1.8, color="#e08214", zorder=5)
-        # Clear headroom band at the top of the axes where the per-substance
-        # labels live, so text never sits on the dots.
-        axb.set_ylim(bottom=0)
-        axb.set_ylim(0, axb.get_ylim()[1] * 1.45)
+        # 축은 데이터가 사는 구간(99퍼센타일)에 맞춘다 — 소수 이상치가 축을 늘려
+        # 대부분(1–100 µM)의 분포를 뭉개던 문제. 위쪽 1.45배는 라벨 밴드 여유.
+        _allv = (np.concatenate([v for v in distributions if v.size])
+                 if any(v.size for v in distributions) else np.array([]))
+        _base = float(np.percentile(_allv, 99)) * 1.15 if _allv.size else 1.0
+        for _extra in (kt, tv):
+            if _extra is not None:
+                _base = max(_base, float(np.nanmax(np.asarray(_extra, float))) * 1.15)
+        axb.set_ylim(0, max(_base, 1e-6) * 1.45)
         if out_of_lib and kt is None and tv is None:
             axb.set_ylim(0, 1); axb.set_yticks([])
             axb.set_ylabel("")
@@ -2157,10 +2162,7 @@ class RealDataPage(QWidget):
                      va="center" if _empty else "bottom",
                      fontsize=9 if _empty else 7.5, color=RED, zorder=6)
         # 두 경로의 차이는 총량 스칼라 하나다 — 그걸 제목이 직접 보여준다.
-        _mmt = bool(getattr(r, "conc_batch_mismatch", False))
         _tparts = []
-        if est_total is not None and not out_of_lib:
-            _tparts.append(f"signal total ≈{est_total:.0f} µM" + (" ⚠" if _mmt else ""))
         _dtot = self._known_total_uM()
         if _dtot:
             _tparts.append(f"declared total {_dtot:g} µM")
