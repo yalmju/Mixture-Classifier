@@ -28,20 +28,32 @@ CO = {s: labfig.CO[s] for s in ("DQ", "TBZ", "THI")}
 ORDER = ["THI", "TBZ", "DQ"]
 INK = "black"
 
-rows = list(csv.DictReader(
-    open(os.path.join(RES, "50_redistribution_enrichment_RAW.csv"),
-         encoding="utf-8-sig")))
+master = [r for r in csv.DictReader(
+    open(os.path.join(RES, "17_composition_all_conditions_master.csv"),
+         encoding="utf-8-sig")) if r["imbalance_100x"] == "0"]
+# 의심맵 3장 (전용 밴드 기준 라벨과 어긋남 — 07-24/07-27) 제외:
+# (thi_share,total) 필터는 거울쌍(DQ0-TB250-TH50 등)과 충돌해서 조건명으로.
+SUSPECT = {(250.0, 0.0, 50.0), (250.0, 50.0, 0.0), (500.0, 50.0, 0.0)}
+master = [r for r in master
+          if (float(r["DQ"]), float(r["TBZ"]), float(r["THI"])) not in SUSPECT]
+
 REG = [("THI minority\n(share ≤ 45%)", lambda sh, to: sh <= 45),
        ("THI majority\n(share > 45%)", lambda sh, to: sh > 45),
        ("saturated\n(total > 50 µM)", lambda sh, to: to > 50)]
 
 vals = {s: [[] for _ in REG] for s in CO}
-for r in rows:
-    s, e = r["s"], float(r["E"])
-    sh, to = float(r["thi_share"]), float(r["total"])
-    for j, (_, f) in enumerate(REG):
-        if f(sh, to):
-            vals[s][j].append(e)
+for r in master:
+    dq, tb, th = float(r["DQ"]), float(r["TBZ"]), float(r["THI"])
+    to = dq + tb + th
+    sh = th / to * 100 if to else 0.0
+    for s in CO:
+        t = float(r[f"Ratio_{s}_True"])
+        if t <= 0:
+            continue
+        e = float(r[f"Ratio_{s}_NNLS_Pred"]) / t
+        for j, (_, f) in enumerate(REG):
+            if f(sh, to):
+                vals[s][j].append(e)
 
 fig, ax = plt.subplots(figsize=(6.4, 4.0))
 ax.set_yscale("log", base=2)

@@ -39,6 +39,13 @@ def mute(c, f=0.68):
 rows = [r for r in csv.DictReader(
     open(os.path.join(RES, "17_composition_all_conditions_master.csv"),
          encoding="utf-8-sig")) if r["imbalance_100x"] == "0"]
+
+# 의심맵 3장 (전용 밴드 기준 라벨과 어긋남 — 07-24/07-27) 제외:
+# 정답 라벨을 신뢰할 수 없는 맵은 truth 기반 그림에 못 쓴다.
+SUSPECT = {(250.0, 0.0, 50.0), (250.0, 50.0, 0.0), (500.0, 50.0, 0.0)}
+rows = [r for r in rows
+        if (float(r["DQ"]), float(r["TBZ"]), float(r["THI"])) not in SUSPECT]
+
 data = {s: {"x": [], "e0": [], "e1": []} for s in CO}
 for r in rows:
     dq, tb, thv = float(r["DQ"]), float(r["TBZ"]), float(r["THI"])

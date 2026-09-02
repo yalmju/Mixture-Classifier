@@ -36,6 +36,13 @@ CO = {s: labfig.CO[s] for s in ("DQ", "TBZ", "THI")}
 rows = [r for r in csv.DictReader(
     open(os.path.join(RES, "17_composition_all_conditions_master.csv"),
          encoding="utf-8-sig")) if r["imbalance_100x"] == "0"]
+
+# 의심맵 3장 (전용 밴드 기준 라벨과 어긋남 — 07-24/07-27) 제외:
+# 정답 라벨을 신뢰할 수 없는 맵은 truth 기반 그림에 못 쓴다.
+SUSPECT = {(250.0, 0.0, 50.0), (250.0, 50.0, 0.0), (500.0, 50.0, 0.0)}
+rows = [r for r in rows
+        if (float(r["DQ"]), float(r["TBZ"]), float(r["THI"])) not in SUSPECT]
+
 RMAX = 2.0
 PAD = 0.30
 # truth에서 바깥쪽으로 옅어지는 밴드 경계(배율)와 흰색 혼합비.
