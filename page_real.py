@@ -296,8 +296,15 @@ class RealDataPage(QWidget):
         kpis = QGridLayout(); kpis.setSpacing(8)
         self.k_dom = Kpi("dominant"); self.k_n = Kpi("substances")
         self.k_hit = Kpi("hit %"); self.k_px = Kpi("pixels")
+        # 경쟁왜곡 크기 Δ — 참값 없이 계산: NNLS 표면 THI% − 복원(MLP) THI%.
+        # 92맵 검증에서 µM 판독 오차와 무상관(r=0.04) — 왜곡이 커도 판독은 유효.
+        self.k_dthi = Kpi("surface ΔTHI")
+        self.k_dthi.setToolTip(
+            "NNLS가 읽은 표면 THI 조성 − 복원된 THI 조성 (%p).\n"
+            "경쟁흡착이 THI를 얼마나 비대로 보이게 했는지 — 클수록 표면 왜곡이 큰 맵.")
         kpis.addWidget(self.k_dom, 0, 0); kpis.addWidget(self.k_n, 0, 1)
         kpis.addWidget(self.k_hit, 1, 0); kpis.addWidget(self.k_px, 1, 1)
+        kpis.addWidget(self.k_dthi, 2, 0, 1, 2)
         left.addLayout(kpis)
 
         # per-substance colour swatches (click to recolour), filled after a result
@@ -1485,6 +1492,13 @@ class RealDataPage(QWidget):
         dom = nb[int(mr.argmax())] if len(nb) else r.dominant
         self.k_dom.set(dom, TEAL)
         self.k_n.set(str(int(np.sum(mr >= 0.05))), AMBER)
+        if "THI" in nb and eff_hit.any():
+            s1 = self._spectral_ratio_nb(r)[eff_hit].mean(0)
+            dthi = (float(s1[nb.index("THI")])
+                    - float(mr[nb.index("THI")])) * 100.0
+            self.k_dthi.set(f"{dthi:+.0f} %p", AMBER)
+        else:
+            self.k_dthi.set("—", MUTE)
         self.k_hit.set(f"{eff_hit.mean():.0%}", BLUE)
         self.k_px.set(f"{r.n_pixels:,}", PURPLE)
         self._rebuild_swatches(r)
