@@ -449,6 +449,22 @@ class RealDataPage(QWidget):
         self.cmb_umroute.currentIndexChanged.connect(
             lambda _=0: self._plot_conc(self._res) if self._res is not None else None)
         vrow.addWidget(_rl); vrow.addWidget(self.cmb_umroute)
+        # 스파이럴 점 표시 비율 — 0% = percentile 곡선·밴드만, 100% = 픽셀 점
+        # 전부. 드래그 중엔 다시 그리지 않고 놓을 때 한 번 (pxknn 조회가 무겁다).
+        _sl = QLabel("   spiral dots"); _sl.setObjectName("field")
+        from PyQt6.QtWidgets import QSlider
+        self.sl_spiral = QSlider(Qt.Orientation.Horizontal)
+        self.sl_spiral.setRange(0, 100); self.sl_spiral.setValue(0)
+        self.sl_spiral.setFixedWidth(110)
+        self.sl_spiral.setToolTip(
+            "스파이럴에 픽셀 점을 몇 %나 보일지.\n"
+            "0% = percentile 요약(중앙값 곡선 + 25–75% 밴드)만,\n"
+            "100% = 모든 hit 픽셀을 점으로.")
+        self.sl_spiral.sliderReleased.connect(
+            lambda: self._plot_conc(self._res) if self._res is not None else None)
+        self.sl_spiral.valueChanged.connect(
+            lambda v: self.sl_spiral.setToolTip(f"spiral dots: {v}%"))
+        vrow.addWidget(_sl); vrow.addWidget(self.sl_spiral)
         # the reportable window is NOT typed here — the model file carries it
         # (validated_ranges_M: levels recovered within 2-fold on a held-out split),
         # and the summary shows which window it used
@@ -1919,6 +1935,14 @@ class RealDataPage(QWidget):
         ref = [(truth[i] if truth and truth[i] > 0 else
                 (med[i] if np.isfinite(med[i]) and med[i] > 0 else None))
                for i in range(len(nb))]
+        if truth:
+            # vs-truth 모드만 금색 과녁 링 — 그림(44f~k)과 표지 통일. map-median
+            # 모드에선 기준이 자기 중앙값이라 링이 정보를 담지 않아 뺀다.
+            ax.plot(th, np.full_like(th, RMAX), color="#c8930f", lw=1.6,
+                    zorder=2)
+        frac = (self.sl_spiral.value() / 100.0
+                if hasattr(self, "sl_spiral") else 0.0)
+        rng_sp = np.random.default_rng(260902)
         shown = False
         rnb = getattr(r, "ratio_nb", None)
         if not out_of_lib and hit.any() and rnb is not None:
@@ -1965,6 +1989,18 @@ class RealDataPage(QWidget):
                         np.clip(_rad(np.asarray(q2s)), 0.06, 2 * RMAX + 0.1),
                         color=nbcols[i], lw=2.2, alpha=0.95, zorder=4,
                         solid_capstyle="round")
+                if frac > 0:
+                    # 슬라이더 비율만큼 픽셀 점 표시 (안정 시드 — 드래그마다
+                    # 다른 픽셀이 뽑히지 않게)
+                    idx = np.where(fin)[0]
+                    k = max(1, int(round(idx.size * frac)))
+                    pick = (idx if k >= idx.size
+                            else rng_sp.choice(idx, k, replace=False))
+                    ax.scatter(ang_all[pick],
+                               np.clip(_rad(v[pick] / ref[i]), 0.06,
+                                       2 * RMAX + 0.1),
+                               s=6, color=nbcols[i], alpha=0.4,
+                               edgecolors="none", zorder=3.5)
                 shown = True
         ax.set_xticks([])
         ax.set_yticks([])
