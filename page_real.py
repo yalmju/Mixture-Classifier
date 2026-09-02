@@ -503,9 +503,18 @@ class RealDataPage(QWidget):
         bodyw.setMinimumWidth(0)
         bodyw.setSizePolicy(QSizePolicy.Policy.Expanding,
                             QSizePolicy.Policy.Expanding)
-        # Real is a dashboard, not a report page: fit the viewport and do not hide
-        # results behind horizontal or vertical scrollbars.
-        self._split.addWidget(bodyw)
+        # 결과가 창보다 커지면 잘리는 대신 세로 스크롤이 생겨야 한다
+        # (2026-09-02 — 농도 행을 키우자 하단이 잘리고 스크롤도 없던 문제).
+        # 가로는 캔버스가 폭에 맞춰 줄어드니 스크롤바를 끈다.
+        body_scroll = QScrollArea()
+        body_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        body_scroll.setWidgetResizable(True)
+        body_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        body_scroll.setWidget(bodyw)
+        self._split.addWidget(body_scroll)
         self._split.setStretchFactor(0, 0)
         self._split.setStretchFactor(1, 1)
         self._split.setSizes([300, 1060])
