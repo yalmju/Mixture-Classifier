@@ -467,7 +467,9 @@ class RealDataPage(QWidget):
         lay_conc.addWidget(self.c_conc)
         # Fixed height: letting this canvas expand smeared the row across a tall
         # card — tiny maps floating in whitespace. Tall enough to use the row.
-        self.c_conc.setFixedHeight(430)
+        # 고정 높이는 창 공간이 남아도 아래가 잘린다(2026-09-02) — 최소만 잡고
+        # 남는 세로 공간은 이 행이 흡수해 늘어난다 (result_grid rowStretch=1).
+        self.c_conc.setMinimumHeight(430)
         self.conc_opt_tgl.setChecked(True)     # declared total is the main input
         # Long headings used to become hard minimum widths (over 2,100 px for the
         # whole page). Wrap them inside their cards so a normal laptop window can
@@ -2043,8 +2045,8 @@ class RealDataPage(QWidget):
         if _old_cid is not None:
             self.c_conc.mpl_disconnect(_old_cid); self.c_conc._rowgs_cid = None
         gs = self.c_conc.fig.add_gridspec(
-            2, map_slots, height_ratios=[1.0, 0.08], hspace=0.04, wspace=0.05,
-            left=0.012, right=0.988, bottom=0.16, top=0.86)
+            2, map_slots, height_ratios=[1.0, 0.06], hspace=0.05, wspace=0.05,
+            left=0.012, right=0.988, bottom=0.09, top=0.90)
         for i, nm in enumerate(nb):
             ax = self.c_conc.style(self.c_conc.fig.add_subplot(gs[0, i]))
             cax = self.c_conc.fig.add_subplot(gs[1, i])
