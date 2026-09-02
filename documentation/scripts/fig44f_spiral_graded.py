@@ -3,8 +3,8 @@
 
 44e에서 바뀐 것: 평평한 0.5–2× 창 대신 truth에서 멀어질수록 옅어지는
 동심 밴드(±1.25, 1.5, 1.75, 2×; log 대칭). 점이 어느 밴드에 앉는지로
-"얼마나 잘 복원됐는지"가 바로 읽힌다. 창은 중립 회색 — 초록은 TBZ 점 색과
-겹쳐서 금지. 점 색 = Pure/colors.json.
+"얼마나 잘 복원됐는지"가 바로 읽힌다. 창은 노랑 계열 — 초록은 TBZ 점 색과
+겹쳐서 금지, 회색 아닌 노랑은 사용자 지정. 점 색 = Pure/colors.json.
 개별판은 무자막(조립용), strip에는 작은 배율 라벨.
 
 데이터: 17_composition_all_conditions_master.csv (92조건, imbalance 제외;
@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 RES = os.path.join(HERE, "..", "results")
 INK = "#20262e"
 MUTE = "#a6acb5"
-WINDOW = "#7d848c"  # 중립 회색 (TBZ 초록과 충돌 방지)
+WINDOW = "#eab53a"  # 노랑 계열 창 (초록=TBZ, 회색 아님 — 사용자 지정)
 CO = {s: labfig.CO[s] for s in ("DQ", "TBZ", "THI")}
 
 rows = [r for r in csv.DictReader(
@@ -74,7 +74,7 @@ def draw_sp(s, ax, labels=False):
         ax.fill_between(th, rad(lo), rad(f), color=c, lw=0, zorder=0)
         ax.fill_between(th, rad(1 / f), rad(1 / lo), color=c, lw=0, zorder=0)
         lo = f
-    ax.plot(th, np.full_like(th, RMAX), color="#e6b93c", lw=2.2, zorder=2)
+    ax.plot(th, np.full_like(th, RMAX), color="#c8930f", lw=2.2, zorder=2)
     for f, _ in GRADE:
         for v in (f, 1 / f):
             ax.plot(th, np.full_like(th, rad(v)), color="white", lw=0.7,
