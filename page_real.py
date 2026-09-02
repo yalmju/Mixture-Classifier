@@ -1871,6 +1871,71 @@ class RealDataPage(QWidget):
         if self._res is not None:
             self._plot_conc(self._res)
 
+    def _draw_conc_spiral(self, ax, r, nb, nbcols, um_all, hit, med,
+                          out_of_lib):
+        """판독 스파이럴 — 그림 44k/60과 같은 문법의 라이브판.
+        반지름 = 픽셀 µM 판독 ÷ 기준(truth 입력 시 참값, 아니면 그 성분의 맵
+        중앙값 → 픽셀 산포), 각도 = 픽셀의 표면(NNLS) THI 분율 순위(20° 틈 =
+        축의 시작/끝). 금색 과녁 = 기준(1×), 노랑 밴드 = 1.25/1.5/1.75/2× 단계.
+        무응답(라이브러리 밖)이면 점 없이 과녁만 남긴다."""
+        RMAX = 2.0
+
+        def _rad(x):
+            return np.clip(np.log2(np.clip(x, 1e-3, None)), -RMAX, RMAX) + RMAX
+
+        from matplotlib.colors import to_rgb
+        th = np.linspace(0, 2 * np.pi, 180)
+        wr, wg, wb = to_rgb("#eab53a")
+        lo = 1.0
+        for f, fw in ((1.25, 0.45), (1.5, 0.62), (1.75, 0.76), (2.0, 0.88)):
+            c = (wr + (1 - wr) * fw, wg + (1 - wg) * fw, wb + (1 - wb) * fw)
+            ax.fill_between(th, _rad(lo), _rad(f), color=c, lw=0, zorder=0)
+            ax.fill_between(th, _rad(1 / f), _rad(1 / lo), color=c, lw=0,
+                            zorder=0)
+            lo = f
+        ax.plot(th, np.full_like(th, RMAX), color="#c8930f", lw=1.6, zorder=2)
+        truth = None
+        try:
+            tv = [float(x) for x in
+                  self.true_edit.text().replace(" ", "").split(",") if x]
+            if len(tv) == len(nb) and any(v > 0 for v in tv):
+                truth = tv
+        except Exception:
+            truth = None
+        ref = [(truth[i] if truth and truth[i] > 0 else
+                (med[i] if np.isfinite(med[i]) and med[i] > 0 else None))
+               for i in range(len(nb))]
+        shown = False
+        rnb = getattr(r, "ratio_nb", None)
+        if not out_of_lib and hit.any() and rnb is not None:
+            thi = nb.index("THI") if "THI" in nb else 0
+            share = np.clip(np.asarray(rnb, float), 0, None)[:, thi]
+            sel = np.where(hit)[0]
+            order = sel[np.argsort(share[sel])]
+            ang_all = (np.deg2rad(100)
+                       + np.deg2rad(310) * np.arange(len(order))
+                       / max(len(order) - 1, 1))
+            for i in range(len(nb)):
+                if ref[i] is None:
+                    continue
+                v = um_all[order, i]
+                fin = np.isfinite(v) & (v > 0)
+                if not fin.any():
+                    continue
+                ax.scatter(ang_all[fin],
+                           np.clip(_rad(v[fin] / ref[i]), 0.06,
+                                   2 * RMAX + 0.1),
+                           s=4, color=nbcols[i], alpha=0.45,
+                           edgecolors="none", zorder=4)
+                shown = True
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_ylim(-0.7, 2 * RMAX + 0.3)
+        ax.spines["polar"].set_visible(False)
+        lab = "vs truth" if truth else "vs map median"
+        ax.set_title("readout spiral · " + (lab if shown else "no answer"),
+                     fontsize=7, color="#5a6067" if shown else "#c0392b")
+
     def _plot_conc(self, r):
         """Per-substance apparent SERS-equivalent concentration (µM) heat-maps — only when a
         dilution-series calibration has been applied."""
@@ -1886,8 +1951,8 @@ class RealDataPage(QWidget):
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
         # This row does not need to match the other rows' map size — use the width:
-        # 3 wide map cells + spacer + a wide distribution graph.
-        map_slots = 7
+        # 3 wide map cells + spiral(2) + spacer + a wide distribution graph.
+        map_slots = 9
         hit = self._hit(r)                                 # exclude saturated/low-R² px
         # SHARED µM colour axis across substances, so the maps are directly comparable.
         # The maps and dots stay RAW (what signal + learning alone report); the batch
@@ -1996,9 +2061,9 @@ class RealDataPage(QWidget):
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
         # ---- pixel distribution: show the measurements, not only one median bar ----
-        # +1 leaves an empty spacer column so the graph's y-axis label never sits
-        # on top of the last spatial map.
-        dist_start = min(len(nb) + 1, map_slots - 1)
+        # +3 = spiral 2칸 + spacer 1칸 so the graph's y-axis label never sits
+        # on top of the spiral.
+        dist_start = min(len(nb) + 3, map_slots - 1)
         axb = self.c_conc.style(
             self.c_conc.fig.add_subplot(gs[:, dist_start:map_slots]))
         med = np.full(len(nb), np.nan); q1 = med.copy(); q3 = med.copy()
@@ -2028,6 +2093,14 @@ class RealDataPage(QWidget):
                 med[i], q1[i], q3[i] = (float(np.median(vv)),
                                         float(np.quantile(vv, 0.25)),
                                         float(np.quantile(vv, 0.75)))
+        # ── 판독 스파이럴 (그림 44k/60 문법의 배선판) — 각도 = 픽셀 표면 THI
+        #    분율 순위, 반지름 = 픽셀 판독 ÷ 기준(truth 입력 시 참값, 없으면 맵
+        #    중앙값 = 픽셀 산포). 무응답이면 점 없이 과녁만.
+        ax_sp = self.c_conc.fig.add_subplot(
+            gs[:, len(nb):len(nb) + 2], projection="polar")
+        self._draw_conc_spiral(ax_sp, r, nb, nbcols, um_all, hit, med,
+                               out_of_lib)
+        self._exp_conc.append(("uM_spiral", ax_sp, None))
         xs = np.arange(len(nb))
         ok = np.isfinite(med)
         rng = np.random.default_rng(260819)       # stable jitter across redraws
