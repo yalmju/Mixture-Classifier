@@ -2047,15 +2047,23 @@ class RealDataPage(QWidget):
             left=0.012, right=0.988, bottom=0.16, top=0.86)
         for i, nm in enumerate(nb):
             ax = self.c_conc.style(self.c_conc.fig.add_subplot(gs[0, i]))
-            self.c_conc.fig.add_subplot(gs[1, i]).set_axis_off()
+            cax = self.c_conc.fig.add_subplot(gs[1, i])
             um = np.where(hit & np.isfinite(um_all[:, i]) & (um_all[:, i] > 0),
                           um_all[:, i], np.nan)
             grid = np.full((ny, nx), np.nan); grid[rows, cc] = um
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", nbcols[i]])
             cmap.set_bad("#0b0d10")
             ax.set_facecolor("#0b0d10")
-            ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                      interpolation="nearest", cmap=cmap, vmin=0.0, vmax=vmax)
+            im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                           interpolation="nearest", cmap=cmap, vmin=0.0,
+                           vmax=vmax)
+            # 스케일 바 — 세 맵이 같은 0..vmax 램프를 쓴다는 것까지 같이 보인다
+            cb = self.c_conc.fig.colorbar(im, cax=cax,
+                                          orientation="horizontal")
+            cb.set_ticks([0.0, vmax])
+            cb.set_ticklabels(["0", f"{vmax:.0f} µM"])
+            cax.tick_params(labelsize=6, length=2, pad=1)
+            cb.outline.set_linewidth(0.4)
             self._exp_conc.append((f"uM_{nm}", ax, None))
             ax.set_title(nm, fontsize=8)
             ax.set_xticks([]); ax.set_yticks([])
