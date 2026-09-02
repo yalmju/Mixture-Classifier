@@ -2591,6 +2591,35 @@ class RealDataPage(QWidget):
                       for k in range(len(nb))] for i in range(r.n_pixels)]
             write_csv(os.path.join(d, "concentration_maps.csv"), _ch, _cr)
             ncsv += 1
+        # 맵별 매트릭스(ny×nx) — long-form과 별도로, Origin 등에서 채널 하나를
+        # 그대로 히트맵으로 다시 그릴 수 있는 형태. 첫 행 = x 좌표, 첫 열 = y.
+        mdir = os.path.join(d, "matrix")
+        os.makedirs(mdir, exist_ok=True)
+        _ri, _ci, _ny, _nx, _ux, _uy = self._grid_rc(r)
+
+        def _mat(name, vec):
+            g = np.full((_ny, _nx), np.nan)
+            g[_ri, _ci] = np.asarray(vec, float)
+            mh = ["y\\x"] + [f"{v:g}" for v in _ux]
+            mb = [[f"{_uy[j]:g}"]
+                  + ["" if not np.isfinite(g[j, k]) else f"{g[j, k]:.6g}"
+                     for k in range(_nx)] for j in range(_ny)]
+            write_csv(os.path.join(mdir, name), mh, mb)
+
+        nmat = 0
+        for nm, wl in _bands:
+            _mat(f"band_{nm}_{wl:.0f}.csv", self._band_image(r, wl)); nmat += 1
+        for wl in _extras:
+            _mat(f"band_extra_{wl:.0f}.csv", self._band_image(r, wl)); nmat += 1
+        for k, c in enumerate(r.comps):
+            _mat(f"abundance_{c}.csv", evidence[:, k]); nmat += 1
+        for k, nm in enumerate(nb):
+            _mat(f"ratio_{nm}.csv", r.ratio_nb[:, k]); nmat += 1
+        if cal:
+            for k, nm in enumerate(nb):
+                _mat(f"conc_uM_{nm}.csv", r.conc[:, k] * 1e6); nmat += 1
+        _mat("hit.csv", np.asarray(r.hit, float)); nmat += 1
+        ncsv += nmat
         # the µM summary-bar table, numbers identical to the drawn bars
         if cal:
             _hit = self._hit(r)

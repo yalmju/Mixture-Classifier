@@ -145,7 +145,8 @@ def draw_window(ax):
 
 
 def draw_sub(s, ax, clouds=True):
-    jit = np.deg2rad(340) / len(maps) * 0.32
+    # 선형 Δ축: 한 맵 = 한 각도라 픽셀이 레이로 서는 것을 지터로 완화
+    jit = np.deg2rad(1.6)
     angs, meds = [], []
     for c, v in data[s].items():
         a = ANG[c]
