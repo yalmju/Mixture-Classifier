@@ -2261,7 +2261,10 @@ class RealDataPage(QWidget):
                 # 픽셀 조회 모드 + KT 없음: 회색 중앙값 한 줄만 — 숫자가 아예
                 # 없으면 무응답으로 오독된다 (2026-09-02).
                 if ok[i]:
-                    axb.annotate(f"pixel-library {med[i]:.1f} µM",
+                    _iqr = (f" ({q1[i]:.0f}–{q3[i]:.0f})"
+                            if np.isfinite(q1[i]) and np.isfinite(q3[i])
+                            else "")
+                    axb.annotate(f"pixel-library {med[i]:.1f}{_iqr} µM",
                                  (float(xs[i]), 0.995),
                                  xycoords=("data", "axes fraction"),
                                  ha="center", va="top", fontsize=9,
@@ -2286,11 +2289,15 @@ class RealDataPage(QWidget):
             # 줄과 제목이 뜻을 설명한다).
             mm = bool(getattr(r, "conc_batch_mismatch", False))
             _flag = " ⚠" if (mm or over_major or sat) else ""
+            # 숫자 하나로 단정하지 않는다: 산점에 보이는 퍼짐(IQR)을 괄호로
+            # 병기 — 넓으면 무른 판독이라는 게 리포트 줄에서 바로 보인다.
+            _iqr = (f" ({q1[i]:.0f}–{q3[i]:.0f})"
+                    if np.isfinite(q1[i]) and np.isfinite(q3[i]) else "")
             if out_of_lib:
                 # 라이브러리에 닮은 맵이 없다 — 농도는 무응답이다. 숫자 없음.
                 raw_line = "no answer — outside library"
             elif px_used:
-                raw_line = f"pixel-library {med[i]:.1f} µM"
+                raw_line = f"pixel-library {med[i]:.1f}{_iqr} µM"
             elif knn_used:
                 raw_line = f"library {knn['uM'][i]:.1f} µM"
             elif not ok[i]:
@@ -2300,7 +2307,7 @@ class RealDataPage(QWidget):
                 # "최소 천장"까지다.
                 raw_line = f"signal ≥{hi_um[i]:g} µM{_flag}"
             else:
-                raw_line = f"signal {med[i]:.1f} µM{_flag}"
+                raw_line = f"signal {med[i]:.1f}{_iqr} µM{_flag}"
             sub_lines = []
             if has_kt:
                 main = f"reported {kt[i]:.1f} µM"
