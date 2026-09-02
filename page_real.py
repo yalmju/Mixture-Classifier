@@ -1879,7 +1879,9 @@ class RealDataPage(QWidget):
         반지름 = 픽셀 µM 판독 ÷ 기준(truth 입력 시 참값, 아니면 그 성분의 맵
         중앙값 → 픽셀 산포), 각도 = 픽셀의 표면(NNLS) THI 분율 순위(20° 틈 =
         축의 시작/끝). 금색 과녁 = 기준(1×), 노랑 밴드 = 1.25/1.5/1.75/2× 단계.
-        무응답(라이브러리 밖)이면 점 없이 과녁만 남긴다."""
+        픽셀 전부를 점으로 찍는 대신 percentile 요약(러닝 중앙값 곡선 +
+        25–75% 밴드)으로 그린다 — "전체는 너무 많다" (2026-09-02).
+        무응답(라이브러리 밖)이면 곡선 없이 과녁만 남긴다."""
         RMAX = 2.0
 
         def _rad(x):
@@ -1917,18 +1919,42 @@ class RealDataPage(QWidget):
             ang_all = (np.deg2rad(100)
                        + np.deg2rad(310) * np.arange(len(order))
                        / max(len(order) - 1, 1))
+            n = len(order)
+            stations = np.linspace(0, n - 1, min(72, n))
+            win = max(12, int(n * 0.06))
             for i in range(len(nb)):
                 if ref[i] is None:
                     continue
                 v = um_all[order, i]
                 fin = np.isfinite(v) & (v > 0)
-                if not fin.any():
+                if fin.sum() < 5:
                     continue
-                ax.scatter(ang_all[fin],
-                           np.clip(_rad(v[fin] / ref[i]), 0.06,
-                                   2 * RMAX + 0.1),
-                           s=7, color=nbcols[i], alpha=0.45,
-                           edgecolors="none", zorder=4)
+                a_st, q1s, q2s, q3s = [], [], [], []
+                for st in stations:
+                    lo_i = max(0, int(st) - win)
+                    hi_i = min(n, int(st) + win + 1)
+                    w = v[lo_i:hi_i]
+                    w = w[np.isfinite(w) & (w > 0)]
+                    if w.size < 5:
+                        continue
+                    f = w / ref[i]
+                    a_st.append(ang_all[int(st)])
+                    q1s.append(np.percentile(f, 25))
+                    q2s.append(np.median(f))
+                    q3s.append(np.percentile(f, 75))
+                if not a_st:
+                    continue
+                a_st = np.asarray(a_st)
+                ax.fill_between(a_st,
+                                np.clip(_rad(np.asarray(q1s)), 0.06,
+                                        2 * RMAX + 0.1),
+                                np.clip(_rad(np.asarray(q3s)), 0.06,
+                                        2 * RMAX + 0.1),
+                                color=nbcols[i], alpha=0.16, lw=0, zorder=3)
+                ax.plot(a_st,
+                        np.clip(_rad(np.asarray(q2s)), 0.06, 2 * RMAX + 0.1),
+                        color=nbcols[i], lw=2.2, alpha=0.95, zorder=4,
+                        solid_capstyle="round")
                 shown = True
         ax.set_xticks([])
         ax.set_yticks([])
