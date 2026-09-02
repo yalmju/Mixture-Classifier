@@ -777,7 +777,7 @@ class RealDataPage(QWidget):
             pair = []
             for what in ("min", "max"):
                 sp = QDoubleSpinBox(); sp.setDecimals(1); sp.setRange(-1e9, 1e9)
-                sp.setFixedWidth(58); sp.setEnabled(False)
+                sp.setFixedWidth(72)
                 sp.setToolTip(f"{what} of the colour ramp for the {nm} panel")
                 sp.editingFinished.connect(
                     lambda: self._res is not None and self._plot_maps(self._res))
@@ -786,8 +786,6 @@ class RealDataPage(QWidget):
             self._chan_scale[key] = tuple(pair)
 
         def _tgl(on):
-            for a, b in self._chan_scale.values():
-                a.setEnabled(on); b.setEnabled(on)
             if self._res is not None:
                 self._plot_maps(self._res)
 
