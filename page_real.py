@@ -2138,10 +2138,20 @@ class RealDataPage(QWidget):
                      f"(limit {self.KNN_MAX_DIST:g})" if knn is not None
                      else "intensity scale does not match the calibration batch")
             _empty = kt is None and tv is None            # 점도 눈금도 없는 상태
+            # 픽셀 장부에는 커버리지가 있을 수 있다 — 있으면 안내한다.
+            _hint = ""
+            if route != "pxknn":
+                try:
+                    _pxh = self._pxknn_lookup(r)
+                    if _pxh is not None and _pxh["d_med"] <= self.KNN_MAX_DIST:
+                        _hint = ("\npixel k-NN readout HAS coverage "
+                                 f"(px distance {_pxh['d_med']:.1f}) — switch µM readout")
+                except Exception:
+                    pass
             axb.text(0.5, 0.5 if _empty else 0.015,
                      "⚠ concentration not answered\n"
                      f"outside the training library — {_dtxt}\n"
-                     "use a batch anchor or a declared total",
+                     "use a batch anchor or a declared total" + _hint,
                      transform=axb.transAxes, ha="center",
                      va="center" if _empty else "bottom",
                      fontsize=9 if _empty else 7.5, color=RED, zorder=6)
