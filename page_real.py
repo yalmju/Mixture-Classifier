@@ -467,7 +467,7 @@ class RealDataPage(QWidget):
         lay_conc.addWidget(self.c_conc)
         # Fixed height: letting this canvas expand smeared the row across a tall
         # card — tiny maps floating in whitespace. Tall enough to use the row.
-        self.c_conc.setFixedHeight(300)
+        self.c_conc.setFixedHeight(430)
         self.conc_opt_tgl.setChecked(True)     # declared total is the main input
         # Long headings used to become hard minimum widths (over 2,100 px for the
         # whole page). Wrap them inside their cards so a normal laptop window can
@@ -1925,7 +1925,7 @@ class RealDataPage(QWidget):
                 ax.scatter(ang_all[fin],
                            np.clip(_rad(v[fin] / ref[i]), 0.06,
                                    2 * RMAX + 0.1),
-                           s=4, color=nbcols[i], alpha=0.45,
+                           s=7, color=nbcols[i], alpha=0.45,
                            edgecolors="none", zorder=4)
                 shown = True
         ax.set_xticks([])
@@ -1934,7 +1934,7 @@ class RealDataPage(QWidget):
         ax.spines["polar"].set_visible(False)
         lab = "vs truth" if truth else "vs map median"
         ax.set_title("readout spiral · " + (lab if shown else "no answer"),
-                     fontsize=7, color="#5a6067" if shown else "#c0392b")
+                     fontsize=10, color="#5a6067" if shown else "#c0392b")
 
     def _plot_conc(self, r):
         """Per-substance apparent SERS-equivalent concentration (µM) heat-maps — only when a
@@ -2062,10 +2062,10 @@ class RealDataPage(QWidget):
                                           orientation="horizontal")
             cb.set_ticks([0.0, vmax])
             cb.set_ticklabels(["0", f"{vmax:.0f} µM"])
-            cax.tick_params(labelsize=6, length=2, pad=1)
+            cax.tick_params(labelsize=8, length=2, pad=1)
             cb.outline.set_linewidth(0.4)
             self._exp_conc.append((f"uM_{nm}", ax, None))
-            ax.set_title(nm, fontsize=8)
+            ax.set_title(nm, fontsize=10)
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
         # ---- pixel distribution: show the measurements, not only one median bar ----
@@ -2195,7 +2195,7 @@ class RealDataPage(QWidget):
                                  + f"all {total_n[i]} px over the calibrated range",
                                  (xs[i], 0), xytext=(0, 8),
                                  textcoords="offset points",
-                                 ha="center", fontsize=8, color=RED)
+                                 ha="center", fontsize=9, color=RED)
                 continue
             n_above = total_n[i] - valid_n[i]
             over_major = bad_frac[i] > 0.5
@@ -2243,16 +2243,16 @@ class RealDataPage(QWidget):
             _mcol = INK if has_kt else ("#b3421a" if _bad else INK)
             axb.annotate(main, (float(xs[i]), 0.995),
                          xycoords=("data", "axes fraction"),
-                         ha="center", va="top", fontsize=7.2, color=_mcol)
+                         ha="center", va="top", fontsize=9, color=_mcol)
             if sub_lines:
                 axb.annotate("\n".join(sub_lines), (float(xs[i]), 0.995),
                              xycoords=("data", "axes fraction"),
                              xytext=(0, -11), textcoords="offset points",
-                             ha="center", va="top", fontsize=6.6, color=_warn)
+                             ha="center", va="top", fontsize=8, color=_warn)
         axb.set_xticks(xs)
         xt = ([f"{nm}\ntruth {tv[i]:g}" for i, nm in enumerate(nb)]
               if tv is not None else nb)
-        axb.set_xticklabels(xt, fontsize=7)
+        axb.set_xticklabels(xt, fontsize=9)
         if out_of_lib:
             _dtxt = (f"nearest training map at distance {knn['dmin']:.1f} "
                      f"(limit {self.KNN_MAX_DIST:g})" if knn is not None
@@ -2264,7 +2264,7 @@ class RealDataPage(QWidget):
                      "use a batch anchor or a declared total",
                      transform=axb.transAxes, ha="center",
                      va="center" if _empty else "bottom",
-                     fontsize=9 if _empty else 7.5, color=RED, zorder=6)
+                     fontsize=10 if _empty else 8.5, color=RED, zorder=6)
         # 두 경로의 차이는 총량 스칼라 하나다 — 그걸 제목이 직접 보여준다.
         _tparts = []
         _dtot = self._known_total_uM()
@@ -2279,9 +2279,9 @@ class RealDataPage(QWidget):
                       + (" · orange – anchored" if anchored else "")
                       + (" · red – truth" if tv is not None else "")
                       + (" · blue – declared-total" if kt is not None else ""),
-                      fontsize=7)
-        axb.set_ylabel("µM per pixel", fontsize=7)
-        axb.tick_params(labelsize=8)
+                      fontsize=9)
+        axb.set_ylabel("µM per pixel", fontsize=9)
+        axb.tick_params(labelsize=9)
         self._exp_conc.append(("uM_pixel_distribution", axb, None))
         self.c_conc.draw_idle()
 
