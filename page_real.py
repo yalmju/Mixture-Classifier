@@ -2001,7 +2001,9 @@ class RealDataPage(QWidget):
         rng = np.random.default_rng(260819)       # stable jitter across redraws
         # Violin body (the pixel distribution's shape) + jittered dots + black
         # IQR/median marks: "the pixels ran from small to large, and centred here".
-        for i, vv in enumerate(distributions):
+        # 라이브러리 밖이면 µM 축의 점을 아예 그리지 않는다 — "무응답"이라면서
+        # 외삽 구름을 계속 보여주는 모순을 없앤다. 공간 지도는 상대 패턴이라 유지.
+        for i, vv in enumerate(distributions if not out_of_lib else []):
             if vv.size >= 2:
                 violin = axb.violinplot(vv, positions=[i], widths=0.7,
                                         showmeans=False, showmedians=False,
@@ -2054,6 +2056,9 @@ class RealDataPage(QWidget):
         # labels live, so text never sits on the dots.
         axb.set_ylim(bottom=0)
         axb.set_ylim(0, axb.get_ylim()[1] * 1.45)
+        if out_of_lib and kt is None and tv is None:
+            axb.set_ylim(0, 1); axb.set_yticks([])
+            axb.set_ylabel("")
         for i in range(len(nb)):
             # One reported number per substance. With a declared total, the
             # composition-based reconstruction IS the report — that is the whole
@@ -2062,6 +2067,8 @@ class RealDataPage(QWidget):
             # diagnostic line, and beyond the validated window (grid64, ≤24 µM —
             # competition breaks above ~50) it is never shown as a bare number.
             has_kt = kt is not None and np.isfinite(kt[i])
+            if out_of_lib and not has_kt:
+                continue          # 성분별 반복 대신 중앙의 빨간 무응답 메시지 하나로
             if not ok[i] and not has_kt:
                 if bad_frac[i] > 0:
                     axb.annotate("no readable concentration —\n"
@@ -2130,15 +2137,18 @@ class RealDataPage(QWidget):
             _dtxt = (f"nearest training map at distance {knn['dmin']:.1f} "
                      f"(limit {self.KNN_MAX_DIST:g})" if knn is not None
                      else "intensity scale does not match the calibration batch")
-            axb.text(0.5, 0.015,
-                     f"⚠ outside the training library — {_dtxt}; concentration "
-                     "not answered. Use a batch anchor or a declared total.",
-                     transform=axb.transAxes, ha="center", va="bottom",
-                     fontsize=7.5, color=RED, zorder=6)
+            _empty = kt is None and tv is None            # 점도 눈금도 없는 상태
+            axb.text(0.5, 0.5 if _empty else 0.015,
+                     "⚠ concentration not answered\n"
+                     f"outside the training library — {_dtxt}\n"
+                     "use a batch anchor or a declared total",
+                     transform=axb.transAxes, ha="center",
+                     va="center" if _empty else "bottom",
+                     fontsize=9 if _empty else 7.5, color=RED, zorder=6)
         # 두 경로의 차이는 총량 스칼라 하나다 — 그걸 제목이 직접 보여준다.
         _mmt = bool(getattr(r, "conc_batch_mismatch", False))
         _tparts = []
-        if est_total is not None:
+        if est_total is not None and not out_of_lib:
             _tparts.append(f"signal total ≈{est_total:.0f} µM" + (" ⚠" if _mmt else ""))
         _dtot = self._known_total_uM()
         if _dtot:
