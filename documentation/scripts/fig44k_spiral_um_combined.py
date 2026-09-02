@@ -88,19 +88,38 @@ for j, i in enumerate(qidx):
     P[j] = np.exp((w[:, None] * np.log(Y[idx] + _EPS)).sum(0)) - _EPS
 P = np.clip(P, 0, None)
 
-# 조건별 픽셀 fold 수집
+# 조건(맵)별 픽셀 fold 수집 — 세 채널이 같은 맵 키를 공유
 data = {s: {} for s in SUBS}
 for j, i in enumerate(qidx):
     y = Y[i]
     for k, s in enumerate(SUBS):
         if y[k] > 0:
-            data[s].setdefault((float(y[k]), cond[i]), []).append(
-                P[j, k] / y[k])
+            data[s].setdefault(cond[i], []).append(P[j, k] / y[k])
 
 for s in SUBS:
     allv = np.concatenate([np.asarray(v) for v in data[s].values()])
     w2 = ((allv >= 0.5) & (allv <= 2.0)).mean() * 100
     print(f"{s}: {len(data[s])} maps, {len(allv)} px, pixel within-2x={w2:.0f}%")
+
+# 맵 공통 배열축: NNLS의 THI 과대판독 Δ = 표면 THI% − 참 THI% (오름차순)
+# — 틈에서 출발해 돌수록 "THI가 비대로 읽힌" 맵. (사용자 지정 기준)
+import csv as _csv
+
+delta = {}
+for r in _csv.DictReader(open(os.path.join(
+        RES, "17_composition_all_conditions_master.csv"),
+        encoding="utf-8-sig")):
+    name = (f"DQ{float(r['DQ']):g}-TB{float(r['TBZ']):g}"
+            f"-TH{float(r['THI']):g}.csv")
+    delta[name] = (float(r["Ratio_THI_NNLS_Pred"])
+                   - float(r["Ratio_THI_True"]))
+maps = sorted({c for s in SUBS for c in data[s]},
+              key=lambda c: delta.get(c, 0.0))
+ANG = {c: a for c, a in zip(
+    maps, np.deg2rad(100) + np.linspace(0, np.deg2rad(340), len(maps)))}
+print("maps on shared axis:", len(maps),
+      "| delta range:", round(delta.get(maps[0], 0), 1), "→",
+      round(delta.get(maps[-1], 0), 1), "%p")
 
 
 def draw_window(ax):
@@ -119,12 +138,10 @@ def draw_window(ax):
 
 
 def draw_sub(s, ax, clouds=True):
-    recs = sorted(data[s].items())       # 각도 = 그 성분의 참 µM 순위
-    n = len(recs)
-    angs = np.deg2rad(100) + np.linspace(0, np.deg2rad(340), n)
-    jit = np.deg2rad(340) / n * 0.32
-    meds = []
-    for a, (_, v) in zip(angs, recs):
+    jit = np.deg2rad(340) / len(maps) * 0.32
+    angs, meds = [], []
+    for c, v in data[s].items():
+        a = ANG[c]
         v = np.asarray(v, float)
         if clouds:
             sub = v if len(v) <= PX_PER_COND else RNG.choice(
@@ -133,6 +150,7 @@ def draw_sub(s, ax, clouds=True):
                        np.clip(rad(sub), 0.05, 2 * RMAX + 0.12), s=2.4,
                        color=mute(CO[s]), alpha=0.38, edgecolor="none",
                        zorder=3)
+        angs.append(a)
         meds.append(np.median(v))
     ax.scatter(angs, np.clip(rad(np.asarray(meds)), 0.10, 2 * RMAX - 0.06),
                s=19, color=CO[s], alpha=0.95, edgecolor="white",
