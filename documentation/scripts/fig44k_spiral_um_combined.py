@@ -101,32 +101,18 @@ for s in SUBS:
     w2 = ((allv >= 0.5) & (allv <= 2.0)).mean() * 100
     print(f"{s}: {len(data[s])} maps, {len(allv)} px, pixel within-2x={w2:.0f}%")
 
-# 맵 공통 배열축: NNLS의 THI 과대판독 Δ = 표면 THI% − 참 THI% (오름차순)
-# — 틈에서 출발해 돌수록 "THI가 비대로 읽힌" 맵. (사용자 지정 기준)
-import csv as _csv
-
-delta = {}
-for r in _csv.DictReader(open(os.path.join(
-        RES, "17_composition_all_conditions_master.csv"),
-        encoding="utf-8-sig")):
-    name = (f"DQ{float(r['DQ']):g}-TB{float(r['TBZ']):g}"
-            f"-TH{float(r['THI']):g}.csv")
-    delta[name] = (float(r["Ratio_THI_NNLS_Pred"])
-                   - float(r["Ratio_THI_True"]))
-maps = sorted({c for s in SUBS for c in data[s]},
-              key=lambda c: delta.get(c, 0.0))
-# 각도 = Δ 값에 선형 비례 (순위 아님 — "점 400개 = 축 400개" 방지)
-D0 = delta.get(maps[0], 0.0)
-D1 = delta.get(maps[-1], 0.0)
-
-
-def d2ang(dv):
-    return np.deg2rad(100) + (dv - D0) / (D1 - D0) * np.deg2rad(340)
-
-
-ANG = {c: float(d2ang(delta.get(c, 0.0))) for c in maps}
-print("maps on shared axis:", len(maps),
-      "| delta range:", round(D0, 1), "→", round(D1, 1), "%p")
+# 맵 공통 배열축: 복원 정확도 순위 — 과녁에 제일 잘 맞춘 맵이 12시,
+# 시계방향으로 갈수록 못 맞춘 맵. (Δ축은 헷갈려서 폐기 — 2026-09-02)
+score = {}
+for c in {c for s in SUBS for c in data[s]}:
+    errs = [abs(np.log2(max(np.median(data[s][c]), 1e-3)))
+            for s in SUBS if c in data[s]]
+    score[c] = float(np.mean(errs))
+maps = sorted(score, key=score.get)
+ANG = {c: float(np.deg2rad(90) - np.deg2rad(340) * i / max(len(maps) - 1, 1))
+       for i, c in enumerate(maps)}   # 12시 시작, 시계방향
+print("maps:", len(maps), "| accuracy score best/worst:",
+      round(score[maps[0]], 2), "/", round(score[maps[-1]], 2))
 
 
 def draw_window(ax):
@@ -145,8 +131,7 @@ def draw_window(ax):
 
 
 def draw_sub(s, ax, clouds=True):
-    # 선형 Δ축: 한 맵 = 한 각도라 픽셀이 레이로 서는 것을 지터로 완화
-    jit = np.deg2rad(1.6)
+    jit = np.deg2rad(340) / len(maps) * 0.32
     angs, meds = [], []
     for c, v in data[s].items():
         a = ANG[c]
@@ -165,29 +150,10 @@ def draw_sub(s, ax, clouds=True):
                linewidth=0.4, zorder=5)
 
 
-def draw_delta_grid(ax):
-    """Δ 눈금 격자 — 선형축이라 등간격."""
-    for dv in (0, 10, 20, 30, 40, 50, 60):
-        if dv < D0 or dv > D1:
-            continue
-        a = float(d2ang(dv))
-        ax.plot([a, a], [rad(1 / 2.2), 2 * RMAX + 0.06], color="#d9dde2",
-                lw=0.7, zorder=0.5)
-        ax.plot([a, a], [2 * RMAX + 0.06, 2 * RMAX + 0.14], color="#b6bcc4",
-                lw=1.0, clip_on=False, zorder=1)
-        lab = "Δ 0" if dv == 0 else f"+{dv}"
-        ax.text(a, 2 * RMAX + 0.34, lab, fontsize=7.5, color="#8a919b",
-                ha="center", va="center")
-    ax.text(np.deg2rad(100 + 340 * 0.5), 2 * RMAX + 0.62,
-            "NNLS THI over-read (%p) →", fontsize=8, color="#8a919b",
-            ha="center")
-
-
 for tag, clouds in (("44k_spiral_um_combined", True),
                     ("44k_spiral_um_combined_medians", False)):
     fig, ax = plt.subplots(figsize=(7.0, 7.0), subplot_kw=dict(polar=True))
     draw_window(ax)
-    draw_delta_grid(ax)
     for s in ("DQ", "TBZ", "THI"):
         draw_sub(s, ax, clouds=clouds)
     ax.set_xticks([])
