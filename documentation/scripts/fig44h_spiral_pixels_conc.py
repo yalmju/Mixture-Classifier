@@ -135,8 +135,9 @@ for ax, s in zip(axs, ("THI", "TBZ", "DQ")):
     draw_sp(s, ax)
 fig.subplots_adjust(wspace=0.08)
 # 크기 범례 — 프록시 핸들 (마지막 패널 우하단)
+# 앵커는 실제 존재하는 총농도만: 9(최소)·39(중앙값)·300·1000(최대)
 handles = []
-for tref in (9, 100, 1000):
+for tref in (9, 39, 300, 1000):
     ss = 8 + 30 * (np.log10(tref / 9.0) / np.log10(1000.0 / 9.0))
     handles.append(axs[2].scatter([], [], s=max(ss, 8), color="#7d848c",
                                   edgecolor="#3f454c" if tref > 50 else "white",
