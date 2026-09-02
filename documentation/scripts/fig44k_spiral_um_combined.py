@@ -157,15 +157,37 @@ def draw_sub(s, ax, clouds=True):
                linewidth=0.4, zorder=5)
 
 
+def draw_delta_grid(ax):
+    """Δ 눈금 격자 — 순위축이므로 위치는 정렬된 Δ에서 보간."""
+    dsort = np.array([delta.get(c, 0.0) for c in maps])
+    ranks = np.arange(len(maps))
+    for dv in (0, 10, 20, 40, 60):
+        if dv < dsort[0] or dv > dsort[-1]:
+            continue
+        rk = float(np.interp(dv, dsort, ranks))
+        a = np.deg2rad(100) + rk / (len(maps) - 1) * np.deg2rad(340)
+        ax.plot([a, a], [rad(1 / 2.2), 2 * RMAX + 0.06], color="#d9dde2",
+                lw=0.7, zorder=0.5)
+        ax.plot([a, a], [2 * RMAX + 0.06, 2 * RMAX + 0.14], color="#b6bcc4",
+                lw=1.0, clip_on=False, zorder=1)
+        lab = "Δ 0" if dv == 0 else f"+{dv}"
+        ax.text(a, 2 * RMAX + 0.34, lab, fontsize=7.5, color="#8a919b",
+                ha="center", va="center")
+    ax.text(np.deg2rad(100 + 340 * 0.5), 2 * RMAX + 0.62,
+            "NNLS THI over-read (%p) →", fontsize=8, color="#8a919b",
+            ha="center")
+
+
 for tag, clouds in (("44k_spiral_um_combined", True),
                     ("44k_spiral_um_combined_medians", False)):
     fig, ax = plt.subplots(figsize=(7.0, 7.0), subplot_kw=dict(polar=True))
     draw_window(ax)
+    draw_delta_grid(ax)
     for s in ("DQ", "TBZ", "THI"):
         draw_sub(s, ax, clouds=clouds)
     ax.set_xticks([])
     ax.set_yticks([])
-    ax.set_ylim(0, 2 * RMAX + PAD)
+    ax.set_ylim(-0.9, 2 * RMAX + PAD)
     ax.spines["polar"].set_visible(False)
     fig.savefig(os.path.join(RES, f"{tag}.png"), dpi=400,
                 transparent=True, bbox_inches="tight", pad_inches=0.02)
