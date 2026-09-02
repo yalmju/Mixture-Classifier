@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """44f — guided spiral, 초록 창을 단계 그라데이션으로.
 
-44e에서 바뀐 것: 평평한 0.5–2× 초록 창 대신 truth에서 멀어질수록 옅어지는
+44e에서 바뀐 것: 평평한 0.5–2× 창 대신 truth에서 멀어질수록 옅어지는
 동심 밴드(±1.25, 1.5, 1.75, 2×; log 대칭). 점이 어느 밴드에 앉는지로
-"얼마나 잘 복원됐는지"가 바로 읽힌다. 점 색 = Pure/colors.json.
+"얼마나 잘 복원됐는지"가 바로 읽힌다. 창은 중립 회색 — 초록은 TBZ 점 색과
+겹쳐서 금지. 점 색 = Pure/colors.json.
 개별판은 무자막(조립용), strip에는 작은 배율 라벨.
 
 데이터: 17_composition_all_conditions_master.csv (92조건, imbalance 제외;
@@ -29,7 +30,7 @@ import matplotlib.pyplot as plt
 RES = os.path.join(HERE, "..", "results")
 INK = "#20262e"
 MUTE = "#a6acb5"
-WINDOW_GREEN = "#1a9850"
+WINDOW = "#7d848c"  # 중립 회색 (TBZ 초록과 충돌 방지)
 CO = {s: labfig.CO[s] for s in ("DQ", "TBZ", "THI")}
 
 rows = [r for r in csv.DictReader(
@@ -44,7 +45,7 @@ GRADE = [(1.25, 0.45), (1.5, 0.62), (1.75, 0.76), (2.0, 0.88)]
 
 def _band_color(f_white):
     from matplotlib.colors import to_rgb
-    r, g, b = to_rgb(WINDOW_GREEN)
+    r, g, b = to_rgb(WINDOW)
     return (r + (1 - r) * f_white, g + (1 - g) * f_white,
             b + (1 - b) * f_white)
 
