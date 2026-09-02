@@ -1906,7 +1906,8 @@ class RealDataPage(QWidget):
             ax.fill_between(th, _rad(1 / f), _rad(1 / lo), color=c, lw=0,
                             zorder=0)
             lo = f
-        ax.plot(th, np.full_like(th, RMAX), color="#c8930f", lw=1.6, zorder=2)
+        # 금색 1× 링은 뺐다 — 특히 vs-map-median 모드에선 기준이 자기 중앙값이라
+        # 줄이 정보를 담지 않는다. 밴드 대칭(가장 진한 밴드 중앙 = 1×)이면 충분.
         truth = None
         try:
             tv = [float(x) for x in
