@@ -1,0 +1,10 @@
+﻿regime,substance,n_pixels,median_E,q1_E,q3_E
+THI minority (share<=45%),THI,7995,1.875,1.38,2.934
+THI minority (share<=45%),TBZ,9192,0.941,0.561,1.166
+THI minority (share<=45%),DQ,8792,0.529,0.236,0.882
+THI majority (share>45%),THI,5598,1.248,1.123,1.71
+THI majority (share>45%),TBZ,3998,0.029,0.0,0.515
+THI majority (share>45%),DQ,4000,0.061,0.0,0.5
+saturated (total>50uM),THI,8098,1.846,1.2,2.667
+saturated (total>50uM),TBZ,7695,0.604,0.008,1.018
+saturated (total>50uM),DQ,7297,0.27,0.013,0.727
