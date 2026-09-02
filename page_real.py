@@ -2092,6 +2092,8 @@ class RealDataPage(QWidget):
             has_kt = kt is not None and np.isfinite(kt[i])
             if out_of_lib and not has_kt:
                 continue          # 성분별 반복 대신 중앙의 빨간 무응답 메시지 하나로
+            if px_used and not has_kt:
+                continue          # 픽셀 조회 모드: 중앙값 막대·제목이면 충분 — 상단 숫자 표기 불필요
             if not ok[i] and not has_kt:
                 if bad_frac[i] > 0:
                     axb.annotate("no readable concentration —\n"
