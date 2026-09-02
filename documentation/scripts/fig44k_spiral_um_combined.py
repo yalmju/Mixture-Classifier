@@ -101,18 +101,20 @@ for s in SUBS:
     w2 = ((allv >= 0.5) & (allv <= 2.0)).mean() * 100
     print(f"{s}: {len(data[s])} maps, {len(allv)} px, pixel within-2x={w2:.0f}%")
 
-# 맵 공통 배열축: 복원 정확도 순위 — 과녁에 제일 잘 맞춘 맵이 12시,
-# 시계방향으로 갈수록 못 맞춘 맵. (Δ축은 헷갈려서 폐기 — 2026-09-02)
-score = {}
-for c in {c for s in SUBS for c in data[s]}:
-    errs = [abs(np.log2(max(np.median(data[s][c]), 1e-3)))
-            for s in SUBS if c in data[s]]
-    score[c] = float(np.mean(errs))
-maps = sorted(score, key=score.get)
-ANG = {c: float(np.deg2rad(90) - np.deg2rad(340) * i / max(len(maps) - 1, 1))
-       for i, c in enumerate(maps)}   # 12시 시작, 시계방향
-print("maps:", len(maps), "| accuracy score best/worst:",
-      round(score[maps[0]], 2), "/", round(score[maps[-1]], 2))
+# 배열축: 점(맵×성분) 단위 정확도 순위 — 등방 배치. 제일 잘 맞춘 점이
+# 12시, 시계방향으로 갈수록 못 맞춘 점. 점 하나가 각도 하나를 받아
+# 간격이 완전히 균일하다. (Δ축·맵 단위 축은 폐기 — 2026-09-02)
+dots = []
+for s in SUBS:
+    for c, v in data[s].items():
+        m = float(np.median(v))
+        dots.append((abs(np.log2(max(m, 1e-3))), s, c, m))
+dots.sort(key=lambda t: t[0])
+ANG = {(t[2], t[1]): float(np.deg2rad(90)
+                           - np.deg2rad(340) * i / max(len(dots) - 1, 1))
+       for i, t in enumerate(dots)}   # 12시 시작, 시계방향
+print("dots:", len(dots), "| accuracy best/worst:",
+      round(dots[0][0], 2), "/", round(dots[-1][0], 2))
 
 
 def draw_window(ax):
@@ -131,10 +133,10 @@ def draw_window(ax):
 
 
 def draw_sub(s, ax, clouds=True):
-    jit = np.deg2rad(340) / len(maps) * 0.32
+    jit = np.deg2rad(340) / len(dots) * 0.45
     angs, meds = [], []
     for c, v in data[s].items():
-        a = ANG[c]
+        a = ANG[(c, s)]
         v = np.asarray(v, float)
         if clouds:
             sub = v if len(v) <= PX_PER_COND else RNG.choice(

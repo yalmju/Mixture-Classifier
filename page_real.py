@@ -454,7 +454,7 @@ class RealDataPage(QWidget):
         _sl = QLabel("   spiral dots"); _sl.setObjectName("field")
         from PyQt6.QtWidgets import QSlider
         self.sl_spiral = QSlider(Qt.Orientation.Horizontal)
-        self.sl_spiral.setRange(0, 100); self.sl_spiral.setValue(0)
+        self.sl_spiral.setRange(0, 100); self.sl_spiral.setValue(25)
         self.sl_spiral.setFixedWidth(110)
         self.sl_spiral.setToolTip(
             "스파이럴에 픽셀 점을 몇 %나 보일지.\n"
