@@ -428,6 +428,7 @@ class RealDataPage(QWidget):
         # 반환이 학습 맵 실측치의 내분점이라 외삽 불가). 무응답 규칙은 공통.
         _rl = QLabel("   µM readout"); _rl.setObjectName("field")
         self.cmb_umroute = QComboBox()
+        self.cmb_umroute.addItem("auto", "auto")
         self.cmb_umroute.addItem("model head", "model")
         self.cmb_umroute.addItem("library k-NN", "knn")
         self.cmb_umroute.addItem("pixel k-NN", "pxknn")
@@ -1886,11 +1887,21 @@ class RealDataPage(QWidget):
                 if _hs.any():
                     est_total = float(np.median(_T[_hs]))
         # ── 판독 경로: model head vs library k-NN — 무응답 규칙은 공통 ──
-        route = (self.cmb_umroute.currentData()
-                 if hasattr(self, "cmb_umroute") else "model")
+        route_sel = (self.cmb_umroute.currentData()
+                     if hasattr(self, "cmb_umroute") else "auto")
         knn = self._knn_lookup(r)
         out_of_lib = (knn["dmin"] > self.KNN_MAX_DIST) if knn is not None \
             else bool(getattr(r, "conc_batch_mismatch", False))
+        route = route_sel
+        if route_sel == "auto":
+            # 손 스위칭 없음: head가 영역 안이면 head, 밖이면 픽셀 장부가 커버할
+            # 때 자동으로 그 값을 (라벨 "pixel-library"로 출처 명시). 둘 다 밖이면
+            # 무응답.
+            route = "model"
+            if out_of_lib:
+                _pxa = self._pxknn_lookup(r)
+                if _pxa is not None and _pxa["d_med"] <= self.KNN_MAX_DIST:
+                    route = "pxknn"
         knn_used = False
         px_used = False
         if route == "pxknn":
@@ -2138,20 +2149,10 @@ class RealDataPage(QWidget):
                      f"(limit {self.KNN_MAX_DIST:g})" if knn is not None
                      else "intensity scale does not match the calibration batch")
             _empty = kt is None and tv is None            # 점도 눈금도 없는 상태
-            # 픽셀 장부에는 커버리지가 있을 수 있다 — 있으면 안내한다.
-            _hint = ""
-            if route != "pxknn":
-                try:
-                    _pxh = self._pxknn_lookup(r)
-                    if _pxh is not None and _pxh["d_med"] <= self.KNN_MAX_DIST:
-                        _hint = ("\npixel k-NN readout HAS coverage "
-                                 f"(px distance {_pxh['d_med']:.1f}) — switch µM readout")
-                except Exception:
-                    pass
             axb.text(0.5, 0.5 if _empty else 0.015,
                      "⚠ concentration not answered\n"
                      f"outside the training library — {_dtxt}\n"
-                     "use a batch anchor or a declared total" + _hint,
+                     "use a batch anchor or a declared total",
                      transform=axb.transAxes, ha="center",
                      va="center" if _empty else "bottom",
                      fontsize=9 if _empty else 7.5, color=RED, zorder=6)
@@ -2163,8 +2164,10 @@ class RealDataPage(QWidget):
         _dtot = self._known_total_uM()
         if _dtot:
             _tparts.append(f"declared total {_dtot:g} µM")
-        _rt = ({"knn": "library k-NN", "pxknn": "pixel k-NN"}.get(route, "model head")) \
-            + (f" · nearest d={knn['dmin']:.1f}" if knn is not None else "")
+        _rt = ({"knn": "library k-NN", "pxknn": "pixel k-NN"}.get(route, "model head"))
+        if route_sel == "auto":
+            _rt = "auto → " + _rt
+        _rt += f" · nearest d={knn['dmin']:.1f}" if knn is not None else ""
         axb.set_title((" · ".join(_tparts) + "  —  " if _tparts else "")
                       + f"readout: {_rt} · per-pixel µM · black – median"
                       + (" · orange – anchored" if anchored else "")
