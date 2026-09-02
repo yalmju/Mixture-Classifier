@@ -115,11 +115,18 @@ for r in _csv.DictReader(open(os.path.join(
                    - float(r["Ratio_THI_True"]))
 maps = sorted({c for s in SUBS for c in data[s]},
               key=lambda c: delta.get(c, 0.0))
-ANG = {c: a for c, a in zip(
-    maps, np.deg2rad(100) + np.linspace(0, np.deg2rad(340), len(maps)))}
+# 각도 = Δ 값에 선형 비례 (순위 아님 — "점 400개 = 축 400개" 방지)
+D0 = delta.get(maps[0], 0.0)
+D1 = delta.get(maps[-1], 0.0)
+
+
+def d2ang(dv):
+    return np.deg2rad(100) + (dv - D0) / (D1 - D0) * np.deg2rad(340)
+
+
+ANG = {c: float(d2ang(delta.get(c, 0.0))) for c in maps}
 print("maps on shared axis:", len(maps),
-      "| delta range:", round(delta.get(maps[0], 0), 1), "→",
-      round(delta.get(maps[-1], 0), 1), "%p")
+      "| delta range:", round(D0, 1), "→", round(D1, 1), "%p")
 
 
 def draw_window(ax):
@@ -158,14 +165,11 @@ def draw_sub(s, ax, clouds=True):
 
 
 def draw_delta_grid(ax):
-    """Δ 눈금 격자 — 순위축이므로 위치는 정렬된 Δ에서 보간."""
-    dsort = np.array([delta.get(c, 0.0) for c in maps])
-    ranks = np.arange(len(maps))
-    for dv in (0, 10, 20, 40, 60):
-        if dv < dsort[0] or dv > dsort[-1]:
+    """Δ 눈금 격자 — 선형축이라 등간격."""
+    for dv in (0, 10, 20, 30, 40, 50, 60):
+        if dv < D0 or dv > D1:
             continue
-        rk = float(np.interp(dv, dsort, ranks))
-        a = np.deg2rad(100) + rk / (len(maps) - 1) * np.deg2rad(340)
+        a = float(d2ang(dv))
         ax.plot([a, a], [rad(1 / 2.2), 2 * RMAX + 0.06], color="#d9dde2",
                 lw=0.7, zorder=0.5)
         ax.plot([a, a], [2 * RMAX + 0.06, 2 * RMAX + 0.14], color="#b6bcc4",
