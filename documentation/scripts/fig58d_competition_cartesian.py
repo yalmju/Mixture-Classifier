@@ -18,9 +18,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
 
+import sys
+
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import labfig  # noqa: E402  — 색 단일 출처 = Pure/colors.json
+
 RES = os.path.join(HERE, "..", "results")
-CO = {"THI": "#D6604D", "TBZ": "#1B7837", "DQ": "#2166AC"}
+CO = {s: labfig.CO[s] for s in ("DQ", "TBZ", "THI")}
 INK = "black"
 
 

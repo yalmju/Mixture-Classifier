@@ -34,7 +34,10 @@ PURE = r"S:\Google Drive\내 드라이브\ACF_PEST_DB\Pure"
 MAP = r"S:\Google Drive\내 드라이브\ACF_PEST_DB\Pest\260812_12 trio_THI_TBZ_DQ.csv"
 OUT = os.path.join(ROOT, "documentation", "results")
 
-CO = {"THI": "#D6604D", "TBZ": "#1B7837", "DQ": "#2166AC"}
+sys.path.insert(0, HERE)
+import labfig  # noqa: E402  — 색 단일 출처 = Pure/colors.json
+
+CO = {s: labfig.CO[s] for s in ("DQ", "TBZ", "THI")}
 ORDER = ["DQ", "TBZ", "THI"]  # stacked-bar order, bottom→top
 
 m = load_model(DLM)
