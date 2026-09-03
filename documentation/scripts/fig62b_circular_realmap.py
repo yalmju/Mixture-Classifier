@@ -44,18 +44,17 @@ RES = os.path.join(ROOT, "documentation", "results")
 SUBS = ["DQ", "TBZ", "THI"]
 TRUE = 1.0 / 3.0
 
-OVER = ["#f4f2ee", "#f3c977", "#e2952e", "#a85f0d"]
-UNDER = ["#f4f2ee", "#b9b7d9", "#726fb0", "#403d85"]
-_EDGES = [np.log2(1.25), np.log2(1.5), 1.0]
+# 3색만 (사용자 지정): 흰 = 80–125%(합격) / 주황 = 과대 / 보라 = 과소
+C_OK, C_OVER, C_UNDER = "#f4f2ee", "#e2952e", "#726fb0"
+_TOL = np.log2(1.25)
 
 
 def classify(v):
     if not np.isfinite(v):
         return "#d9dde2"
-    a = abs(v)
-    k = (0 if a <= _EDGES[0] else 1 if a <= _EDGES[1]
-         else 2 if a <= _EDGES[2] else 3)
-    return (OVER if v > 0 else UNDER)[k]
+    if abs(v) <= _TOL:
+        return C_OK
+    return C_OVER if v > 0 else C_UNDER
 
 
 m = load_model(DLM)
@@ -78,7 +77,7 @@ print("positive pixels:", n)
 
 Lres = np.log2(np.clip(Rres[sel].T / TRUE, 1e-3, None))   # (3, n)
 Lsurf = np.log2(np.clip(Rsurf[sel].T / TRUE, 1e-3, None))
-ok_frac = [(np.abs(Lres[k]) <= _EDGES[0]).mean() * 100 for k in range(3)]
+ok_frac = [(np.abs(Lres[k]) <= _TOL).mean() * 100 for k in range(3)]
 print("recovered ok(80-125%) fraction:",
       {s: f"{f:.0f}%" for s, f in zip(SUBS, ok_frac)})
 
@@ -90,19 +89,18 @@ w_c = edges[1] - edges[0]
 
 
 def legend(fig):
-    lax = fig.add_axes([0.875, 0.70, 0.11, 0.24])
+    lax = fig.add_axes([0.875, 0.80, 0.11, 0.14])
     lax.set_axis_off()
-    items = [(OVER[3], "> 200%"), (OVER[2], "150–200"),
-             (OVER[1], "125–150"), (OVER[0], "80–125 (ok)"),
-             (UNDER[1], "67–80"), (UNDER[2], "50–67"), (UNDER[3], "< 50%")]
-    lax.text(0.02, 1.02, "recovery vs 1/3", fontsize=6.5, color="#3f454c",
+    items = [(C_OVER, "> 125%  over"), (C_OK, "80–125  ok"),
+             (C_UNDER, "< 80%  under")]
+    lax.text(0.02, 1.04, "recovery vs 1/3", fontsize=6.5, color="#3f454c",
              weight="bold")
     for i, (c, t) in enumerate(items):
-        y = 0.92 - i * 0.13
-        lax.add_patch(plt.Rectangle((0.02, y - 0.05), 0.16, 0.10,
+        y = 0.80 - i * 0.30
+        lax.add_patch(plt.Rectangle((0.02, y - 0.11), 0.16, 0.22,
                                     facecolor=c, edgecolor="#b6bcc4",
                                     linewidth=0.3))
-        lax.text(0.24, y, t, fontsize=5.8, color="#5a6067", va="center")
+        lax.text(0.24, y, t, fontsize=6.2, color="#5a6067", va="center")
 
 
 def draw(groups, tag, center):
@@ -118,8 +116,9 @@ def draw(groups, tag, center):
                     fontsize=5.6, color="#6a7178", ha="center", va="center",
                     zorder=4)
     r_out = R0 + len(groups) * 3 * DR + (GAP if len(groups) > 1 else 0)
-    ax.text(np.deg2rad(90), 0.0, center, fontsize=9, color="#3f454c",
-            ha="center", va="center", zorder=4)
+    if center:
+        ax.text(np.deg2rad(90), 0.0, center, fontsize=8.5, color="#3f454c",
+                ha="center", va="center", zorder=4)
     ax.text(np.deg2rad(90), r_out + 0.42,
             f"{n} gated pixels · scan order →", fontsize=7,
             color="#8a919b", ha="center")
@@ -134,7 +133,13 @@ def draw(groups, tag, center):
     print(f"saved {tag}.png")
 
 
-draw([Lres], "62b_realmap_recovered",
-     "SERS-ink map · 12:12:12\nrecovered composition\nwhite = recovered ok")
-draw([Lsurf, Lres], "62b_realmap_both",
-     "SERS-ink map · 12:12:12\nsurface → recovered\n(inner → outer)")
+# 중앙 문구는 서사 대신 정량 한 줄: THI 과대편향을 몇 % 제거했나
+# (중앙값 기준, (surface−100%) 대비 (surface−recovered))
+m_s = float(np.median(2 ** Lsurf[2])) * 100
+m_r = float(np.median(2 ** Lres[2])) * 100
+removed = (m_s - m_r) / (m_s - 100) * 100 if m_s > 100 else float("nan")
+stat = (f"THI over-bias\nmedian {m_s:.0f}% → {m_r:.0f}%\n"
+        f"{removed:.0f}% of bias removed")
+print(stat.replace("\n", "  "))
+draw([Lres], "62b_realmap_recovered", stat)
+draw([Lsurf, Lres], "62b_realmap_both", stat)
