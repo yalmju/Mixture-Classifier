@@ -133,17 +133,15 @@ def draw(groups, tag, center):
     print(f"saved {tag}.png")
 
 
-# 중앙 = 정량: 성분별 "표면 왜곡을 몇 % 교정했나" (중앙값 recovery의
-# 100%까지 거리 축소율 — 과대/과소 공통 정의). "편향이 크다"가 아니라
-# "이만큼 바로잡았다"로 읽히게 긍정 프레이밍 (2026-09-03).
-lines = ["surface distortion corrected"]
-for k, s in enumerate(SUBS):
-    m_s = float(np.median(2 ** Lsurf[k])) * 100
-    m_r = float(np.median(2 ** Lres[k])) * 100
-    corr = (1 - abs(m_r - 100) / abs(m_s - 100)) * 100 \
-        if abs(m_s - 100) > 1 else float("nan")
-    lines.append(f"{s}  {m_s:.0f}% → {m_r:.0f}%  ({corr:.0f}%)")
-stat = "\n".join(lines)
+# 중앙 = 측정된 사실만: 표면 조성 → 복원 조성 (제조값 병기).
+# recovery 스탯은 진실을 아는 검증에서만 존재하는 수라 얼굴로 쓰지 않는다
+# — 셀 색(vs 1/3)은 검증 전시로서 유지 (2026-09-03).
+cs = Rsurf[sel].mean(0); cs = cs / cs.sum() * 100
+cr = Rres[sel].mean(0); cr = cr / cr.sum() * 100
+stat = ("composition (DQ:TBZ:THI)\n"
+        f"surface {cs[0]:.0f} : {cs[1]:.0f} : {cs[2]:.0f}\n"
+        f"recovered {cr[0]:.0f} : {cr[1]:.0f} : {cr[2]:.0f}\n"
+        "formulation 33 : 33 : 33")
 print(stat.replace("\n", " | "))
 draw([Lres], "62b_realmap_recovered", stat)
 draw([Lsurf, Lres], "62b_realmap_both", stat)
