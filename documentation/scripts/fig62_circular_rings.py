@@ -64,7 +64,7 @@ bad = [bool(np.nanmax(np.abs(t[3])) > 1) for t in recs]   # 복원 2× 밖
 cmap = LinearSegmentedColormap.from_list(
     "pw", ["#5c5a9e", "#a9a7cf", "#f4f2ee", "#f3c977", "#e2952e"])
 cmap.set_bad("#d9dde2")
-norm = Normalize(-2, 2)
+norm = Normalize(-1, 1)   # ½×–2× — 판정 기준이 2×라 ±4×는 과함
 
 A0 = np.deg2rad(96)             # 12시 근처 틈(12°)
 SPAN = np.deg2rad(348)
@@ -108,8 +108,8 @@ ax.spines["polar"].set_visible(False)
 # 컬러바 (log2 fold)
 cax = fig.add_axes([0.90, 0.80, 0.015, 0.13])
 cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax)
-cb.set_ticks([-2, -1, 0, 1, 2])
-cb.set_ticklabels(["¼×", "½×", "1×", "2×", "4×"])
+cb.set_ticks([-1, 0, 1])
+cb.set_ticklabels(["½×", "1×", "2×"])
 cax.tick_params(labelsize=6, length=2)
 cb.outline.set_linewidth(0.4)
 cax.set_title("vs truth", fontsize=6, color="#3f454c", pad=3)
