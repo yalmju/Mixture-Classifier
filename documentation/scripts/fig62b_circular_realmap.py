@@ -133,13 +133,17 @@ def draw(groups, tag, center):
     print(f"saved {tag}.png")
 
 
-# 중앙 문구는 서사 대신 정량 한 줄: THI 과대편향을 몇 % 제거했나
-# (중앙값 기준, (surface−100%) 대비 (surface−recovered))
-m_s = float(np.median(2 ** Lsurf[2])) * 100
-m_r = float(np.median(2 ** Lres[2])) * 100
-removed = (m_s - m_r) / (m_s - 100) * 100 if m_s > 100 else float("nan")
-stat = (f"THI over-bias\nmedian {m_s:.0f}% → {m_r:.0f}%\n"
-        f"{removed:.0f}% of bias removed")
-print(stat.replace("\n", "  "))
+# 중앙 = 정량: 성분별 "표면 왜곡을 몇 % 교정했나" (중앙값 recovery의
+# 100%까지 거리 축소율 — 과대/과소 공통 정의). "편향이 크다"가 아니라
+# "이만큼 바로잡았다"로 읽히게 긍정 프레이밍 (2026-09-03).
+lines = ["surface distortion corrected"]
+for k, s in enumerate(SUBS):
+    m_s = float(np.median(2 ** Lsurf[k])) * 100
+    m_r = float(np.median(2 ** Lres[k])) * 100
+    corr = (1 - abs(m_r - 100) / abs(m_s - 100)) * 100 \
+        if abs(m_s - 100) > 1 else float("nan")
+    lines.append(f"{s}  {m_s:.0f}% → {m_r:.0f}%  ({corr:.0f}%)")
+stat = "\n".join(lines)
+print(stat.replace("\n", " | "))
 draw([Lres], "62b_realmap_recovered", stat)
 draw([Lsurf, Lres], "62b_realmap_both", stat)
