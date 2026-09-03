@@ -109,10 +109,10 @@ ax.spines["polar"].set_visible(False)
 cax = fig.add_axes([0.90, 0.80, 0.015, 0.13])
 cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax)
 cb.set_ticks([-1, 0, 1])
-cb.set_ticklabels(["½×", "1×", "2×"])
+cb.set_ticklabels(["50", "100", "200%"])
 cax.tick_params(labelsize=6, length=2)
 cb.outline.set_linewidth(0.4)
-cax.set_title("vs truth", fontsize=6, color="#3f454c", pad=3)
+cax.set_title("recovery", fontsize=6, color="#3f454c", pad=3)
 fig.savefig(os.path.join(RES, "62_circular_rings.png"), dpi=400,
             bbox_inches="tight", facecolor="white")
 print(f"saved 62_circular_rings.png ({n} conditions, red rim = restored"

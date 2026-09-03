@@ -80,7 +80,7 @@ for ring in range(6):
     ax.bar(th_c, np.full(n, DR * 0.94), bottom=r_in, width=w_c,
            color=cmap(norm(M[ring])), edgecolor="none", zorder=2)
 ax.text(np.deg2rad(90), 0.0,
-        "SERS-ink map · 12:12:12\nsurface → restored\n(inner → outer)",
+        "SERS-ink map · 12:12:12\nsurface → recovered\n(inner → outer)",
         fontsize=9, color="#3f454c", ha="center", va="center", zorder=4)
 for k, s in enumerate(SUBS):
     for base in (R0, R0 + GAP + 3 * DR):
@@ -97,10 +97,10 @@ ax.spines["polar"].set_visible(False)
 cax = fig.add_axes([0.90, 0.80, 0.015, 0.13])
 cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax)
 cb.set_ticks([-1, 0, 1])
-cb.set_ticklabels(["½×", "1×", "2×"])
+cb.set_ticklabels(["50", "100", "200%"])
 cax.tick_params(labelsize=6, length=2)
 cb.outline.set_linewidth(0.4)
-cax.set_title("vs 1/3", fontsize=6, color="#3f454c", pad=3)
+cax.set_title("recovery", fontsize=6, color="#3f454c", pad=3)
 fig.savefig(os.path.join(RES, "62b_circular_realmap.png"), dpi=400,
             bbox_inches="tight", facecolor="white")
 print("saved 62b_circular_realmap.png")
