@@ -60,11 +60,20 @@ for j, (_, _, e0, e1) in enumerate(recs):
 labels = [t[1] for t in recs]
 bad = [bool(np.nanmax(np.abs(t[3])) > 1) for t in recs]   # 복원 2× 밖
 
-# 다이버징: 보라(과소) — 흰(정답) — 주황(과대), 레퍼런스 그림 톤
-cmap = LinearSegmentedColormap.from_list(
-    "pw", ["#5c5a9e", "#a9a7cf", "#f4f2ee", "#f3c977", "#e2952e"])
-cmap.set_bad("#d9dde2")
-norm = Normalize(-1, 1)   # ½×–2× — 판정 기준이 2×라 ±4×는 과함
+# 이산 등급색 (사용자 지정): ±1.25× 안 = 흰색(합격), 1.25–1.5× 옅음,
+# 1.5–2× 진함, 2× 밖 = 최진함. 과대 = 주황 계열, 과소 = 보라 계열.
+OVER = ["#f4f2ee", "#f3c977", "#e2952e", "#a85f0d"]
+UNDER = ["#f4f2ee", "#b9b7d9", "#726fb0", "#403d85"]
+_EDGES = [np.log2(1.25), np.log2(1.5), 1.0]
+
+
+def classify(v):
+    """log2 recovery → 등급색."""
+    if not np.isfinite(v):
+        return "#d9dde2"
+    a = abs(v)
+    k = 0 if a <= _EDGES[0] else 1 if a <= _EDGES[1] else 2 if a <= _EDGES[2] else 3
+    return (OVER if v > 0 else UNDER)[k]
 
 A0 = np.deg2rad(96)             # 12시 근처 틈(12°)
 SPAN = np.deg2rad(348)
@@ -75,10 +84,9 @@ fig, ax = plt.subplots(figsize=(8.6, 8.6), subplot_kw=dict(polar=True))
 for ring in range(6):
     r_in = R0 + ring * DR + (GAP if ring >= 3 else 0)
     for j in range(n):
-        v = M[ring, j]
-        col = cmap(norm(v)) if np.isfinite(v) else "#d9dde2"
         ax.bar((edges[j] + edges[j + 1]) / 2, DR * 0.92, bottom=r_in,
-               width=(edges[1] - edges[0]) * 0.96, color=col,
+               width=(edges[1] - edges[0]) * 0.96,
+               color=classify(M[ring, j]),
                edgecolor="white", linewidth=0.25, zorder=2)
 # 그룹 라벨은 중앙 구멍에 (링 위 텍스트 충돌 방지)
 ax.text(np.deg2rad(90), 0.0, "surface → restored\n(inner → outer)",
@@ -105,14 +113,19 @@ ax.text(np.deg2rad(90), r_lab + 0.65, "true THI share →", fontsize=7,
 ax.set_xticks([]); ax.set_yticks([])
 ax.set_ylim(0, r_lab + 0.75)
 ax.spines["polar"].set_visible(False)
-# 컬러바 (log2 fold)
-cax = fig.add_axes([0.90, 0.80, 0.015, 0.13])
-cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax)
-cb.set_ticks([-1, 0, 1])
-cb.set_ticklabels(["50", "100", "200%"])
-cax.tick_params(labelsize=6, length=2)
-cb.outline.set_linewidth(0.4)
-cax.set_title("recovery", fontsize=6, color="#3f454c", pad=3)
+# 이산 등급 범례
+lax = fig.add_axes([0.875, 0.72, 0.11, 0.22])
+lax.set_axis_off()
+items = [(OVER[3], "> 200%"), (OVER[2], "150–200"), (OVER[1], "125–150"),
+         (OVER[0], "80–125 (ok)"), (UNDER[1], "67–80"),
+         (UNDER[2], "50–67"), (UNDER[3], "< 50%")]
+lax.text(0.02, 1.02, "recovery", fontsize=6.5, color="#3f454c",
+         weight="bold")
+for i, (c, t) in enumerate(items):
+    y = 0.92 - i * 0.13
+    lax.add_patch(plt.Rectangle((0.02, y - 0.05), 0.16, 0.10, facecolor=c,
+                                edgecolor="#b6bcc4", linewidth=0.3))
+    lax.text(0.24, y, t, fontsize=5.8, color="#5a6067", va="center")
 fig.savefig(os.path.join(RES, "62_circular_rings.png"), dpi=400,
             bbox_inches="tight", facecolor="white")
 print(f"saved 62_circular_rings.png ({n} conditions, red rim = restored"
