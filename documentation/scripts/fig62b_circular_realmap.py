@@ -54,8 +54,10 @@ cols = [list(m["subs"]).index(s) for s in SUBS]
 Rres = pk[:, cols] / (pk[:, cols].sum(1, keepdims=True) + 1e-12)
 Rsurf = np.asarray(r.ratio_nb, float)
 sel = np.where(np.asarray(r.hit, bool))[0]
-o = np.argsort(Rsurf[sel, 2])        # 표면 THI 분율 오름차순
-sel = sel[o]
+# 스캔 순서(행 우선): THI-분율 정렬은 THI 링을 정의상 그라데이션으로 만들어
+# 오독됨 — 공간 순서면 글씨 획이 각도 방향의 연속 구간으로 살아남는다.
+xy = np.asarray(r.coords, float)
+sel = sel[np.lexsort((xy[sel, 0], xy[sel, 1]))]
 n = len(sel)
 print("positive pixels:", n)
 
@@ -89,7 +91,7 @@ for k, s in enumerate(SUBS):
                 zorder=4)
 r_out = R0 + GAP + 6 * DR
 ax.text(np.deg2rad(90), r_out + 0.45,
-        f"{n} gated pixels · sorted by surface THI fraction →", fontsize=7,
+        f"{n} gated pixels · scan order (row-major) →", fontsize=7,
         color="#8a919b", ha="center")
 ax.set_xticks([]); ax.set_yticks([])
 ax.set_ylim(0, r_out + 0.6)
