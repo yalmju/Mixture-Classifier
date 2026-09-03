@@ -205,9 +205,7 @@ for (yy, s_, c_) in zip(np.linspace(CY + 0.045, CY - 0.045, 3), SUBS,
             weight="bold", zorder=4)
 cap(0.858, 0.845, "band Ieq · composition · intensity (3 ea + p10/50/90)",
     fs=5.6)
-cap(0.858, 0.185,
-    "validated 3–24 µM · outside → pixel-library k-NN (measured-only)"
-    " · else no answer", fs=5.8, col=PLAIN)
+# 캐스케이드·가드 문구는 그림에서 뺀다 — 핵심만 (설명은 캡션/Methods 몫).
 box(0.752, 0.035, 0.212, 0.105,
     [("declared total (optional)", "t"),
      (r"$\hat{C}_i$ = $\bar{p}_i$ · C$_{total}$ — overlay when known", "s")],
