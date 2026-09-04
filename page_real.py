@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QComboBox, QDoubleSpinBox, QSpinBox, QCheckBox, QFileDialog, QColorDialog,
     QScrollArea, QFrame, QProgressBar, QLineEdit, QSizePolicy, QSplitter,
+    QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem,
 )
 
 from ui_common import *
@@ -51,6 +52,49 @@ class RealWorker(QObject):
             self.fail.emit(traceback.format_exc())
 
 
+
+class _ExportPicker(QDialog):
+    """Export에서 내보낼 항목 선택 — 표(CSV)·합성 그림·패널(이미지만) 트리.
+    부모 항목을 체크하면 자식 전부가 따라간다. 선택은 세션 안에서 기억된다."""
+
+    def __init__(self, parent, groups, state):
+        super().__init__(parent)
+        self.setWindowTitle("Export — choose items")
+        self.setMinimumSize(560, 600)
+        lay = QVBoxLayout(self)
+        self.tree = QTreeWidget(); self.tree.setHeaderHidden(True)
+        self._items = {}
+        for gname, entries in groups:
+            top = QTreeWidgetItem(self.tree, [gname])
+            top.setFlags(top.flags() | Qt.ItemFlag.ItemIsAutoTristate
+                         | Qt.ItemFlag.ItemIsUserCheckable)
+            for key, label in entries:
+                it = QTreeWidgetItem(top, [label])
+                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                it.setCheckState(0, Qt.CheckState.Checked if state.get(key, True)
+                                 else Qt.CheckState.Unchecked)
+                self._items[key] = it
+            top.setExpanded(True)
+        lay.addWidget(self.tree)
+        row = QHBoxLayout()
+        b_all = QPushButton("All"); b_none = QPushButton("None")
+        b_all.clicked.connect(lambda: self._set_all(True))
+        b_none.clicked.connect(lambda: self._set_all(False))
+        row.addWidget(b_all); row.addWidget(b_none); row.addStretch(1)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
+        row.addWidget(bb)
+        lay.addLayout(row)
+
+    def _set_all(self, on):
+        st = Qt.CheckState.Checked if on else Qt.CheckState.Unchecked
+        for it in self._items.values():
+            it.setCheckState(0, st)
+
+    def selection(self):
+        return {k: it.checkState(0) == Qt.CheckState.Checked
+                for k, it in self._items.items()}
 class RealDataPage(QWidget):
     EX_COLS = ["#d7dde6", "#a06bff", "#ff9f40", "#4dd2c0"]   # user-added band hues
     _GS_L, _GS_R, _GS_WS, _GS_HS = 0.015, 0.985, 0.06, 0.06
@@ -478,21 +522,6 @@ class RealDataPage(QWidget):
         self.cmb_umroute.addItem("MLP-corrected signal", "mlpsig")
         # 시료 유형 스위치 (2026-09-04 확정): droplet = auto µM(검증창·라이브러리),
         # leaf/ink = MLP-corrected signal을 얼굴로, raw는 근거, µM은 KT 있을 때만.
-        _stl = QLabel("   sample"); _stl.setObjectName("field")
-        self.cmb_sample = QComboBox()
-        self.cmb_sample.addItem("droplet", "droplet")
-        self.cmb_sample.addItem("leaf / ink", "leaf")
-        self.cmb_sample.setToolTip("droplet: uM readout (auto: head / pixel k-NN, inside the "
-                                   "validated window). leaf/ink: MLP-corrected signal (counts) "
-                                   "is the default report, raw VIP is the evidence, uM only as "
-                                   "the declared-total 'reported' line.")
-
-        def _on_sample(_=0):
-            key = "mlpsig" if self.cmb_sample.currentData() == "leaf" else "auto"
-            self.cmb_umroute.setCurrentIndex(self.cmb_umroute.findData(key))
-
-        self.cmb_sample.currentIndexChanged.connect(_on_sample)
-        vrow.addWidget(_stl); vrow.addWidget(self.cmb_sample)
         # LOO 스위치: 라이브러리 맵을 다시 열면 자기 항목을 빼고 조회(검증 정직성).
         # 끄면 배포 동작 — 같은 조건이 라이브러리에 있으면 그 실측 농도를 그대로.
         self.chk_loo = QCheckBox("LOO (exclude this map)"); self.chk_loo.setChecked(False)
@@ -2387,6 +2416,8 @@ class RealDataPage(QWidget):
             route = route_sel; raw_sig = True
         # 픽셀 파이 크기용 스냅샷 — 현재 판독 경로의 픽셀 값 (2026-09-04)
         self._um_display = None if out_of_lib else um_all.copy()
+        self._um_display_route = route
+        self._um_display_units = "counts" if raw_sig else "uM"
         anch = getattr(self, "_anchor", None)
         anchored = anch is not None and anch.get("subs") == nb
         afac = (np.asarray(anch["factor"], float) if anchored else None)
@@ -3020,9 +3051,21 @@ class RealDataPage(QWidget):
         if self._res is None:
             self.status.setText("run first, then export")
             self.status.setStyleSheet(f"color:{RED};"); return
+        sel = self._pick_export_items()
+        if sel is None:
+            return
         d = QFileDialog.getExistingDirectory(self, "Export folder")
         if not d:
             return
+        want = lambda k: sel.get(k, True)
+        _written = []
+        from io_utils import write_csv as _wc
+
+        def write_csv(path, head, rows):          # shadows the module function here
+            rel = os.path.relpath(path, d).replace("\\", "/")
+            key = "matrix" if rel.startswith("matrix/") else rel
+            if want(key):
+                _wc(path, head, rows); _written.append(path)
         r = self._res; nb = [r.comps[i] for i in r.nonbg]
         evidence = np.asarray(getattr(r, "A_evidence", r.A), float)
         ev_nb = evidence[:, r.nonbg]
@@ -3161,6 +3204,29 @@ class RealDataPage(QWidget):
                        "true_uM", "recovery_pct", "apparent_amount_pmol",
                        "known_total_uM", "median_capped_uM", "constraint_flag"], _sr)
             ncsv += 1
+        # 화면의 픽셀 분포(활성 판독 경로 값 그대로) — Origin에서 다시 그리기용.
+        um_d = getattr(self, "_um_display", None)
+        if um_d is not None:
+            _hd = self._hit(r)
+            _units = getattr(self, "_um_display_units", "uM")
+            _route = {"knn": "library k-NN", "pxknn": "pixel k-NN",
+                      "raw": "raw VIP band signal", "mlpsig": "MLP-corrected signal"
+                      }.get(getattr(self, "_um_display_route", ""), "model head")
+            _idx = np.where(_hd)[0]
+            write_csv(os.path.join(d, "pixel_distribution.csv"),
+                      ["x", "y"] + [f"{nm}_{_units}" for nm in nb],
+                      [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}"]
+                       + [f"{um_d[i, k]:.6g}" for k in range(len(nb))] for i in _idx])
+            _srows = []
+            for k, nm in enumerate(nb):
+                v = um_d[_idx, k]; v = v[np.isfinite(v)]
+                if v.size:
+                    _srows.append([nm, _route, _units, str(v.size),
+                                   f"{np.median(v):.4f}", f"{np.quantile(v, .25):.4f}",
+                                   f"{np.quantile(v, .75):.4f}"])
+            write_csv(os.path.join(d, "pixel_distribution_summary.csv"),
+                      ["substance", "readout_route", "units", "n_hit_px",
+                       "median", "q1", "q3"], _srows)
         # figures export WITHOUT the selection ring — the clicked-pixel highlight
         # is a working aid, not figure content. Redraw clean, save, then restore.
         _sel = self._sel
@@ -3173,7 +3239,8 @@ class RealDataPage(QWidget):
                 ("real_pixel_spectrum", self.c_spec)]
         # Concentration is intentionally omitted from the composite figure list.
         # Its maps, distribution and radial readout are exported separately below.
-        n = _save_figs(figs, d)
+        figs = [f for f in figs if want("fig:" + f[0])]
+        n = _save_figs(figs, d) if figs else 0
         # one file PER PANEL as well — figures are for the screen, panels are what
         # actually lands in a slide. Each crop includes its own title and ramp.
         import matplotlib.transforms as _mt
@@ -3188,6 +3255,8 @@ class RealDataPage(QWidget):
                 continue
             cv.draw()                                    # renderer must be current
             for label, ax, cbax in entries:
+                if not want("panel:" + label):
+                    continue
                 original_size = cv.fig.get_size_inches().copy()
                 # 패널 파일은 "이미지만": 제목·축라벨·눈금글자·주석·범례를 잠시
                 # 숨기고 크롭한다 (설명 글자는 슬라이드에서 따로 단다 — 2026-09-04).
@@ -3249,15 +3318,59 @@ class RealDataPage(QWidget):
                         a_.tick_params(length=2)
                     cv.fig.set_size_inches(original_size, forward=False)
                     cv.draw_idle()
-        if getattr(r, "calibrated", False) and r.conc is not None:
+        if (getattr(r, "calibrated", False) and r.conc is not None
+                and want("fig:real_concentration_maps")):
             if self._save_concentration_group(d):
                 n += 1
         if _sel is not None:
             self._sel = _sel; self._plot_pies(r)         # put the highlight back
-        self._export_readme(d, r, nb, [f[0] for f in figs])
-        self.status.setText(f"exported README + {ncsv} CSV + {n} PNG + {np_} panel PNG "
+        if want("README"):
+            self._export_readme(d, r, nb, [f[0] for f in figs])
+        ncsv = len(_written)
+        self.status.setText(f"exported {ncsv} CSV + {n} PNG + {np_} panel PNG "
                             f"→ {os.path.basename(d)}")
         self.status.setStyleSheet(f"color:{MUTE};")
+
+    def _pick_export_items(self):
+        """Export 선택 대화상자. None = 취소. 항목 키: CSV 파일명 / "matrix" /
+        "README" / "fig:<name>" / "panel:<label>"."""
+        r = self._res
+        cal = getattr(r, "conc", None) is not None
+        tables = [("composition.csv", "composition.csv — mean ratios"),
+                  ("per_pixel.csv", "per_pixel.csv — every pixel, all channels"),
+                  ("band_maps.csv", "band_maps.csv — displayed band values"),
+                  ("abundance_maps.csv", "abundance_maps.csv — spectral evidence")]
+        if cal:
+            tables += [("concentration_maps.csv", "concentration_maps.csv — model-head µM per pixel"),
+                       ("um_summary.csv", "um_summary.csv — µM medians / recovery")]
+        if getattr(self, "_um_display", None) is not None:
+            tables += [("pixel_distribution.csv",
+                        "pixel_distribution.csv — the strip plot's per-pixel values (Origin)"),
+                       ("pixel_distribution_summary.csv",
+                        "pixel_distribution_summary.csv — median / q1 / q3 per substance")]
+        tables += [("matrix", "matrix/ — one ny×nx table per map (Origin heatmap)"),
+                   ("README", "README.txt")]
+        figs = [("fig:real_band_maps", "raw band maps"),
+                ("fig:real_abundance_maps", "MLP reconstruction"),
+                ("fig:real_composition_pies", "primary comparison"),
+                ("fig:real_composition", "overall fractions"),
+                ("fig:real_pixel_spectrum", "selected pixel spectrum")]
+        if cal:
+            figs.append(("fig:real_concentration_maps", "apparent concentration maps"))
+        panels = []
+        for title, attr in (("Raw band maps", "_exp_maps"),
+                            ("MLP reconstruction", "_exp_abund"),
+                            ("Primary comparison", "_exp_pie"),
+                            ("Apparent concentration", "_exp_conc")):
+            ents = [("panel:" + lab, lab) for lab, _a, _c in getattr(self, attr, [])]
+            if ents:
+                panels.append((f"Panels (image only) — {title}", ents))
+        groups = [("Tables (CSV)", tables), ("Figures (composite PNG)", figs)] + panels
+        dlg = _ExportPicker(self, groups, getattr(self, "_export_sel", {}))
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        self._export_sel = dlg.selection()
+        return self._export_sel
 
     def _export_readme(self, d, r, nb, fig_names):
         """WHAT / HOW / RESULT for a Real-data export (readable without the app)."""
