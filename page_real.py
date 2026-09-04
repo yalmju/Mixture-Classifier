@@ -2077,6 +2077,11 @@ class RealDataPage(QWidget):
                 if mmed > 0 and np.isfinite(knn["uM"][i]):
                     um_all[:, i] = um_all[:, i] * (float(knn["uM"][i]) / mmed)
             knn_used = True
+        # 픽셀 클릭 판독용 스냅샷 — 스펙트럼 카드가 "현재 경로의 픽셀 µM"을
+        # 보여줄 수 있게, 경로 처리가 끝난 표시값을 보관한다 (2026-09-04).
+        self._um_display = None if out_of_lib else um_all.copy()
+        self._um_route_lbl = ({"knn": "library k-NN", "pxknn": "pixel k-NN"}
+                              .get(route, "model head"))
         anch = getattr(self, "_anchor", None)
         anchored = anch is not None and anch.get("subs") == nb
         afac = (np.asarray(anch["factor"], float) if anchored else None)
@@ -2555,14 +2560,49 @@ class RealDataPage(QWidget):
             tag += (f"  (!) low R²={r2:.2f} — references fit this pixel badly"
                     + (" (excluded)" if self.chk_rel.isChecked() else ""))
         if getattr(r, "conc", None) is not None and r.hit[i]:   # absolute µM per pixel
-            um = r.conc[i] * 1e6
-            cs = "  ·  ".join(f"{r.comps[j]} {um[k]:.3g}µM" for k, j in enumerate(r.nonbg)
-                              if np.isfinite(um[k]) and um[k] > 0)
+            # 이 픽셀의 농도: 현재 판독 경로의 표시값 + 검량선 역산값 병기 —
+            # "원래 검량 구간(9–144)에서 얼마나 달라지는지"가 클릭마다 보인다.
+            um_d = getattr(self, "_um_display", None)
+            route_lbl = getattr(self, "_um_route_lbl", "model head")
+            if um_d is not None and len(um_d) == r.n_pixels:
+                um = np.asarray(um_d[i], float)
+            else:
+                um = r.conc[i] * 1e6
+                route_lbl = "raw"
+            cal_um = None
+            try:
+                u = (self.dl_model.get("uM")
+                     if isinstance(self.dl_model, dict) else None) or {}
+                from dl_model import _band_signal, _invert_calibration
+                _rng = np.asarray(u["cal_range_uM"], float)
+                sigp = _band_signal(np.clip(r.spectra[i:i + 1], 0, None),
+                                    np.asarray(r.wn, float),
+                                    np.asarray(u["bands_cm"], float))
+                cal_um = _invert_calibration(
+                    sigp, np.asarray(u["loglinear_ab"], float), _rng)[0]
+            except Exception:
+                cal_um = None
+
+            def _cal_txt(k):
+                if cal_um is None:
+                    return ""
+                v = float(cal_um[k])
+                lo_c, hi_c = float(_rng[k, 0]), float(_rng[k, 1])
+                if v <= lo_c * 1.01:
+                    return f" (cal ≤{lo_c:g})"
+                if v >= hi_c * 0.99:
+                    return f" (cal ≥{hi_c:g})"
+                return f" (cal {v:.3g})"
+
+            cs = "  ·  ".join(
+                f"{r.comps[j]} {um[k]:.3g}{_cal_txt(k)}µM"
+                for k, j in enumerate(r.nonbg)
+                if np.isfinite(um[k]) and um[k] > 0)
             sat = ("  (!) saturated" if r.pp_theta is not None
                    and r.pp_theta[i] > 0.85 else "")
             ood_names = [r.comps[j] for k, j in enumerate(r.nonbg) if not np.isfinite(um[k])]
             if cs:
-                tag += f"  |  {cs}{sat}"
+                tag += f"  |  {route_lbl}: {cs}{sat}"
             if ood_names:
                 tag += "  |  OOD: " + ", ".join(ood_names)
         # the pixel readout goes in the TITLE. The card is short now, and this text
