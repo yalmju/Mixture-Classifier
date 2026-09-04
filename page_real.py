@@ -411,7 +411,19 @@ class RealDataPage(QWidget):
         card_ab, lay_ab = _card(
             "MLP reconstruction — components + background gate")
         lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(220)
-        lay_ab.addLayout(self._scale_row("abund", 1.0))
+        _abrow = self._scale_row("abund", 1.0)
+        # 명암: 모델 조성에 픽셀의 상대 마커밴드 신호(99퍼센타일 정규화)를 곱해
+        # raw 밴드맵의 밝고 어두움을 재구성 맵에도 싣는다 (사용자 요청 2026-09-04).
+        self.chk_abund_shade = QCheckBox("shade by signal")
+        self.chk_abund_shade.setChecked(True)
+        self.chk_abund_shade.setToolTip(
+            "multiply each pixel's model composition by its relative marker-band "
+            "signal (sum of the three VIP bands, p5–p95 mapped to 0.3–1.0 brightness) so the "
+            "reconstruction carries the raw map's light and shade. Off = flat composition.")
+        self.chk_abund_shade.toggled.connect(
+            lambda _=False: self._res is not None and self._plot_abund(self._res))
+        _abrow.addWidget(self.chk_abund_shade)
+        lay_ab.addLayout(_abrow)
 
         # Nine equal map slots across the result area. Raw uses four (merge + 3),
         # NNLS evidence uses five (merge + 3 + background), so every spatial map has the
@@ -1971,6 +1983,20 @@ class RealDataPage(QWidget):
                       and getattr(r, "ratio_nb", None) is not None)
         Anb = (np.asarray(r.ratio_nb, float) if model_view else Aall[:, nb_idx])
         hit = self._hit(r)
+        shade = (model_view and getattr(self, "chk_abund_shade", None) is not None
+                 and self.chk_abund_shade.isChecked())
+        if shade:
+            _S = np.sum([np.clip(self._band_image(r, self._band_of(r, r.comps[k])),
+                                 0, None) for k in nb_idx], axis=0)
+            # raw 밴드맵의 auto contrast 와 같은 관례: hit 픽셀 p5–p95 를
+            # 밝기 0.3–1.0 으로 (바닥 0.3 은 조성 자체가 지워지지 않게).
+            if hit.any():
+                _lo, _hi = np.quantile(_S[hit], [0.05, 0.95])
+            else:
+                _lo, _hi = 0.0, 0.0
+            _b = (0.3 + 0.7 * np.clip((_S - _lo) / (_hi - _lo), 0.0, 1.0)
+                  if _hi > _lo else np.ones_like(_S))
+            Anb = np.asarray(Anb, float) * _b[:, None]
         # Values remain available in the export for every measured pixel, but an
         # analyte prediction has no meaning after the gate called that pixel
         # background. Do not paint those nuisance responses as analyte signal.
@@ -1979,7 +2005,8 @@ class RealDataPage(QWidget):
         mscale = float(np.quantile(_mass, 0.99)) if _mass.size else 1.0
         mscale = mscale or 1.0
 
-        panels = [("merged" + (" · model comp" if model_view else ""), None, None)]
+        panels = [("merged" + (" · model comp" if model_view else "")
+                   + (" · shaded" if shade else ""), None, None)]
         panels.extend((r.comps[k], np.where(hit, Anb[:, i], np.nan), nbcols[i])
                       for i, k in enumerate(nb_idx))
         bg_idx = np.flatnonzero(np.asarray(r.bg_mask, bool))
