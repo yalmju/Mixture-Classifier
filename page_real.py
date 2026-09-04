@@ -522,7 +522,18 @@ class RealDataPage(QWidget):
         # 결과가 창보다 커지면 잘리는 대신 세로 스크롤이 생겨야 한다
         # (2026-09-02 — 농도 행을 키우자 하단이 잘리고 스크롤도 없던 문제).
         # 가로는 캔버스가 폭에 맞춰 줄어드니 스크롤바를 끈다.
-        body_scroll = QScrollArea()
+        # 세로 전용 스크롤: widgetResizable은 자식의 '최소폭'을 존중해서 내용이
+        # 창보다 넓어지면 (가로 스크롤을 껐으니) 오른쪽이 통째로 잘린다 —
+        # 2026-09-04 우측 카드 절단 사태. 자식 폭을 뷰포트 폭에 강제 고정해
+        # 가로는 래퍼 이전처럼 압축시키고 세로만 넘치게 한다.
+        class _VOnlyScroll(QScrollArea):
+            def resizeEvent(self, e):
+                super().resizeEvent(e)
+                w = self.widget()
+                if w is not None:
+                    w.setFixedWidth(self.viewport().width())
+
+        body_scroll = _VOnlyScroll()
         body_scroll.setFrameShape(QFrame.Shape.NoFrame)
         body_scroll.setWidgetResizable(True)
         body_scroll.setHorizontalScrollBarPolicy(
