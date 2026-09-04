@@ -584,6 +584,23 @@ class RealDataPage(QWidget):
             lambda: self._plot_conc(self._res) if self._res is not None else None)
         self.sl_dist_y.valueChanged.connect(lambda v: self.sl_dist_y.setToolTip(
             f"distribution Y-axis maximum: auto × {v / 100:.2f}"))
+        # signal floor: 게이트를 통과했지만 VIP 밴드 신호가 약한 픽셀(잎 바깥·
+        # 기판에 깔린 것들)을 hit에서 뺀다. 기준 = hit 픽셀 신호합 p99의 n %.
+        # 맵·파이·분포·KPI 모두 같은 hit을 쓰므로 놓을 때 전체를 다시 그린다.
+        _fl = QLabel("signal floor"); _fl.setObjectName("field")
+        self.sl_floor = QSlider(Qt.Orientation.Horizontal)
+        self.sl_floor.setRange(0, 80); self.sl_floor.setValue(0)
+        self.sl_floor.setFixedWidth(110)
+        self.lbl_floor = QLabel("off"); self.lbl_floor.setObjectName("field")
+        self.lbl_floor.setMinimumWidth(120)
+        self.sl_floor.setToolTip(
+            "drop gate-positive pixels whose summed VIP-band signal is below this "
+            "fraction of the hit pixels' 99th percentile. 0 = off. Applies to maps, "
+            "pies, distribution and the hit % alike.")
+        self.sl_floor.valueChanged.connect(self._floor_label)
+        self.sl_floor.sliderReleased.connect(
+            lambda: self._apply(self._res) if self._res is not None else None)
+        vrow.addWidget(_fl); vrow.addWidget(self.sl_floor); vrow.addWidget(self.lbl_floor)
         # the reportable window is NOT typed here — the model file carries it
         # (validated_ranges_M: levels recovered within 2-fold on a held-out split),
         # and the summary shows which window it used
@@ -1609,7 +1626,45 @@ class RealDataPage(QWidget):
         keep = r.hit & self._reliable(r)
         if self.chk_sat.isChecked():
             keep = keep & ~self._clipped(r)
+        keep = keep & self._floor_mask(r)
         return keep
+
+    def _sig_sum(self, r):
+        """픽셀별 VIP 밴드 신호합(비-배경 성분 밴드, 음수 클립). 밴드 설정으로 캐시."""
+        nb = [r.comps[i] for i in r.nonbg]
+        bands = tuple(float(self._band_of(r, nm)) for nm in nb)
+        cache = getattr(r, "_sig_sum_cache", None)
+        if cache is not None and cache[0] == bands:
+            return cache[1]
+        S = np.sum([np.clip(np.asarray(self._band_image(r, wl), float), 0, None)
+                    for wl in bands], axis=0) if bands else np.zeros(r.n_pixels)
+        r._sig_sum_cache = (bands, S)
+        return S
+
+    def _floor_mask(self, r):
+        v = (self.sl_floor.value()
+             if getattr(self, "sl_floor", None) is not None else 0)
+        if v <= 0:
+            return np.ones(r.n_pixels, bool)
+        S = self._sig_sum(r)
+        base = np.asarray(r.hit, bool)
+        p99 = float(np.quantile(S[base], 0.99)) if base.any() else 0.0
+        return S >= (v / 100.0) * p99
+
+    def _floor_label(self, v=None):
+        """슬라이더 옆 라벨: 기준 % 와 제외되는 픽셀 수(드래그 중에도 갱신)."""
+        if v is None:
+            v = self.sl_floor.value()
+        r = self._res
+        if v <= 0:
+            self.lbl_floor.setText("off"); return
+        if r is None:
+            self.lbl_floor.setText(f"{v} % of p99"); return
+        base = np.asarray(r.hit, bool)
+        S = self._sig_sum(r)
+        p99 = float(np.quantile(S[base], 0.99)) if base.any() else 0.0
+        drop = int((base & (S < (v / 100.0) * p99)).sum())
+        self.lbl_floor.setText(f"{v} % of p99 · −{drop} px")
 
     def _mean_ratio(self, r):
         """SIGNAL-WEIGHTED mean composition over the hit pixels: each pixel's ratio
