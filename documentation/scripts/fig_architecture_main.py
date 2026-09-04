@@ -186,19 +186,30 @@ cap(0.563, 0.155, "(absence gate, P < 0.2)", fs=SUB_FS)
 arrow(0.612, CY, 0.726, CY)
 cap(0.668, CY + 0.06, "gated pixels · composition", fs=6.2, col=INK)
 
-# ── concentration: 검량 + 보정 신경망 (경계 밖은 무응답) ────────────────
+# ── concentration: 신경망(조성 MLP와 같은 문법으로 시각화) + 캐스케이드 ──
+# Δ 표기·검량곡선 블록은 뺐다: Ccal이 상수로 고정임이 확인돼 넷이 12피처에서
+# µM을 직접 낸다는 서술이 정확하고, 곡선은 라이브러리 데이터로 승격됐다.
 out_tag(0.958, 0.915)
-box(0.732, 0.415, 0.130, 0.345,
-    [("reported concentration", "t"),
-     ("calibration + correction net", "p"),
-     (r"log$_{10}\hat{C}$ = log$_{10}$C$_{cal}$ + $\Delta$", "e"),
-     ("outside measured domain → no answer", "s")], lw=1.4)
-box(0.732, 0.085, 0.130, 0.255,
+cap(0.858, 0.795, "concentration net g(map)", fs=BOX_T, col=INK,
+    weight="bold")
+fc_net([0.772, 0.815, 0.858, 0.901],
+       heights=[0.34, 0.30, 0.22, 0.13],
+       slots=[8, 7, 5, 3], ells=[True, True, True, False],
+       cy=CY, dims=["12", "128", "32", "3"],
+       descs=["map features", "FC · ReLU", "FC · ReLU", "µM"],
+       label_y=0.30, desc_y=0.245, node_s=14,
+       out_colors=[CO[s] for s in SUBS])
+for (yy, s_, c_) in zip(np.linspace(CY + 0.045, CY - 0.045, 3), SUBS,
+                        [CO[s] for s in SUBS]):
+    ov.text(0.908, yy, s_, fontsize=6.2, color=c_, ha="left", va="center",
+            weight="bold", zorder=4)
+cap(0.858, 0.845, "band Ieq · composition · intensity (3 ea + p10/50/90)",
+    fs=5.6)
+# 캐스케이드·가드 문구는 그림에서 뺀다 — 핵심만 (설명은 캡션/Methods 몫).
+box(0.752, 0.035, 0.212, 0.105,
     [("declared total (optional)", "t"),
-     (r"$\hat{C}_i$ = $\bar{p}_i$ · C$_{total}$", "e"),
-     ("overlay when formulation known", "s")], ls="--", lw=0.9)
-arrow(0.797, 0.41, 0.797, 0.35, ls="--", lw=0.8)
-cap(0.797, 0.045, "domain guard: measured-map library (k-NN distance)", fs=5.6)
+     (r"$\hat{C}_i$ = $\bar{p}_i$ · C$_{total}$ — overlay when known", "s")],
+    ls="--", lw=0.9)
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "figures")
 os.makedirs(OUT, exist_ok=True)
