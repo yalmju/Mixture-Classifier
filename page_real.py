@@ -495,7 +495,7 @@ class RealDataPage(QWidget):
         vrow.addWidget(_stl); vrow.addWidget(self.cmb_sample)
         # LOO 스위치: 라이브러리 맵을 다시 열면 자기 항목을 빼고 조회(검증 정직성).
         # 끄면 배포 동작 — 같은 조건이 라이브러리에 있으면 그 실측 농도를 그대로.
-        self.chk_loo = QCheckBox("LOO (exclude this map)"); self.chk_loo.setChecked(True)
+        self.chk_loo = QCheckBox("LOO (exclude this map)"); self.chk_loo.setChecked(False)
         self.chk_loo.setToolTip("ON: treat the loaded map as unknown (its own library entry "
                                 "is excluded). OFF: deployment behaviour - an identical "
                                 "library condition returns its measured concentration.")

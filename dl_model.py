@@ -13,7 +13,7 @@ import os
 import pickle
 import numpy as np
 
-PXKNN_UM_MAX = 100.0   # 픽셀 k-NN 라이브러리에 남기는 최대 성분 농도(µM)
+PXKNN_UM_MAX = 100.0   # 픽셀 k-NN 라이브러리에 남기는 혼합물 최대 성분 농도(µM); 검량 스펙트럼은 예외
 
 
 def _refs(data_dir, baseline, trim):
@@ -2285,7 +2285,9 @@ def load_model(path):
             # 사용자 지시(2026-09-04): 성분 농도가 100 µM을 넘는 조건의 픽셀은
             # 제외 — 고농도 맵(150–500)의 밝은 픽셀이 실 시료의 밝은 픽셀을
             # 끌어가 판독을 폭주시킨다(글씨맵 71/14/53, 꼬리 500).
-            _keep = np.asarray(_d["Y"], float).max(axis=1) <= PXKNN_UM_MAX
+            # 단일성분 검량 스펙트럼(CAL-*)은 농도와 무관하게 남긴다(사용자 지시).
+            _keep = ((np.asarray(_d["Y"], float).max(axis=1) <= PXKNN_UM_MAX)
+                     | np.char.startswith(np.asarray(_d["cond"]).astype(str), "CAL-"))
             model["_pxknn"] = {k: (_d[k][_keep] if k in ("Fz", "Y", "cond") else _d[k])
                                for k in ("Fz", "Y", "cond", "mu", "sd")}
     except Exception:
