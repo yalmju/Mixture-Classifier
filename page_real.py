@@ -476,6 +476,25 @@ class RealDataPage(QWidget):
         # raw(측정) × MLP(누구 몫인가): 픽셀 총 밴드 신호를 MLP 조성으로 배분,
         # 게이트 밖(배경/잉크)은 0 — raw와의 차이가 곧 MLP가 한 일 (2026-09-04).
         self.cmb_umroute.addItem("MLP-corrected signal", "mlpsig")
+        # 시료 유형 스위치 (2026-09-04 확정): droplet = auto µM(검증창·라이브러리),
+        # leaf/ink = MLP-corrected signal을 얼굴로, raw는 근거, µM은 KT 있을 때만.
+        _stl = QLabel("   sample"); _stl.setObjectName("field")
+        self.cmb_sample = QComboBox()
+        self.cmb_sample.addItem("droplet", "droplet")
+        self.cmb_sample.addItem("leaf / ink", "leaf")
+        self.cmb_sample.setToolTip(
+            "droplet: µM 판독(auto → head/pixel k-NN, 검증창 안).
+"
+            "leaf / ink: 잉크 로딩·매질 때문에 µM-등가가 오도하므로 MLP-corrected "
+            "signal(counts)을 기본 보고로, raw VIP는 근거, µM은 declared total이 "
+            "있을 때 reported 줄로만.")
+
+        def _on_sample(_=0):
+            key = "mlpsig" if self.cmb_sample.currentData() == "leaf" else "auto"
+            self.cmb_umroute.setCurrentIndex(self.cmb_umroute.findData(key))
+
+        self.cmb_sample.currentIndexChanged.connect(_on_sample)
+        vrow.addWidget(_stl); vrow.addWidget(self.cmb_sample)
         self.cmb_umroute.setToolTip(
             "model head: residual-net estimate (validated 7.5 µM RMSE in-window).\n"
             "library k-NN: distance-weighted lookup of the 3 nearest TRAINING maps' "
