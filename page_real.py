@@ -473,6 +473,9 @@ class RealDataPage(QWidget):
         # 잎/잉크 시료용: µM-등가 대신 픽셀별 VIP 밴드 세기(counts)를 같은 배선에
         # 흘린다 — "raw VIP가 더 잘 보여준다"(2026-09-04) 비교용.
         self.cmb_umroute.addItem("raw VIP band signal", "raw")
+        # raw(측정) × MLP(누구 몫인가): 픽셀 총 밴드 신호를 MLP 조성으로 배분,
+        # 게이트 밖(배경/잉크)은 0 — raw와의 차이가 곧 MLP가 한 일 (2026-09-04).
+        self.cmb_umroute.addItem("MLP-corrected signal", "mlpsig")
         self.cmb_umroute.setToolTip(
             "model head: residual-net estimate (validated 7.5 µM RMSE in-window).\n"
             "library k-NN: distance-weighted lookup of the 3 nearest TRAINING maps' "
@@ -2339,13 +2342,20 @@ class RealDataPage(QWidget):
                     um_all[:, i] = um_all[:, i] * (float(knn["uM"][i]) / mmed)
             knn_used = True
         raw_sig = False
-        if route_sel == "raw":
+        if route_sel in ("raw", "mlpsig"):
             # 판독 대신 실측: 성분별 VIP 밴드(현재 밴드 스핀 값)의 픽셀 세기.
             # 무응답 규칙·검량창·OOD는 해당 없음(측정값 그 자체).
             um_all = np.stack([np.clip(self._band_image(r, self._band_of(r, nm)),
                                        0, None) for nm in nb], axis=1)
+            if route_sel == "mlpsig" and getattr(r, "ratio_nb", None) is not None:
+                # 총 밴드 신호(counts)를 MLP 조성으로 배분 — 경쟁 보정된 몫.
+                # 게이트 밖 픽셀(배경·잉크 지배)은 0.
+                _R = np.clip(np.asarray(r.ratio_nb, float), 0, None)
+                _R = _R / (_R.sum(axis=1, keepdims=True) + 1e-12)
+                um_all = _R * um_all.sum(axis=1, keepdims=True)
+                um_all[~hit] = 0.0
             out_of_lib = False; px_used = False; knn_used = False
-            route = "raw"; raw_sig = True
+            route = route_sel; raw_sig = True
         # 픽셀 파이 크기용 스냅샷 — 현재 판독 경로의 픽셀 값 (2026-09-04)
         self._um_display = None if out_of_lib else um_all.copy()
         anch = getattr(self, "_anchor", None)
@@ -2582,7 +2592,8 @@ class RealDataPage(QWidget):
             _iqr = (f" ({q1[i]:.0f}–{q3[i]:.0f})"
                     if np.isfinite(q1[i]) and np.isfinite(q3[i]) else "")
             if raw_sig:
-                raw_line = f"band signal {med[i]:.0f}{_iqr} counts"
+                raw_line = (("corrected" if route == "mlpsig" else "band")
+                            + f" signal {med[i]:.0f}{_iqr} counts")
             elif out_of_lib:
                 # 라이브러리에 닮은 맵이 없다 — 농도는 무응답이다. 숫자 없음.
                 raw_line = "no answer — outside library"
@@ -2646,7 +2657,8 @@ class RealDataPage(QWidget):
         if _dtot:
             _tparts.append(f"declared total {_dtot:g} µM")
         _rt = ({"knn": "library k-NN", "pxknn": "pixel k-NN",
-                "raw": "raw VIP band signal"}.get(route, "model head"))
+                "raw": "raw VIP band signal",
+                "mlpsig": "MLP-corrected signal"}.get(route, "model head"))
         if route_sel == "auto":
             _rt = "auto → " + _rt
         _rt += f" · nearest d={knn['dmin']:.1f}" if knn is not None else ""
