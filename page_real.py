@@ -2690,8 +2690,8 @@ class RealDataPage(QWidget):
 
     def _plot_comp(self, r):
         self.c_comp.fig.clear()
-        self.c_comp.fig.subplots_adjust(left=0.01, right=0.99, bottom=0.17,
-                                        top=0.80, wspace=0.02)
+        self.c_comp.fig.subplots_adjust(left=0.02, right=0.98, bottom=0.17,
+                                        top=0.80, wspace=0.18)
         cols = self._nb_colors(r); nb = [r.comps[i] for i in r.nonbg]
         hit = self._hit(r)
         weights = np.clip(np.asarray(r.spectra, float), 0.0, None).sum(axis=1)
@@ -2716,7 +2716,7 @@ class RealDataPage(QWidget):
                    colors=[cols[i] for i in keep], autopct="%1.0f%%",
                    pctdistance=0.62,
                    textprops={"fontsize": 11, "fontweight": "bold", "color": INK},
-                   radius=1.05)
+                   radius=0.9)          # 1.05는 이웃 파이와 겹쳤다 (2026-09-04)
             ax.set_title(title, fontsize=9, fontweight="bold", pad=1)
             ax.set_aspect("equal")
         handles = [Patch(facecolor=cols[i], label=nm) for i, nm in enumerate(nb)]
@@ -3023,7 +3023,21 @@ class RealDataPage(QWidget):
             cv.draw()                                    # renderer must be current
             for label, ax, cbax in entries:
                 original_size = cv.fig.get_size_inches().copy()
+                # 패널 파일은 "이미지만": 제목·축라벨·눈금글자·주석·범례를 잠시
+                # 숨기고 크롭한다 (설명 글자는 슬라이드에서 따로 단다 — 2026-09-04).
+                hidden = []
+                for a_ in ([ax] + ([cbax] if cbax is not None else [])):
+                    arts = ([a_.title, a_.xaxis.label, a_.yaxis.label]
+                            + list(a_.texts) + a_.get_xticklabels()
+                            + a_.get_yticklabels())
+                    lg = a_.get_legend()
+                    if lg is not None:
+                        arts.append(lg)
+                    for t_ in arts:
+                        hidden.append((t_, t_.get_visible())); t_.set_visible(False)
+                    a_.tick_params(length=0)
                 try:
+                    cv.draw()
                     ren = cv.get_renderer() if hasattr(cv, "get_renderer") else None
                     bb = ax.get_tightbbox(ren)
                     if cbax is not None:
@@ -3063,6 +3077,10 @@ class RealDataPage(QWidget):
                 except Exception:
                     pass                                 # one bad crop must not kill export
                 finally:
+                    for t_, vis in hidden:
+                        t_.set_visible(vis)
+                    for a_ in ([ax] + ([cbax] if cbax is not None else [])):
+                        a_.tick_params(length=2)
                     cv.fig.set_size_inches(original_size, forward=False)
                     cv.draw_idle()
         if getattr(r, "calibrated", False) and r.conc is not None:
