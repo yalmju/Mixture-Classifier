@@ -3150,6 +3150,9 @@ class RealDataPage(QWidget):
             if want(key):
                 _wc(path, head, rows); _written.append(path)
         r = self._res; nb = [r.comps[i] for i in r.nonbg]
+        # 내보내는 hit = 화면의 유효 hit (게이트 ∧ 신뢰도 ∧ 포화 ∧ signal floor ∧
+        # 잎 마스크). 슬라이더로 걸러낸 픽셀은 파일에서도 hit=0 (사용자 2026-09-04).
+        _eff = self._hit(r)
         evidence = np.asarray(getattr(r, "A_evidence", r.A), float)
         ev_nb = evidence[:, r.nonbg]
         ev_sum = ev_nb.sum(axis=1, keepdims=True)
@@ -3176,7 +3179,7 @@ class RealDataPage(QWidget):
                 + ([f"conc_uM_{nm}" for nm in nb] if cal else []) + ["reliability_r2"]
                 + (["clipped_frac"] if has_sat else [])
                 + (["bg_match"] if has_bg else []))
-        rows = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}", int(r.hit[i]),
+        rows = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}", int(_eff[i]),
                  f"{inten[i]:.4f}"]
                 + [f"{r.ratio_nb[i, k]:.4f}" for k in range(len(nb))]
                 + [f"{r.A[i, k]:.5f}" for k in range(len(r.comps))]
@@ -3243,7 +3246,7 @@ class RealDataPage(QWidget):
         if cal:
             for k, nm in enumerate(nb):
                 _mat(f"conc_uM_{nm}.csv", r.conc[:, k] * 1e6); nmat += 1
-        _mat("hit.csv", np.asarray(r.hit, float)); nmat += 1
+        _mat("hit.csv", np.asarray(_eff, float)); nmat += 1
         ncsv += nmat
         # the µM summary-bar table, numbers identical to the drawn bars
         if cal:
@@ -3315,12 +3318,15 @@ class RealDataPage(QWidget):
                                    f"{np.quantile(v, .75):.4f}",
                                    f"{np.percentile(v, 90):.4f}",
                                    f"{np.percentile(v, 99):.4f}", f"{v.max():.4f}",
-                                   f"{_ymax:.4f}" if _ymax is not None else ""])
+                                   f"{_ymax:.4f}" if _ymax is not None else "",
+                                   str(self.sl_floor.value()
+                                       if getattr(self, "sl_floor", None) is not None else 0)])
             # app_y_max = 앱 strip plot의 y축 상한(99퍼센타일 기반 × 슬라이더) —
             # Origin에서 같은 축 범위를 쓰면 화면과 같은 그림이 된다.
             write_csv(os.path.join(d, "pixel_distribution_summary.csv"),
                       ["substance", "readout_route", "units", "n_hit_px",
-                       "median", "q1", "q3", "p90", "p99", "max", "app_y_max"], _srows)
+                       "median", "q1", "q3", "p90", "p99", "max", "app_y_max",
+                       "signal_floor_pct"], _srows)
         # figures export WITHOUT the selection ring — the clicked-pixel highlight
         # is a working aid, not figure content. Redraw clean, save, then restore.
         _sel = self._sel
@@ -3510,10 +3516,18 @@ class RealDataPage(QWidget):
                 f"- Unmixing: {r.method.upper()} against pure reference templates",
                 f"- Baseline removal: {'on' if cfg.get('baseline') else 'off'}; "
                 f"spectral window: {window}",
-                f"- Calibration: {os.path.basename(self.calib_path) if self.calib_path else 'none (ratio only)'}"],
+                f"- Calibration: {os.path.basename(self.calib_path) if self.calib_path else 'none (ratio only)'}",
+                "- Pixel filters as displayed (the 'hit' column in per_pixel.csv and "
+                "matrix/hit.csv, and every hit-only table, use pixels AFTER these): "
+                f"signal floor {getattr(self, 'sl_floor', None).value() if getattr(self, 'sl_floor', None) is not None else 0} % of hit p99"
+                f"{' (' + self.lbl_floor.text() + ')' if getattr(self, 'lbl_floor', None) is not None and self.lbl_floor.text() != 'off' else ''}; "
+                f"low-R² drop {'on' if self.chk_rel.isChecked() else 'off'}; "
+                f"saturation quarantine {'on' if self.chk_sat.isChecked() else 'off'}; "
+                f"ink-area-only {'on' if getattr(self, 'chk_leaf', None) is not None and self.chk_leaf.isChecked() else 'off'}"],
             "Results": [
                 f"- Dominant substance: {r.dominant}",
-                f"- Substance pixels (hit fraction): {r.hit_frac:.0%}",
+                f"- Substance pixels (hit fraction): {r.hit_frac:.0%} by the gate; "
+                f"{int(self._hit(r).sum())} px ({self._hit(r).mean():.0%}) after the filters above",
                 f"- Mean composition over hit pixels: {ratio_str}",
                 f"- Mean reconstruction R²: {r.mean_r2:.2f}",
                 f"- Median concentration across hit pixels: {conc_str}"],
