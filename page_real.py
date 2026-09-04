@@ -470,6 +470,9 @@ class RealDataPage(QWidget):
         self.cmb_umroute.addItem("model head", "model")
         self.cmb_umroute.addItem("library k-NN", "knn")
         self.cmb_umroute.addItem("pixel k-NN", "pxknn")
+        # 잎/잉크 시료용: µM-등가 대신 픽셀별 VIP 밴드 세기(counts)를 같은 배선에
+        # 흘린다 — "raw VIP가 더 잘 보여준다"(2026-09-04) 비교용.
+        self.cmb_umroute.addItem("raw VIP band signal", "raw")
         self.cmb_umroute.setToolTip(
             "model head: residual-net estimate (validated 7.5 µM RMSE in-window).\n"
             "library k-NN: distance-weighted lookup of the 3 nearest TRAINING maps' "
@@ -2335,7 +2338,15 @@ class RealDataPage(QWidget):
                 if mmed > 0 and np.isfinite(knn["uM"][i]):
                     um_all[:, i] = um_all[:, i] * (float(knn["uM"][i]) / mmed)
             knn_used = True
-        # 픽셀 파이 크기용 스냅샷 — 현재 판독 경로의 픽셀 µM (2026-09-04)
+        raw_sig = False
+        if route_sel == "raw":
+            # 판독 대신 실측: 성분별 VIP 밴드(현재 밴드 스핀 값)의 픽셀 세기.
+            # 무응답 규칙·검량창·OOD는 해당 없음(측정값 그 자체).
+            um_all = np.stack([np.clip(self._band_image(r, self._band_of(r, nm)),
+                                       0, None) for nm in nb], axis=1)
+            out_of_lib = False; px_used = False; knn_used = False
+            route = "raw"; raw_sig = True
+        # 픽셀 파이 크기용 스냅샷 — 현재 판독 경로의 픽셀 값 (2026-09-04)
         self._um_display = None if out_of_lib else um_all.copy()
         anch = getattr(self, "_anchor", None)
         anchored = anch is not None and anch.get("subs") == nb
@@ -2346,6 +2357,8 @@ class RealDataPage(QWidget):
         # training range. Those pixels may not silently drive the medians.
         ood = getattr(r, "conc_ood", None)
         rngs = getattr(r, "conc_ranges", None)
+        if raw_sig:
+            ood = None; rngs = None            # counts에는 검량창/OOD 개념이 없다
         hi_um = None
         lo_um = None
         if rngs is not None:
@@ -2366,6 +2379,10 @@ class RealDataPage(QWidget):
                  if hasattr(self, "sl_map_scale") else 1.0)
         self._ensure_conc_scale_controls(nb, vmax)
         vmaxes = [float(self._conc_scale_spins[nm].value()) for nm in nb]
+        if raw_sig:
+            vmaxes = [float(np.quantile(um_all[hit, i], 0.99)) if hit.any() and
+                      np.isfinite(um_all[hit, i]).any() else 1.0
+                      for i in range(len(nb))]
         # Snapshot the exact displayed values for a clean export-only grouped figure.
         # Reusing screen axes can capture the neighbouring distribution's labels.
         self._conc_export = dict(nb=list(nb), colors=list(nbcols),
@@ -2405,7 +2422,7 @@ class RealDataPage(QWidget):
             cb = self.c_conc.fig.colorbar(im, cax=cax,
                                           orientation="horizontal")
             cb.set_ticks([0.0, vmaxes[i]])
-            cb.set_ticklabels(["0", f"{vmaxes[i]:.0f} µM"])
+            cb.set_ticklabels(["0", f"{vmaxes[i]:.0f}" + ("" if raw_sig else " µM")])
             cax.tick_params(labelsize=8, length=2, pad=1)
             cb.outline.set_linewidth(0.4)
             self._exp_conc.append((f"map_{nm}", ax, cax))
@@ -2564,7 +2581,9 @@ class RealDataPage(QWidget):
             # 병기 — 넓으면 무른 판독이라는 게 리포트 줄에서 바로 보인다.
             _iqr = (f" ({q1[i]:.0f}–{q3[i]:.0f})"
                     if np.isfinite(q1[i]) and np.isfinite(q3[i]) else "")
-            if out_of_lib:
+            if raw_sig:
+                raw_line = f"band signal {med[i]:.0f}{_iqr} counts"
+            elif out_of_lib:
                 # 라이브러리에 닮은 맵이 없다 — 농도는 무응답이다. 숫자 없음.
                 raw_line = "no answer — outside library"
             elif px_used:
@@ -2626,17 +2645,18 @@ class RealDataPage(QWidget):
         _dtot = self._known_total_uM()
         if _dtot:
             _tparts.append(f"declared total {_dtot:g} µM")
-        _rt = ({"knn": "library k-NN", "pxknn": "pixel k-NN"}.get(route, "model head"))
+        _rt = ({"knn": "library k-NN", "pxknn": "pixel k-NN",
+                "raw": "raw VIP band signal"}.get(route, "model head"))
         if route_sel == "auto":
             _rt = "auto → " + _rt
         _rt += f" · nearest d={knn['dmin']:.1f}" if knn is not None else ""
         axb.set_title((" · ".join(_tparts) + "  —  " if _tparts else "")
-                      + f"readout: {_rt} · per-pixel µM · black – median"
+                      + f"readout: {_rt} · " + ("per-pixel counts" if raw_sig else "per-pixel µM") + " · black – median"
                       + (" · orange – anchored" if anchored else "")
                       + (" · red – truth" if tv is not None else "")
                       + (" · blue – declared-total" if kt is not None else ""),
                       fontsize=9)
-        axb.set_ylabel("µM per pixel", fontsize=9)
+        axb.set_ylabel("band signal (counts) per pixel" if raw_sig else "µM per pixel", fontsize=9)
         axb.tick_params(labelsize=9)
         self._exp_conc.append(("pixel_distribution", axb, None))
         self.c_conc.draw_idle()
