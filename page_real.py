@@ -2657,8 +2657,9 @@ class RealDataPage(QWidget):
             self.c_pie.mpl_disconnect(old)
             self.c_pie._rowgs_cid = None
         self.c_pie.fig.clear()
+        # 4패널: NNLS 조성 | MLP 조성 | MLP 농도(size ~ µM) | Δ  (2026-09-04)
         pgs = self.c_pie.fig.add_gridspec(
-            1, 3, wspace=0.20, left=0.02, right=0.98, bottom=0.08, top=0.88)
+            1, 4, wspace=0.16, left=0.02, right=0.98, bottom=0.08, top=0.88)
         cols = self._nb_colors(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux, uy = np.unique(x), np.unique(y)
@@ -2680,10 +2681,14 @@ class RealDataPage(QWidget):
             if ref > 0:
                 prad = rad * np.clip(np.sqrt(tot / ref), 0.22, 1.0)
                 size_by_um = True
-        titles = ("NNLS (raw spectral)", "MLP" if r.method == "dlpx"
-                  else f"After · {r.method.upper()}")
+        after_name = "MLP" if r.method == "dlpx" else f"After · {r.method.upper()}"
+        # (조성행렬, 제목, µM 크기 여부): 조성 파이 둘은 균일 크기, 셋째가 농도 파이
+        panels = [(before, "NNLS (raw spectral)", False),
+                  (after, after_name, False),
+                  (after, after_name + " · size ~ µM" if size_by_um
+                   else after_name + " · (no µM)", True)]
         axes = []
-        for panel, (ratios, title) in enumerate(zip((before, after), titles), 1):
+        for panel, (ratios, title, sized) in enumerate(panels, 1):
             ax = self.c_pie.style(self.c_pie.fig.add_subplot(pgs[0, panel - 1]))
             axes.append(ax); self._click_axes.append(ax)
             ax.set_facecolor(self.PIE_BG)
@@ -2702,7 +2707,8 @@ class RealDataPage(QWidget):
                     if frac <= 0.002:
                         continue
                     a1 = a0 - frac * 360.0
-                    wedges.append(Wedge((x[i], y[i]), prad[i], a1, a0))
+                    wedges.append(Wedge((x[i], y[i]), prad[i] if sized else rad,
+                                        a1, a0))
                     wcols.append(cols[k]); a0 = a1
             if wedges:
                 ax.add_collection(PatchCollection(wedges, facecolors=wcols,
@@ -2711,11 +2717,10 @@ class RealDataPage(QWidget):
             ax.set_ylim(*((y.max()+sy, y.min()-sy) if self._flip()
                           else (y.min()-sy, y.max()+sy)))
             ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
-            ax.set_title(title + ("  ·  size ~ µM" if size_by_um else ""),   # Arial에 ∝ 없음
-                         fontsize=9, fontweight="bold", pad=2)
+            ax.set_title(title, fontsize=9, fontweight="bold", pad=2)
         # A direct difference panel removes the need to mentally subtract thousands
         # of tiny pies. Value = mean absolute component change in percentage points.
-        axd = self.c_pie.style(self.c_pie.fig.add_subplot(pgs[0, 2]))
+        axd = self.c_pie.style(self.c_pie.fig.add_subplot(pgs[0, 3]))
         axes.append(axd); self._click_axes.append(axd)
         delta = np.mean(np.abs(after - before), axis=1) * 100.0
         dgrid = np.full((len(uy), len(ux)), np.nan)
@@ -2746,7 +2751,8 @@ class RealDataPage(QWidget):
         self._pie_ax = axes[1]
         self._exp_pie = [("composition_before", axes[0], None),
                          ("composition_after", axes[1], None),
-                         ("composition_difference", axes[2], cb.ax)]
+                         ("concentration_pies", axes[2], None),
+                         ("composition_difference", axes[3], cb.ax)]
         # The persistent colour chips above the dashboard already identify each
         # substance; repeating them here only covers the bottom of both maps.
         self.c_pie.draw_idle()
