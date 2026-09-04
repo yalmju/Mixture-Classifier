@@ -2602,6 +2602,7 @@ class RealDataPage(QWidget):
         _yfactor = (self.sl_dist_y.value() / 100.0
                     if hasattr(self, "sl_dist_y") else 1.0)
         axb.set_ylim(0, max(_base, 1e-6) * 1.45 * _yfactor)
+        self._um_display_ymax = float(max(_base, 1e-6) * 1.45 * _yfactor)
         if out_of_lib and kt is None and tv is None:
             axb.set_ylim(0, 1); axb.set_yticks([])
             axb.set_ylabel("")
@@ -3214,24 +3215,30 @@ class RealDataPage(QWidget):
                       }.get(getattr(self, "_um_display_route", ""), "model head")
             _idx = np.where(_hd)[0]
             _umz = np.where(_hd[:, None] & np.isfinite(um_d), um_d, 0.0)
+            # strip-plot data: hit 픽셀만(0 없음). 전체 격자(비-hit = 0)는 matrix/display_*.
             write_csv(os.path.join(d, "pixel_distribution.csv"),
-                      ["x", "y", "hit"] + [f"{nm}_{_units}" for nm in nb],
-                      [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}", int(_hd[i])]
-                       + [f"{_umz[i, k]:.6g}" for k in range(len(nb))]
-                       for i in range(r.n_pixels)])
+                      ["x", "y"] + [f"{nm}_{_units}" for nm in nb],
+                      [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}"]
+                       + [f"{um_d[i, k]:.6g}" for k in range(len(nb))] for i in _idx])
             # 같은 값을 ny×nx 매트릭스로도 (Origin 히트맵): 비-hit 픽셀 = 0
             for k, nm in enumerate(nb):
                 _mat(f"display_{_units}_{nm}.csv", _umz[:, k])
             _srows = []
+            _ymax = getattr(self, "_um_display_ymax", None)
             for k, nm in enumerate(nb):
                 v = um_d[_idx, k]; v = v[np.isfinite(v)]
                 if v.size:
                     _srows.append([nm, _route, _units, str(v.size),
                                    f"{np.median(v):.4f}", f"{np.quantile(v, .25):.4f}",
-                                   f"{np.quantile(v, .75):.4f}"])
+                                   f"{np.quantile(v, .75):.4f}",
+                                   f"{np.percentile(v, 90):.4f}",
+                                   f"{np.percentile(v, 99):.4f}", f"{v.max():.4f}",
+                                   f"{_ymax:.4f}" if _ymax is not None else ""])
+            # app_y_max = 앱 strip plot의 y축 상한(99퍼센타일 기반 × 슬라이더) —
+            # Origin에서 같은 축 범위를 쓰면 화면과 같은 그림이 된다.
             write_csv(os.path.join(d, "pixel_distribution_summary.csv"),
                       ["substance", "readout_route", "units", "n_hit_px",
-                       "median", "q1", "q3"], _srows)
+                       "median", "q1", "q3", "p90", "p99", "max", "app_y_max"], _srows)
         # figures export WITHOUT the selection ring — the clicked-pixel highlight
         # is a working aid, not figure content. Redraw clean, save, then restore.
         _sel = self._sel
