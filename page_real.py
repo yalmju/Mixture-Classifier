@@ -211,6 +211,15 @@ class RealDataPage(QWidget):
         _rl = QLabel("reliability (min R²)"); _rl.setObjectName("field")
         relrow = QHBoxLayout(); relrow.setSpacing(4)
         relrow.addWidget(self.chk_rel); relrow.addWidget(self.rel_thr)
+        # 잎 시료: @1000 cm⁻¹ 밝기(Otsu)로 잎/외부를 가르고 외부 픽셀은 전부
+        # null, 잎 경계는 모든 맵에 흰 윤곽선 (2026-09-04, 사용자 지정).
+        self.chk_leaf = QCheckBox("leaf: null outside"); self.chk_leaf.setChecked(False)
+        self.chk_leaf.setToolTip("잎 시료 전용: 1000 cm-1 밴드가 밝은 영역(잎 바깥 기판)을 "
+                                 "마스크로 잡아 분석에서 제외하고 잎 경계를 흰 윤곽선으로 "
+                                 "그린다. 액적 맵에서는 끄세요.")
+        self.chk_leaf.toggled.connect(
+            lambda _=False: self._apply(self._res) if self._res is not None else None)
+        relrow.addWidget(self.chk_leaf)
         relcol.addWidget(_rl); relcol.addLayout(relrow)
         # saturation is quarantined AS saturation — its own category, not a repair
         # you have to trust: clipped pixels leave every statistic and are painted
@@ -1614,8 +1623,76 @@ class RealDataPage(QWidget):
         self.status.setStyleSheet(f"color:{RED};")
         print(tb, file=sys.stderr)
 
+    def _leaf_mask(self, r):
+        """잎(True)/외부(False) 픽셀 마스크. @1000 cm⁻¹ 밴드의 Otsu 임계로 밝은
+        쪽 = 잎 바깥 기판. 격자에서 구멍을 메우고 가장 큰 연결영역만 잎으로."""
+        from scipy import ndimage
+        # baseline-제거된 r.spectra는 기판의 넓은 배경이 깎여 잎/외부 분리가
+        # 흐려진다(외부 7px로 오판). 원본 맵의 1000±8 최대값은 134/134 완벽 분리
+        # (Sample1 검증, 2026-09-04) — 원본을 직접 읽는다.
+        try:
+            from unmix import load_map
+            wn0, cube, _m, _c = load_map(self.test)
+            wn0 = np.asarray(wn0, float); cube = np.asarray(cube, float)
+            win = np.abs(wn0 - 1000.0) <= 8.0
+            if cube.shape[0] == r.n_pixels and win.any():
+                b = cube[:, win].max(axis=1)
+            else:
+                b = self._band_image(r, 1000.0)
+        except Exception:
+            b = self._band_image(r, 1000.0)
+        fin = np.isfinite(b)
+        if fin.sum() < 10:
+            return np.ones(r.n_pixels, bool)
+        hist, edges = np.histogram(b[fin], bins=128)
+        mids = (edges[:-1] + edges[1:]) / 2
+        w = hist.astype(float); csum = np.cumsum(w); cmean = np.cumsum(w * mids)
+        best, thr = -1.0, float(np.median(b[fin]))
+        for i in range(1, len(mids) - 1):
+            w0, w1 = csum[i], csum[-1] - csum[i]
+            if w0 <= 0 or w1 <= 0:
+                continue
+            m0, m1 = cmean[i] / w0, (cmean[-1] - cmean[i]) / w1
+            var = w0 * w1 * (m0 - m1) ** 2
+            if var > best:
+                best, thr = var, mids[i]
+        off = b > thr
+        rows, cc, ny, nx, _ux, _uy = self._grid_rc(r)
+        g = np.zeros((ny, nx), bool); g[rows, cc] = off
+        # 구멍 메우기는 금물(맵 가장자리가 잎이면 기판 영역이 '구멍'으로 메워져
+        # 266→394로 폭발). 대신 8px 미만의 작은 밝은 점(잎 위 핫스팟)만 잎으로
+        # 되돌린다 — 기판은 넓은 연결영역이라 살아남는다.
+        lab, n = ndimage.label(g)
+        if n:
+            sizes = ndimage.sum(g, lab, index=np.arange(1, n + 1))
+            small = np.isin(lab, np.where(sizes < 8)[0] + 1)
+            g[small] = False
+        return ~g[rows, cc]
+
+    def _leaf_outline(self, ax, r, extent, origin):
+        """잎 경계 윤곽선 — 마스크가 있을 때만."""
+        m = getattr(r, "leaf_mask", None)
+        if m is None:
+            return
+        rows, cc, ny, nx, _ux, _uy = self._grid_rc(r)
+        g = np.zeros((ny, nx)); g[rows, cc] = m.astype(float)
+        try:
+            ax.contour(g, levels=[0.5], colors="white", linewidths=0.9,
+                       extent=extent, origin=origin, zorder=6)
+        except Exception:
+            pass
+
     def _apply(self, r):
         self._res = r; self._sel = None
+        # 잎 마스크: 원본 hit을 보관해 두고 토글에 따라 외부 픽셀을 null 처리
+        if not hasattr(r, "hit_orig"):
+            r.hit_orig = np.asarray(r.hit, bool).copy()
+        if getattr(self, "chk_leaf", None) is not None and self.chk_leaf.isChecked():
+            r.leaf_mask = self._leaf_mask(r)
+            r.hit = r.hit_orig & r.leaf_mask
+        else:
+            r.leaf_mask = None
+            r.hit = r.hit_orig.copy()
         self._click_axes = []            # one reset per run — every plot re-registers
         self.pbar.hide()
         self.btn.setEnabled(True); self.btn.setText("Unmix")
@@ -1753,6 +1830,7 @@ class RealDataPage(QWidget):
             norm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
         ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                   interpolation="nearest")
+        self._leaf_outline(ax, r, extent, origin)
         ax.set_title("merged (R/G/B)", fontsize=8)
         ax.set_xticks([]); ax.set_yticks([])
         # no legend under the merge — the per-panel titles already carry name + band
@@ -1771,6 +1849,7 @@ class RealDataPage(QWidget):
             _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                             interpolation="nearest", cmap=cmap,
                             vmin=lims[i][0], vmax=lims[i][1])
+            self._leaf_outline(ax, r, extent, origin)
             # mathtext, not "cm⁻¹" — Arial has no superscript-minus glyph, so the
             # literal character renders as a box in the exported PNG
             ax.set_title(f"{nm} @ {bands[i]:.0f} cm$^{{-1}}$", fontsize=8)
@@ -1791,6 +1870,7 @@ class RealDataPage(QWidget):
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", ex_cols[ei]])
             _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                             interpolation="nearest", cmap=cmap, vmin=va, vmax=vb)
+            self._leaf_outline(ax, r, extent, origin)
             ax.set_title(f"@ {wl:.0f} cm$^{{-1}}$", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
             cb = self._side_colorbar(self.c_maps.fig, ax, _im,
@@ -1875,6 +1955,7 @@ class RealDataPage(QWidget):
                     norm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
                 ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest")
+                self._leaf_outline(ax, r, extent, origin)
                 title = f"merged ({vlo:.3g}–{vshared:.3g})"
             else:
                 grid = np.full((ny, nx), np.nan); grid[rows, cc] = values
@@ -1887,6 +1968,7 @@ class RealDataPage(QWidget):
                 panel_im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                                      interpolation="nearest", cmap=cmap,
                                      vmin=0.0 if is_bg else vlo, vmax=_vmax)
+                self._leaf_outline(ax, r, extent, origin)
                 self._side_colorbar(
                     self.c_abund.fig, ax, panel_im,
                     ticks=[0.0 if is_bg else vlo, _vmax],
@@ -2311,6 +2393,7 @@ class RealDataPage(QWidget):
             im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                            interpolation="nearest", cmap=cmap, vmin=0.0,
                            vmax=vmaxes[i])
+            self._leaf_outline(ax, r, extent, origin)
             # 스케일 바 — 세 맵이 같은 0..vmax 램프를 쓴다는 것까지 같이 보인다.
             # aspect=equal 로 축 상자가 줄어들 때 맵은 아래(S), 바는 위(N)로
             # 붙여 둘 사이가 벌어지지 않게 한다 (2026-09-02).
