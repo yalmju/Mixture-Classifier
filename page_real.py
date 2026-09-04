@@ -2711,7 +2711,7 @@ class RealDataPage(QWidget):
             ax.set_ylim(*((y.max()+sy, y.min()-sy) if self._flip()
                           else (y.min()-sy, y.max()+sy)))
             ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
-            ax.set_title(title + ("  ·  size ∝ µM" if size_by_um else ""),
+            ax.set_title(title + ("  ·  size ~ µM" if size_by_um else ""),   # Arial에 ∝ 없음
                          fontsize=9, fontweight="bold", pad=2)
         # A direct difference panel removes the need to mentally subtract thousands
         # of tiny pies. Value = mean absolute component change in percentage points.
