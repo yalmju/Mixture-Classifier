@@ -25,8 +25,10 @@ import os
 import re
 
 # INK is the SERS-ink/substrate signal, not a pesticide.
-# Treat it as background for the hit gate, composition denominator, and UI.
-BLANK_ALIASES = {"blk", "blank", "background", "bg", "none", "ink"}
+# LEAF is the leaf-sample off-leaf/bare-substrate signal (260902 leaf maps):
+# those pixels carry no analyte yet passed the gate and got compositions.
+# Treat both as background for the hit gate, composition denominator, and UI.
+BLANK_ALIASES = {"blk", "blank", "background", "bg", "none", "ink", "leaf"}
 _SUFFIX = "_corrected"
 # CSVs that live beside the maps but are NOT maps — never treat them as references
 _NON_MAP = {"samples.csv", "mixtures.csv"}

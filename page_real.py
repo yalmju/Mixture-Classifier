@@ -638,6 +638,11 @@ class RealDataPage(QWidget):
             wl = picks.get(nm) or []
             out[nm] = float(wl[0]) if wl else float(
                 r.wn[int(np.argmax(r.templates[r.nonbg][i]))])
+        # TBZ는 VIP가 1010을 고르지만 이미징은 1270이 낫다(잎맵에서 확인,
+        # 2026-09-04) — µM 헤드의 TBZ 마커(1270)와도 일치. 축 안일 때만 강제.
+        if "TBZ" in out and r.wn is not None \
+                and float(r.wn[0]) <= 1270.0 <= float(r.wn[-1]):
+            out["TBZ"] = 1270.0
         return out
 
     def _parse_scale(self, key):
@@ -1809,7 +1814,15 @@ class RealDataPage(QWidget):
         X = np.clip(np.asarray(r.spectra, float), 0, None)[hitm]
         sig = np.log1p(np.clip(_band_signal(X, wn, bands), 0, None))
         tot = np.log1p(X.sum(1))[:, None]
+        # 라이브러리 서명은 모델 3성분(DQ/TBZ/THI) 순서 고정 — ratio_nb에
+        # 다른 비배경 클래스가 끼거나 순서가 달라도 그 3열만 골라 맞춘다
+        # (LEAF가 분석물로 잡히며 7 vs 8열로 깨졌던 2026-09-04 크래시 방지).
+        usubs = list(u.get("subs", ("DQ", "TBZ", "THI")))
+        nbn = [r.comps[j] for j in r.nonbg]
+        if not all(s in nbn for s in usubs):
+            return None
         Rq = np.clip(np.asarray(r.ratio_nb, float), 0, None)[hitm]
+        Rq = Rq[:, [nbn.index(s) for s in usubs]]
         F = (np.hstack([sig, tot, Rq]) - lib["mu"]) / lib["sd"]
         Fz = np.asarray(lib["Fz"], float); Y = np.asarray(lib["Y"], float)
         cond = np.asarray(lib["cond"]).astype(str)
