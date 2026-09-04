@@ -493,6 +493,15 @@ class RealDataPage(QWidget):
 
         self.cmb_sample.currentIndexChanged.connect(_on_sample)
         vrow.addWidget(_stl); vrow.addWidget(self.cmb_sample)
+        # LOO 스위치: 라이브러리 맵을 다시 열면 자기 항목을 빼고 조회(검증 정직성).
+        # 끄면 배포 동작 — 같은 조건이 라이브러리에 있으면 그 실측 농도를 그대로.
+        self.chk_loo = QCheckBox("LOO (exclude this map)"); self.chk_loo.setChecked(True)
+        self.chk_loo.setToolTip("ON: treat the loaded map as unknown (its own library entry "
+                                "is excluded). OFF: deployment behaviour - an identical "
+                                "library condition returns its measured concentration.")
+        self.chk_loo.toggled.connect(
+            lambda _=False: self._plot_conc(self._res) if self._res is not None else None)
+        vrow.addWidget(self.chk_loo)
         self.cmb_umroute.setToolTip(
             "model head: residual-net estimate (validated 7.5 µM RMSE in-window).\n"
             "library k-NN: distance-weighted lookup of the 3 nearest TRAINING maps' "
@@ -2021,8 +2030,9 @@ class RealDataPage(QWidget):
         Z = np.array([e["z"] for e in rows], float)
         Y = np.array([e["y"] for e in rows], float)
         d = np.linalg.norm(Z - z[None, :], axis=1)
+        loo = getattr(self, "chk_loo", None) is None or self.chk_loo.isChecked()
         for j, e in enumerate(rows):
-            if e["name"] == base:
+            if loo and e["name"] == base:
                 d[j] = np.inf
         idx = np.argsort(d)[:3]
         w = 1.0 / np.maximum(d[idx], 1e-9); w = w / w.sum()
@@ -2051,7 +2061,9 @@ class RealDataPage(QWidget):
         F = (np.hstack([sig, tot, Rq]) - lib["mu"]) / lib["sd"]
         Fz = np.asarray(lib["Fz"], float); Y = np.asarray(lib["Y"], float)
         cond = np.asarray(lib["cond"]).astype(str)
-        excl = cond == os.path.basename(self.test or "")
+        excl = ((cond == os.path.basename(self.test or ""))
+                if getattr(self, "chk_loo", None) is None or self.chk_loo.isChecked()
+                else np.zeros(len(cond), bool))
         Zl = Fz[~excl]; Yl = Y[~excl]
         # k=15 + 로그공간(기하) 가중평균: 농도는 로그 성질이라 기하평균이 맞고,
         # 라벨 격자(3·6·…·500)에 스냅되던 계단 밴딩과 고농도 꼬리 인공물을 없앤다
