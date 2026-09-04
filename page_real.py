@@ -482,12 +482,10 @@ class RealDataPage(QWidget):
         self.cmb_sample = QComboBox()
         self.cmb_sample.addItem("droplet", "droplet")
         self.cmb_sample.addItem("leaf / ink", "leaf")
-        self.cmb_sample.setToolTip(
-            "droplet: µM 판독(auto → head/pixel k-NN, 검증창 안).
-"
-            "leaf / ink: 잉크 로딩·매질 때문에 µM-등가가 오도하므로 MLP-corrected "
-            "signal(counts)을 기본 보고로, raw VIP는 근거, µM은 declared total이 "
-            "있을 때 reported 줄로만.")
+        self.cmb_sample.setToolTip("droplet: uM readout (auto: head / pixel k-NN, inside the "
+                                   "validated window). leaf/ink: MLP-corrected signal (counts) "
+                                   "is the default report, raw VIP is the evidence, uM only as "
+                                   "the declared-total 'reported' line.")
 
         def _on_sample(_=0):
             key = "mlpsig" if self.cmb_sample.currentData() == "leaf" else "auto"
