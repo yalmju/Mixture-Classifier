@@ -2273,7 +2273,7 @@ def load_model(path):
                 model["_knn_library"] = _json.load(fh)
     except Exception:
         model.pop("_knn_library", None)
-    # 픽셀 k-NN 사이드카(<dlm이름>.pxknn.npz): 학습 맵 픽셀 2,136개의 서명
+    # 픽셀 k-NN 사이드카(<dlm이름>.pxknn.npz): 학습 맵 hit 픽셀 전부(≈16.9k)의 서명
     # (밴드 3 + 총강도 + 픽셀 조성 3, z-정규화)과 맵 실측 µM. "픽셀 하나 =
     # 액적 하나" 판독 모드가 쓴다.
     try:
