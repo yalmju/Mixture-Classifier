@@ -211,12 +211,12 @@ class RealDataPage(QWidget):
         _rl = QLabel("reliability (min R²)"); _rl.setObjectName("field")
         relrow = QHBoxLayout(); relrow.setSpacing(4)
         relrow.addWidget(self.chk_rel); relrow.addWidget(self.rel_thr)
-        # 잎 시료: @1000 cm⁻¹ 밝기(Otsu)로 잎(밝음)/외부(어두움)를 가르고 외부
-        # 픽셀은 전부 null, 잎 경계는 모든 맵에 흰 윤곽선 (2026-09-04, 사용자 지정).
-        self.chk_leaf = QCheckBox("leaf: null outside"); self.chk_leaf.setChecked(False)
-        self.chk_leaf.setToolTip("잎 시료 전용: 1000 cm-1 밴드가 밝은 영역 = 잎. 그 바깥(어두운 "
-                                 "빈 기판) 픽셀을 분석에서 제외하고 잎 경계를 흰 윤곽선으로 "
-                                 "그린다. 액적 맵에서는 끄세요.")
+        # 잎 시료: @1000 cm⁻¹ 밝기(Otsu)로 잉크 도포 영역(밝음)/무신호 외부를
+        # 가르고 외부 픽셀은 전부 null, 잉크 영역 경계는 흰 윤곽선 (2026-09-04).
+        self.chk_leaf = QCheckBox("ink area only"); self.chk_leaf.setChecked(False)
+        self.chk_leaf.setToolTip("잎 시료: 1000 cm-1 밴드가 밝은 영역 = SERS 잉크가 도포된 "
+                                 "곳(잎 자체는 신호 없음). 그 바깥 픽셀을 분석에서 제외하고 "
+                                 "잉크 영역 경계를 흰 윤곽선으로 그린다. 액적 맵에서는 끄세요.")
         self.chk_leaf.toggled.connect(
             lambda _=False: self._apply(self._res) if self._res is not None else None)
         relrow.addWidget(self.chk_leaf)
@@ -1118,7 +1118,7 @@ class RealDataPage(QWidget):
         r = self._res
         if r is None:
             return
-        self._plot_maps(r); self._plot_abund(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
+        self._plot_maps(r); self._plot_abund(r); self._plot_comp(r); self._plot_conc(r); self._plot_pies(r)
         if self._sel is not None:
             self._plot_spec(r, self._sel)
 
@@ -1624,8 +1624,8 @@ class RealDataPage(QWidget):
         print(tb, file=sys.stderr)
 
     def _leaf_mask(self, r):
-        """잎(True)/외부(False) 픽셀 마스크. @1000 cm⁻¹ 밴드의 Otsu 임계로 밝은
-        쪽 = 잎 조직(사용자 확정), 어두운 쪽 = 아무것도 없는 바깥."""
+        """잉크 도포 영역(True)/외부(False) 마스크. @1000 cm⁻¹ 밴드 Otsu로 밝은
+        쪽 = SERS 잉크가 도포된 곳(사용자 확정: 잎 자체는 신호가 없다)."""
         from scipy import ndimage
         # baseline-제거된 r.spectra는 기판의 넓은 배경이 깎여 잎/외부 분리가
         # 흐려진다(외부 7px로 오판). 원본 맵의 1000±8 최대값은 134/134 완벽 분리
@@ -1671,7 +1671,7 @@ class RealDataPage(QWidget):
         return g[rows, cc]
 
     def _leaf_outline(self, ax, r, extent, origin):
-        """잎 경계 윤곽선 — 마스크가 있을 때만."""
+        """잉크 도포 영역 경계 윤곽선 — 마스크가 있을 때만."""
         m = getattr(r, "leaf_mask", None)
         if m is None:
             return
@@ -1735,7 +1735,7 @@ class RealDataPage(QWidget):
         self.k_px.set(f"{r.n_pixels:,}", PURPLE)
         self._rebuild_swatches(r)
         self._rebuild_bandrow(r)     # seeds each substance's VIP band on a fresh run
-        self._plot_maps(r); self._plot_abund(r); self._plot_pies(r); self._plot_comp(r); self._plot_conc(r)
+        self._plot_maps(r); self._plot_abund(r); self._plot_comp(r); self._plot_conc(r); self._plot_pies(r)
         self.c_spec.placeholder("click a pixel in a map to see its spectrum")
 
     # ---- plots ----
@@ -2335,6 +2335,8 @@ class RealDataPage(QWidget):
                 if mmed > 0 and np.isfinite(knn["uM"][i]):
                     um_all[:, i] = um_all[:, i] * (float(knn["uM"][i]) / mmed)
             knn_used = True
+        # 픽셀 파이 크기용 스냅샷 — 현재 판독 경로의 픽셀 µM (2026-09-04)
+        self._um_display = None if out_of_lib else um_all.copy()
         anch = getattr(self, "_anchor", None)
         anchored = anch is not None and anch.get("subs") == nb
         afac = (np.asarray(anch["factor"], float) if anchored else None)
@@ -2666,6 +2668,18 @@ class RealDataPage(QWidget):
         hit = self._hit(r)
         before = self._spectral_ratio_nb(r)
         after = self._ratio_nb(r)
+        # 파이 크기 = 픽셀 µM 총량 (면적 비례 → 반지름 ∝ sqrt). 기준은 hit 픽셀
+        # 총량의 p95(그 이상은 셀을 꽉 채움), 하한 0.22·rad로 존재만 표시.
+        # 판독 경로가 무응답이면 크기 정보 없음 → 기존처럼 균일.
+        um_d = getattr(self, "_um_display", None)
+        prad = np.full(r.n_pixels, rad)
+        size_by_um = False
+        if um_d is not None and len(um_d) == r.n_pixels:
+            tot = np.where(np.isfinite(um_d), np.clip(um_d, 0, None), 0.0).sum(axis=1)
+            ref = float(np.quantile(tot[hit], 0.95)) if hit.any() and (tot[hit] > 0).any() else 0.0
+            if ref > 0:
+                prad = rad * np.clip(np.sqrt(tot / ref), 0.22, 1.0)
+                size_by_um = True
         titles = ("NNLS (raw spectral)", "MLP" if r.method == "dlpx"
                   else f"After · {r.method.upper()}")
         axes = []
@@ -2688,7 +2702,7 @@ class RealDataPage(QWidget):
                     if frac <= 0.002:
                         continue
                     a1 = a0 - frac * 360.0
-                    wedges.append(Wedge((x[i], y[i]), rad, a1, a0))
+                    wedges.append(Wedge((x[i], y[i]), prad[i], a1, a0))
                     wcols.append(cols[k]); a0 = a1
             if wedges:
                 ax.add_collection(PatchCollection(wedges, facecolors=wcols,
@@ -2697,7 +2711,8 @@ class RealDataPage(QWidget):
             ax.set_ylim(*((y.max()+sy, y.min()-sy) if self._flip()
                           else (y.min()-sy, y.max()+sy)))
             ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
-            ax.set_title(title, fontsize=9, fontweight="bold", pad=2)
+            ax.set_title(title + ("  ·  size ∝ µM" if size_by_um else ""),
+                         fontsize=9, fontweight="bold", pad=2)
         # A direct difference panel removes the need to mentally subtract thousands
         # of tiny pies. Value = mean absolute component change in percentage points.
         axd = self.c_pie.style(self.c_pie.fig.add_subplot(pgs[0, 2]))
