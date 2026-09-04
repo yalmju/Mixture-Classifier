@@ -13,6 +13,8 @@ import os
 import pickle
 import numpy as np
 
+PXKNN_UM_MAX = 100.0   # 픽셀 k-NN 라이브러리에 남기는 최대 성분 농도(µM)
+
 
 def _refs(data_dir, baseline, trim):
     from unmix import _templates, _baseline_removed, _l2
@@ -2280,7 +2282,12 @@ def load_model(path):
         side = os.path.splitext(str(path))[0] + ".pxknn.npz"
         if os.path.exists(side):
             _d = np.load(side, allow_pickle=False)
-            model["_pxknn"] = {k: _d[k] for k in ("Fz", "Y", "cond", "mu", "sd")}
+            # 사용자 지시(2026-09-04): 성분 농도가 100 µM을 넘는 조건의 픽셀은
+            # 제외 — 고농도 맵(150–500)의 밝은 픽셀이 실 시료의 밝은 픽셀을
+            # 끌어가 판독을 폭주시킨다(글씨맵 71/14/53, 꼬리 500).
+            _keep = np.asarray(_d["Y"], float).max(axis=1) <= PXKNN_UM_MAX
+            model["_pxknn"] = {k: (_d[k][_keep] if k in ("Fz", "Y", "cond") else _d[k])
+                               for k in ("Fz", "Y", "cond", "mu", "sd")}
     except Exception:
         model.pop("_pxknn", None)
     return model
