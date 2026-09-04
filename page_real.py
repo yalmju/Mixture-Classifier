@@ -211,11 +211,11 @@ class RealDataPage(QWidget):
         _rl = QLabel("reliability (min R²)"); _rl.setObjectName("field")
         relrow = QHBoxLayout(); relrow.setSpacing(4)
         relrow.addWidget(self.chk_rel); relrow.addWidget(self.rel_thr)
-        # 잎 시료: @1000 cm⁻¹ 밝기(Otsu)로 잎/외부를 가르고 외부 픽셀은 전부
-        # null, 잎 경계는 모든 맵에 흰 윤곽선 (2026-09-04, 사용자 지정).
+        # 잎 시료: @1000 cm⁻¹ 밝기(Otsu)로 잎(밝음)/외부(어두움)를 가르고 외부
+        # 픽셀은 전부 null, 잎 경계는 모든 맵에 흰 윤곽선 (2026-09-04, 사용자 지정).
         self.chk_leaf = QCheckBox("leaf: null outside"); self.chk_leaf.setChecked(False)
-        self.chk_leaf.setToolTip("잎 시료 전용: 1000 cm-1 밴드가 밝은 영역(잎 바깥 기판)을 "
-                                 "마스크로 잡아 분석에서 제외하고 잎 경계를 흰 윤곽선으로 "
+        self.chk_leaf.setToolTip("잎 시료 전용: 1000 cm-1 밴드가 밝은 영역 = 잎. 그 바깥(어두운 "
+                                 "빈 기판) 픽셀을 분석에서 제외하고 잎 경계를 흰 윤곽선으로 "
                                  "그린다. 액적 맵에서는 끄세요.")
         self.chk_leaf.toggled.connect(
             lambda _=False: self._apply(self._res) if self._res is not None else None)
@@ -1625,7 +1625,7 @@ class RealDataPage(QWidget):
 
     def _leaf_mask(self, r):
         """잎(True)/외부(False) 픽셀 마스크. @1000 cm⁻¹ 밴드의 Otsu 임계로 밝은
-        쪽 = 잎 바깥 기판. 격자에서 구멍을 메우고 가장 큰 연결영역만 잎으로."""
+        쪽 = 잎 조직(사용자 확정), 어두운 쪽 = 아무것도 없는 바깥."""
         from scipy import ndimage
         # baseline-제거된 r.spectra는 기판의 넓은 배경이 깎여 잎/외부 분리가
         # 흐려진다(외부 7px로 오판). 원본 맵의 1000±8 최대값은 134/134 완벽 분리
@@ -1656,18 +1656,19 @@ class RealDataPage(QWidget):
             var = w0 * w1 * (m0 - m1) ** 2
             if var > best:
                 best, thr = var, mids[i]
-        off = b > thr
+        # 사용자 확정(2026-09-04): @1000 cm⁻¹ **밝은 곳이 잎**, 어두운 곳은
+        # 아무것도 없는 바깥. 잎 = 밝은 연결영역(8px 이상), 잎 안의 어두운
+        # 구멍(잎맥·틈)은 잎으로 메우고, 바깥의 고립된 밝은 점은 바깥으로 둔다.
+        leaf = b > thr
         rows, cc, ny, nx, _ux, _uy = self._grid_rc(r)
-        g = np.zeros((ny, nx), bool); g[rows, cc] = off
-        # 구멍 메우기는 금물(맵 가장자리가 잎이면 기판 영역이 '구멍'으로 메워져
-        # 266→394로 폭발). 대신 8px 미만의 작은 밝은 점(잎 위 핫스팟)만 잎으로
-        # 되돌린다 — 기판은 넓은 연결영역이라 살아남는다.
+        g = np.zeros((ny, nx), bool); g[rows, cc] = leaf
         lab, n = ndimage.label(g)
         if n:
             sizes = ndimage.sum(g, lab, index=np.arange(1, n + 1))
             small = np.isin(lab, np.where(sizes < 8)[0] + 1)
             g[small] = False
-        return ~g[rows, cc]
+        g = ndimage.binary_fill_holes(g)
+        return g[rows, cc]
 
     def _leaf_outline(self, ax, r, extent, origin):
         """잎 경계 윤곽선 — 마스크가 있을 때만."""
