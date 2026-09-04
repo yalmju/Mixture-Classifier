@@ -82,18 +82,25 @@ class RealDataPage(QWidget):
         self.bg_paths = []          # measured background map(s) → direct bg judgment
         self.rf = {}                # response factors {name: ×} from Validate (correction)
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 14); root.setSpacing(8)
+        root.setContentsMargins(10, 8, 10, 8); root.setSpacing(5)
 
         head = QVBoxLayout(); head.setSpacing(2)
         h1 = QLabel("Real-data analysis — unmix a test map"); h1.setObjectName("h1")
-        sub = QLabel("Read one measured map: raw band maps, stage-1 unmixed "
-                     "abundance maps (NNLS/MCR — or per-pixel probabilities under a "
+        sub = QLabel("Read one measured map: raw band maps, reconstructed component "
+                     "maps (NNLS/MCR — or per-pixel probabilities under a "
                      "composition model), the per-pixel composition pie map, apparent "
                      "µM maps, and the overall composition as bars with a µM line. "
                      "Click any pixel for its spectrum. References + preprocessing "
                      "come from Samples.")
         sub.setObjectName("sub"); sub.setWordWrap(True)
-        head.addWidget(h1); head.addWidget(sub)
+        title_row = QHBoxLayout(); title_row.setSpacing(8)
+        title_row.addWidget(h1); title_row.addStretch(1)
+        self.focus_b = QPushButton("Results focus")
+        self.focus_b.setObjectName("ghost"); self.focus_b.setCheckable(True)
+        self.focus_b.setToolTip("Hide the control rail and give the complete width to results")
+        self.focus_b.toggled.connect(self._toggle_results_focus)
+        title_row.addWidget(self.focus_b)
+        head.addLayout(title_row); head.addWidget(sub)
         root.addLayout(head)
 
         # ── left control rail | right results ─────────────────────────────
@@ -114,7 +121,8 @@ class RealDataPage(QWidget):
         left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         # The rail is USER-RESIZABLE (splitter handle on its right edge): a fixed
         # 280 px clipped wide controls with no way to reach them.
-        left_scroll.setMinimumWidth(260)
+        left_scroll.setMinimumWidth(220)
+        self._left_scroll = left_scroll
         left_scroll.setWidget(leftw)
         # 폭을 넘는 자식이 포커스를 받으면 Qt 가 레일을 수평으로 밀어버리는데,
         # 가로 스크롤바가 숨겨져 있어 사용자가 되돌릴 수 없다(라벨 앞글자가 잘린 채
@@ -232,7 +240,13 @@ class RealDataPage(QWidget):
         self.corr_lbl = QLabel("correction"); self.corr_lbl.setObjectName("field")
         corrcol.addWidget(self.corr_lbl); corrcol.addWidget(self.chk_corr)
         corr_b.setVisible(False); self.corr_lbl.setVisible(False); self.chk_corr.setVisible(False)
-        exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
+        exp_b = QPushButton("Export results…"); exp_b.setObjectName("ghost")
+        exp_b.setMinimumHeight(34)
+        exp_b.setStyleSheet(
+            f"QPushButton{{border:1.5px solid {BLUE}; color:{BLUE}; font-weight:700; "
+            "padding:6px 10px; border-radius:7px; text-align:center;}"
+            f"QPushButton:hover{{background:{BLUE}; color:white;}}")
+        exp_b.setToolTip("Export CSV data and each result panel as a separate PNG")
         exp_b.clicked.connect(self._export)
         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
         self.btn.clicked.connect(self._run)
@@ -248,7 +262,7 @@ class RealDataPage(QWidget):
         self.dlm_lbl.setWordWrap(True)
         ctl.addWidget(self.dlm_lbl)
         _r2 = QHBoxLayout(); _r2.setSpacing(6)
-        _r2.addWidget(self.btn, 1); _r2.addWidget(exp_b)
+        _r2.addWidget(self.btn, 1)
         ctl.addLayout(_r2)
         ctl.addWidget(self.pbar)
         left.addLayout(ctl)
@@ -308,6 +322,7 @@ class RealDataPage(QWidget):
         left.addLayout(kpis)
 
         # per-substance colour swatches (click to recolour), filled after a result
+        left.addWidget(exp_b)
         self.swatches = QHBoxLayout(); self.swatches.setSpacing(6)
         self.swatches.addWidget(self._mk_lbl("colours:"))
         self.swatches.addStretch(1)
@@ -325,7 +340,10 @@ class RealDataPage(QWidget):
         self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
         self.bandrow.addStretch(1)
         lay_maps.addLayout(self.bandrow)
-        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(260)
+        # Two map rows need real vertical pixels.  A short canvas leaves large card
+        # gutters while ``aspect='equal'`` silently shrinks the actual data image.
+        # Keep the maps readable even when the controls or titles are edited.
+        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(220)
         # one min/max pair PER band panel (rebuilt with the band row) — the card-wide
         # pair could not stretch a weak channel without flattening a strong one
         self.scalerow = QHBoxLayout(); self.scalerow.setSpacing(6)
@@ -335,38 +353,41 @@ class RealDataPage(QWidget):
 
         # 1b) unmixed abundance maps — NNLS runs FIRST in every path (the gate), so
         #     its per-substance abundances belong beside the raw band maps: bands =
-        #     what the camera saw, abundances = what stage-1 unmixing made of it.
+        #     what the camera saw, abundances = what NNLS unmixing made of it.
         self.c_abund = Canvas()
         card_ab, lay_ab = _card(
-            "Stage-1 spectral evidence — full-spectrum NNLS + background gate")
-        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(260)
+            "MLP reconstruction — components + background gate")
+        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(220)
         lay_ab.addLayout(self._scale_row("abund", 1.0))
 
         # Nine equal map slots across the result area. Raw uses four (merge + 3),
-        # stage-1 uses five (merge + 3 + background), so every spatial map has the
+        # NNLS evidence uses five (merge + 3 + background), so every spatial map has the
         # same physical width instead of shrinking because its card has more panels.
-        body.addWidget(card_maps, 0, 0, 1, 4)
-        body.addWidget(card_ab, 0, 4, 1, 5)
-
         # 2) the clicked pixel's spectrum — a short readout beside the pie map.
         #    The pixel's own numbers ride along in the panel title.
         self.c_spec = Canvas()
         scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
         slay.addWidget(self.c_spec)
-        self.c_spec.setMinimumHeight(260)
+        self.c_spec.setMinimumHeight(210)
 
         # 3) per-pixel composition pie | the same composition summed over the map —
         #    the pie map and the number it adds up to belong on one row
         self.c_pie = Canvas(); self.c_comp = Canvas()
-        pcard, play = _card("Per-pixel composition — spectral evidence (before) vs model (after)")
-        play.addWidget(self.c_pie); self.c_pie.setFixedHeight(215)
-        ccard, clay = _card("Composition (overall) — before vs after")
-        clay.addWidget(self.c_comp); self.c_comp.setFixedHeight(215)
+        pcard, play = _card("Primary comparison — NNLS raw vs MLP + pixel-wise change")
+        play.addWidget(self.c_pie); self.c_pie.setMinimumHeight(120)
+        play.addLayout(self._scale_row("delta", 50.0))
+        pcard.setMaximumHeight(270)
+        ccard, clay = _card("Overall fractions — NNLS vs MLP")
+        clay.addWidget(self.c_comp); self.c_comp.setMinimumHeight(175)
 
-        # One comparison row, in reading order. All three stay visible.
-        body.addWidget(pcard, 1, 0, 1, 3)
-        body.addWidget(ccard, 1, 3, 1, 3)
-        body.addWidget(scard, 1, 6, 1, 3)
+        # Two balanced columns: raw bands over NNLS evidence on the left; the
+        # primary NNLS↔MLP comparison over summary + spectrum on the right.
+        # Both sides occupy exactly two equal-height rows.
+        body.addWidget(card_maps, 0, 0, 1, 10)
+        body.addWidget(card_ab,   1, 0, 1, 10)
+        body.addWidget(pcard,     0, 10, 1, 8)
+        body.addWidget(ccard,     1, 10, 1, 4)
+        body.addWidget(scard,     1, 14, 1, 4)
 
         # 4) per-substance concentration (µM) maps — its own full-width row
         self.c_conc = Canvas()
@@ -451,20 +472,36 @@ class RealDataPage(QWidget):
         vrow.addWidget(_rl); vrow.addWidget(self.cmb_umroute)
         # 스파이럴 점 표시 비율 — 0% = percentile 곡선·밴드만, 100% = 픽셀 점
         # 전부. 드래그 중엔 다시 그리지 않고 놓을 때 한 번 (pxknn 조회가 무겁다).
-        _sl = QLabel("   spiral dots"); _sl.setObjectName("field")
+        _sl = QLabel("radial detail"); _sl.setObjectName("field")
         from PyQt6.QtWidgets import QSlider
         self.sl_spiral = QSlider(Qt.Orientation.Horizontal)
-        self.sl_spiral.setRange(0, 100); self.sl_spiral.setValue(25)
+        self.sl_spiral.setRange(18, 48); self.sl_spiral.setValue(36)
         self.sl_spiral.setFixedWidth(110)
         self.sl_spiral.setToolTip(
-            "스파이럴에 픽셀 점을 몇 %나 보일지.\n"
-            "0% = percentile 요약(중앙값 곡선 + 25–75% 밴드)만,\n"
-            "100% = 모든 hit 픽셀을 점으로.")
+            "원형 heatmap을 나누는 각도 구간 수입니다.\n"
+            "낮으면 큰 경향이, 높으면 픽셀 순위의 세부 변화가 잘 보입니다.")
         self.sl_spiral.sliderReleased.connect(
             lambda: self._plot_conc(self._res) if self._res is not None else None)
         self.sl_spiral.valueChanged.connect(
-            lambda v: self.sl_spiral.setToolTip(f"spiral dots: {v}%"))
-        vrow.addWidget(_sl); vrow.addWidget(self.sl_spiral)
+            lambda v: self.sl_spiral.setToolTip(f"radial bins: {v}"))
+        _msl = QLabel("map scale"); _msl.setObjectName("field")
+        self.sl_map_scale = QSlider(Qt.Orientation.Horizontal)
+        self.sl_map_scale.setRange(40, 200); self.sl_map_scale.setValue(100)
+        self.sl_map_scale.setFixedWidth(95)
+        self.sl_map_scale.setToolTip("concentration-map colour maximum: auto × 1.00")
+        self.sl_map_scale.sliderReleased.connect(
+            lambda: self._plot_conc(self._res) if self._res is not None else None)
+        self.sl_map_scale.valueChanged.connect(lambda v: self.sl_map_scale.setToolTip(
+            f"concentration-map colour maximum: auto × {v / 100:.2f}"))
+        _ysl = QLabel("distribution Y"); _ysl.setObjectName("field")
+        self.sl_dist_y = QSlider(Qt.Orientation.Horizontal)
+        self.sl_dist_y.setRange(40, 200); self.sl_dist_y.setValue(100)
+        self.sl_dist_y.setFixedWidth(95)
+        self.sl_dist_y.setToolTip("distribution Y-axis maximum: auto × 1.00")
+        self.sl_dist_y.sliderReleased.connect(
+            lambda: self._plot_conc(self._res) if self._res is not None else None)
+        self.sl_dist_y.valueChanged.connect(lambda v: self.sl_dist_y.setToolTip(
+            f"distribution Y-axis maximum: auto × {v / 100:.2f}"))
         # the reportable window is NOT typed here — the model file carries it
         # (validated_ranges_M: levels recovered within 2-fold on a held-out split),
         # and the summary shows which window it used
@@ -481,11 +518,29 @@ class RealDataPage(QWidget):
         lay_conc.addWidget(self.conc_opt_tgl)
         lay_conc.addWidget(self.conc_optbox)
         lay_conc.addWidget(self.c_conc)
+        # Controls belong directly under the result they change: 5 maps | 6 plot | 7 radial.
+        slider_row = QHBoxLayout(); slider_row.setSpacing(10)
+        self._conc_scale_names = ()
+        self._conc_scale_spins = {}
+        self.conc_scale_box = QWidget()
+        self.conc_scale_lay = QHBoxLayout(self.conc_scale_box)
+        self.conc_scale_lay.setContentsMargins(0, 0, 0, 0)
+        self.conc_scale_lay.setSpacing(5)
+        self.conc_scale_lay.addStretch(1)
+        slider_row.addWidget(self.conc_scale_box, 1)
+        for label, slider in ((_ysl, self.sl_dist_y),
+                              (_sl, self.sl_spiral)):
+            cell = QWidget(); cell_lay = QHBoxLayout(cell)
+            cell_lay.setContentsMargins(0, 0, 0, 0); cell_lay.setSpacing(7)
+            cell_lay.addStretch(1); cell_lay.addWidget(label)
+            slider.setFixedWidth(145); cell_lay.addWidget(slider); cell_lay.addStretch(1)
+            slider_row.addWidget(cell, 1)
+        lay_conc.addLayout(slider_row)
         # Fixed height: letting this canvas expand smeared the row across a tall
         # card — tiny maps floating in whitespace. Tall enough to use the row.
         # 고정 높이는 창 공간이 남아도 아래가 잘린다(2026-09-02) — 최소만 잡고
         # 남는 세로 공간은 이 행이 흡수해 늘어난다 (result_grid rowStretch=1).
-        self.c_conc.setMinimumHeight(430)
+        self.c_conc.setMinimumHeight(255)
         self.conc_opt_tgl.setChecked(True)     # declared total is the main input
         # Long headings used to become hard minimum widths (over 2,100 px for the
         # whole page). Wrap them inside their cards so a normal laptop window can
@@ -497,13 +552,15 @@ class RealDataPage(QWidget):
             _title.setSizePolicy(QSizePolicy.Policy.Ignored,
                                  QSizePolicy.Policy.Fixed)
             _lay.setAlignment(Qt.AlignmentFlag.AlignTop)
-        body.addWidget(self.card_conc, 2, 0, 1, 9)
+        body.addWidget(self.card_conc, 2, 0, 1, 18)
         self.card_conc.setVisible(False)
 
         self.result_grid = body
-        for col in range(9):
+        for col in range(18):
             body.setColumnStretch(col, 1)
-        body.setRowStretch(0, 0)
+        # The two important spatial-map cards receive matching height.  The right
+        # summary cards may retain whitespace, but can no longer compress maps 1/2.
+        body.setRowStretch(0, 1)
         body.setRowStretch(1, 1)
         body.setRowStretch(2, 0)  # enabled only while concentration is visible
 
@@ -522,18 +579,7 @@ class RealDataPage(QWidget):
         # 결과가 창보다 커지면 잘리는 대신 세로 스크롤이 생겨야 한다
         # (2026-09-02 — 농도 행을 키우자 하단이 잘리고 스크롤도 없던 문제).
         # 가로는 캔버스가 폭에 맞춰 줄어드니 스크롤바를 끈다.
-        # 세로 전용 스크롤: widgetResizable은 자식의 '최소폭'을 존중해서 내용이
-        # 창보다 넓어지면 (가로 스크롤을 껐으니) 오른쪽이 통째로 잘린다 —
-        # 2026-09-04 우측 카드 절단 사태. 자식 폭을 뷰포트 폭에 강제 고정해
-        # 가로는 래퍼 이전처럼 압축시키고 세로만 넘치게 한다.
-        class _VOnlyScroll(QScrollArea):
-            def resizeEvent(self, e):
-                super().resizeEvent(e)
-                w = self.widget()
-                if w is not None:
-                    w.setFixedWidth(self.viewport().width())
-
-        body_scroll = _VOnlyScroll()
+        body_scroll = QScrollArea()
         body_scroll.setFrameShape(QFrame.Shape.NoFrame)
         body_scroll.setWidgetResizable(True)
         body_scroll.setHorizontalScrollBarPolicy(
@@ -544,7 +590,7 @@ class RealDataPage(QWidget):
         self._split.addWidget(body_scroll)
         self._split.setStretchFactor(0, 0)
         self._split.setStretchFactor(1, 1)
-        self._split.setSizes([300, 1060])
+        self._split.setSizes([235, 1125])
 
         for cv, m in [(self.c_maps, "Load a test map, then Unmix"),
                       (self.c_pie, "Composition appears here"),
@@ -559,6 +605,11 @@ class RealDataPage(QWidget):
 
 
     # ---- small builders ----
+    def _toggle_results_focus(self, on):
+        """Give the dashboard the full window without losing any result panel."""
+        self._left_scroll.setVisible(not on)
+        self.focus_b.setText("Show controls" if on else "Results focus")
+
     def _compact_x(self, b, tip):
         """A small square ✕ clear button (overrides the tall ghost padding)."""
         b.setFixedSize(24, 24); b.setToolTip(tip)
@@ -649,11 +700,6 @@ class RealDataPage(QWidget):
             wl = picks.get(nm) or []
             out[nm] = float(wl[0]) if wl else float(
                 r.wn[int(np.argmax(r.templates[r.nonbg][i]))])
-        # TBZ는 VIP가 1010을 고르지만 이미징은 1270이 낫다(잎맵에서 확인,
-        # 2026-09-04) — µM 헤드의 TBZ 마커(1270)와도 일치. 축 안일 때만 강제.
-        if "TBZ" in out and r.wn is not None \
-                and float(r.wn[0]) <= 1270.0 <= float(r.wn[-1]):
-            out["TBZ"] = 1270.0
         return out
 
     def _parse_scale(self, key):
@@ -683,7 +729,11 @@ class RealDataPage(QWidget):
         def _upd(_=None):
             mn.setEnabled(chk.isChecked()); mx.setEnabled(chk.isChecked())
             if self._res is not None:
-                (self._plot_maps if key == "maps" else self._plot_abund)(self._res)
+                draw = ({"maps": self._plot_maps,
+                         "abund": self._plot_abund,
+                         "delta": self._plot_pies}.get(key))
+                if draw is not None:
+                    draw(self._res)
 
         chk.toggled.connect(_upd)
         mn.editingFinished.connect(_upd); mx.editingFinished.connect(_upd)
@@ -708,7 +758,7 @@ class RealDataPage(QWidget):
         caps = []
         for source, slots in ((self.c_maps.fig, 4), (self.c_abund.fig, 5)):
             fw = float(source.bbox.width)
-            if fw > 50:            # 레이아웃 전의 스테일 폭(수 px)은 무시
+            if fw > 1:
                 caps.append(_fit(slots) * (self._GS_R - self._GS_L) * fw /
                             (slots + (slots - 1) * self._GS_WS))
         if not caps:
@@ -720,9 +770,7 @@ class RealDataPage(QWidget):
         fw = max(float(fig.bbox.width), 1.0)
         cap = (self._GS_R - self._GS_L) * fw / (n + (n - 1) * self._GS_WS)
         requested = target / _fit(n)
-        # 공통폭 하한: 형제 카드의 스테일 폭이나 extra 밴드로 패널 수가 늘어도
-        # 자기 카드 용량의 60% 아래로는 안 내려간다 (맵 축소 버그 픽스).
-        requested = min(max(requested, 0.60 * cap), cap)
+        requested = min(requested, cap)
         span = requested * (n + (n - 1) * self._GS_WS) / fw
         return (1.0 - span) / 2.0, (1.0 + span) / 2.0
 
@@ -754,6 +802,50 @@ class RealDataPage(QWidget):
 
         cv._rowgs_cid = cv.mpl_connect("resize_event", _refit)
         return gs
+
+    def _tile_specs(self, fig, n, cols):
+        """Return (image, colourbar) slots in two rows to avoid wide empty cards."""
+        rows = int(np.ceil(n / cols))
+        gs = fig.add_gridspec(rows * 2, cols,
+                              height_ratios=sum(([1.0, 0.07] for _ in range(rows)), []),
+                              hspace=0.24, wspace=0.055,
+                              left=0.015, right=0.985, bottom=0.025, top=0.965)
+        specs = []
+        for i in range(n):
+            rr, cc = divmod(i, cols)
+            specs.append((gs[rr * 2, cc], gs[rr * 2 + 1, cc]))
+        return specs
+
+    def _short_colorbar(self, fig, ax, image, holder_spec):
+        """A thin bar locked to the rendered map width, never the wide grid cell."""
+        fig.add_subplot(holder_spec).set_axis_off()  # reserve vertical breathing room
+        cax = ax.inset_axes([0.0, -0.13, 1.0, 0.055])
+        cb = fig.colorbar(image, cax=cax, orientation="horizontal")
+        cb.ax.tick_params(labelsize=7, colors="black", length=2, pad=1)
+        cb.outline.set_linewidth(0.5)
+        return cb
+
+    def _side_colorbar(self, fig, ax, image, ticks=None, labels=None):
+        """Compact vertical scale immediately to the right of its map.
+
+        An inset follows the rendered map axes, so resizing or typing in controls
+        cannot steal image height or create a card-wide horizontal ramp.
+        """
+        cax = ax.inset_axes([1.025, 0.04, 0.035, 0.92])
+        cb = fig.colorbar(image, cax=cax, orientation="vertical")
+        if ticks is not None:
+            cb.set_ticks(ticks)
+        if labels is not None:
+            cb.set_ticklabels(labels)
+        cb.ax.tick_params(labelsize=6.5, length=2, pad=1)
+        cb.outline.set_linewidth(0.45)
+        return cb
+
+    def _single_row_specs(self, fig, n):
+        """One map row with space between panels for right-hand colour scales."""
+        gs = fig.add_gridspec(1, n, left=0.018, right=0.982,
+                              bottom=0.08, top=0.91, wspace=0.32)
+        return [gs[0, i] for i in range(n)]
 
     def _row_span(self, fig, n, ny, nx, lr=None):
         """(bottom, top, cb_ratio) for _row_gs — the two rows hugged to the height
@@ -812,6 +904,22 @@ class RealDataPage(QWidget):
             if it.widget():
                 it.widget().deleteLater()
         self._chan_scale = {}
+        mode = QComboBox(); mode.setObjectName("field")
+        mode.addItem("Auto contrast", "auto")
+        mode.addItem("Shared scale", "shared")
+        mode.addItem("Full range", "full")
+        mode.setToolTip(
+            "Auto contrast: robust P1–P99 for each band (recommended).\n"
+            "Shared scale: one robust numeric scale for direct band comparison.\n"
+            "Full range: each band's measured minimum–maximum.")
+        old_mode = getattr(self, "cmb_band_scale", None)
+        if old_mode is not None:
+            wanted = old_mode.currentData()
+            idx = mode.findData(wanted)
+            mode.setCurrentIndex(max(idx, 0))
+        self.cmb_band_scale = mode
+        self.scalerow.addWidget(self._mk_lbl("display:"))
+        self.scalerow.addWidget(mode)
         chk = QCheckBox("manual"); chk.setObjectName("field")
         chk.setToolTip("pin each band panel to its own min-max below; "
                        "unticked = that panel's own P1-P99")
@@ -842,6 +950,7 @@ class RealDataPage(QWidget):
                 self._plot_maps(self._res)
 
         chk.toggled.connect(_tgl)
+        mode.currentIndexChanged.connect(_tgl)
         self.scalerow.addStretch(1)
 
     def _add_fold(self, lay, canvas, name, opened, key):
@@ -1367,7 +1476,7 @@ class RealDataPage(QWidget):
         return np.divide(rn, s, out=np.zeros_like(rn), where=s > 0)
 
     def _spectral_ratio_nb(self, r):
-        """Stage-1 full-spectrum composition before the learned model."""
+        """NNLS full-spectrum composition before the learned model."""
         rn = np.asarray(getattr(r, "A_evidence", r.A), float)[:, r.nonbg]
         rf = self._rf_vec(r)
         if rf is not None:
@@ -1609,18 +1718,29 @@ class RealDataPage(QWidget):
         _auto = [(float(np.quantile(v, 0.01)), float(np.quantile(v, 0.99)))
                  for v in chans + ex_chans]
         _auto = [(a, b if b > a else a + 1.0) for a, b in _auto]   # never a zero span
+        scale_mode = (self.cmb_band_scale.currentData()
+                      if getattr(self, "cmb_band_scale", None) is not None else "auto")
+        all_channels = chans + ex_chans
+        if scale_mode == "shared" and all_channels:
+            pooled = np.concatenate([np.asarray(v, float).ravel() for v in all_channels])
+            shared = (float(np.quantile(pooled, 0.01)),
+                      float(np.quantile(pooled, 0.99)))
+            if shared[1] <= shared[0]:
+                shared = (shared[0], shared[0] + 1.0)
+            _auto = [shared] * len(all_channels)
+        elif scale_mode == "full":
+            _auto = [(float(np.nanmin(v)), float(np.nanmax(v))) for v in all_channels]
+            _auto = [(a, b if b > a else a + 1.0) for a, b in _auto]
         _keys = ([r.comps[j] for j in r.nonbg]
                  + [f"extra{i}" for i in range(len(extras))])
         _all_lims = [self._chan_lims(k, a) for k, a in zip(_keys, _auto)]
         self._sync_chan_spins(_keys, _all_lims)
         lims = _all_lims[:len(nb)]
         ex_lims = _all_lims[len(nb):]
-        gs = self._row_gs(self.c_maps.fig, n, ny, nx)
+        specs = self._single_row_specs(self.c_maps.fig, n)
 
         # ---- merged R/G/B: each channel stretched over its own P1..P99 ----
-        ax = self.c_maps.style(self.c_maps.fig.add_subplot(gs[0, 0]))
-        ax.set_anchor("S")                       # sit on the ramp line, like the rest
-        self.c_maps.fig.add_subplot(gs[1, 0]).set_axis_off()   # holds the merge's box
+        ax = self.c_maps.style(self.c_maps.fig.add_subplot(specs[0]))
         cols = np.array([to_rgb(c) for c in (nbcols + ex_cols)])
         norm = np.stack([np.clip((v - va) / (vb - va), 0.0, 1.0)
                          for v, (va, vb) in zip(chans + ex_chans, lims + ex_lims)], 1)
@@ -1645,8 +1765,7 @@ class RealDataPage(QWidget):
         # taller than the map beside it. These panels are a picture of where a band
         # is strong; the numbers behind them are in the CSV export.
         for i, nm in enumerate(nb):
-            ax = self.c_maps.style(self.c_maps.fig.add_subplot(gs[0, i + 1]))
-            ax.set_anchor("S")
+            ax = self.c_maps.style(self.c_maps.fig.add_subplot(specs[i + 1]))
             grid = np.zeros((ny, nx)); grid[rows, cc] = chans[i]
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", nbcols[i]])
             _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
@@ -1658,36 +1777,30 @@ class RealDataPage(QWidget):
             ax.set_xticks([]); ax.set_yticks([])
             # ramp UNDER the panel — horizontal bars share the panel's width, so
             # (unlike the old vertical ones) they cannot outgrow the map
-            cb = self.c_maps.fig.colorbar(
-                _im, cax=self.c_maps.fig.add_subplot(gs[1, i + 1]),
-                orientation="horizontal")
-            cb.ax.tick_params(labelsize=7, colors="black")
-            cb.outline.set_linewidth(0.5)
+            cb = self._side_colorbar(self.c_maps.fig, ax, _im,
+                                     ticks=[lims[i][0], lims[i][1]],
+                                     labels=[f"{lims[i][0]:.0f}", f"{lims[i][1]:.0f}"])
             self._exp_maps.append((f"band_{nm}", ax, cb.ax))
             self._click_axes.append(ax)
         for ei, wl in enumerate(extras):                   # user-added bands, own hue
             v = ex_chans[ei]
             va, vb = ex_lims[ei]
-            ax = self.c_maps.style(
-                self.c_maps.fig.add_subplot(gs[0, len(nb) + 1 + ei]))
-            ax.set_anchor("S")
+            slot = specs[len(nb) + 1 + ei]
+            ax = self.c_maps.style(self.c_maps.fig.add_subplot(slot))
             grid = np.zeros((ny, nx)); grid[rows, cc] = v
             cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", ex_cols[ei]])
             _im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                             interpolation="nearest", cmap=cmap, vmin=va, vmax=vb)
             ax.set_title(f"@ {wl:.0f} cm$^{{-1}}$", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
-            cb = self.c_maps.fig.colorbar(
-                _im, cax=self.c_maps.fig.add_subplot(gs[1, len(nb) + 1 + ei]),
-                orientation="horizontal")
-            cb.ax.tick_params(labelsize=7, colors="black")
-            cb.outline.set_linewidth(0.5)
+            cb = self._side_colorbar(self.c_maps.fig, ax, _im,
+                                     ticks=[va, vb], labels=[f"{va:.0f}", f"{vb:.0f}"])
             self._exp_maps.append((f"band_extra_{wl:.0f}", ax, cb.ax))
             self._click_axes.append(ax)
         self.c_maps.draw_idle()          # gridspec already carries explicit margins
 
     def _plot_abund(self, r):
-        """Stage-1 analyte maps plus one combined background map.
+        """NNLS analyte maps plus one combined background map.
 
         BLK and INK are both nuisance/background classes for interpretation. Showing
         them as separate full panels repeated the same answer and squeezed the analyte
@@ -1709,7 +1822,7 @@ class RealDataPage(QWidget):
         Aall = np.asarray(getattr(r, "A_evidence", r.A), float)
         nb_idx = list(r.nonbg)
         nbcols = self._nb_colors(r)
-        # dlpx 기본 표시: stage-1 NNLS 증거 대신 모델 조성(분석물 간 재정규화)을
+        # dlpx 기본 표시: NNLS 증거 대신 모델 조성(분석물 간 재정규화)을
         # 그린다. raw 확률은 BLK 몫이 희석해 채널이 흐려진다(260812 SERS 글씨맵
         # 사건) — ratio_nb 는 hit 픽셀에서 항상 분석물 합=1 이라 글자가 살아난다.
         model_view = (getattr(r, "method", "") == "dlpx"
@@ -1749,13 +1862,10 @@ class RealDataPage(QWidget):
 
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
-        gs = self._row_gs(self.c_abund.fig, len(panels), ny, nx)
+        specs = self._single_row_specs(self.c_abund.fig, len(panels))
         for idx, (title, values, panel_color) in enumerate(panels):
-            ax = self.c_abund.style(self.c_abund.fig.add_subplot(gs[0, idx]))
-            ax.set_anchor("S")
-            # The shared scale is stated once in the card/manual-scale row. Repeating
-            # five identical ramps consumed height without adding information.
-            self.c_abund.fig.add_subplot(gs[1, idx]).set_axis_off()
+            ax = self.c_abund.style(self.c_abund.fig.add_subplot(specs[idx]))
+            panel_im = None
             if values is None:
                 cols = np.array([to_rgb(c) for c in nbcols])
                 norm = np.nan_to_num(np.clip(Anb_draw / mscale, 0.0, 1.0), nan=0.0)
@@ -1774,9 +1884,13 @@ class RealDataPage(QWidget):
                 ax.set_facecolor("#0b0d10")
                 is_bg = title.startswith("background")
                 _vmax = 1.0 if is_bg else vshared
-                ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
-                          interpolation="nearest", cmap=cmap,
-                          vmin=0.0 if is_bg else vlo, vmax=_vmax)
+                panel_im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
+                                     interpolation="nearest", cmap=cmap,
+                                     vmin=0.0 if is_bg else vlo, vmax=_vmax)
+                self._side_colorbar(
+                    self.c_abund.fig, ax, panel_im,
+                    ticks=[0.0 if is_bg else vlo, _vmax],
+                    labels=[f"{0.0 if is_bg else vlo:.2g}", f"{_vmax:.2g}"])
             ax.set_title(title, fontsize=8)
             ax.set_xticks([]); ax.set_yticks([])
             self._exp_abund.append((f"abund_{title.split(' ')[0]}", ax, None))
@@ -1827,15 +1941,7 @@ class RealDataPage(QWidget):
         X = np.clip(np.asarray(r.spectra, float), 0, None)[hitm]
         sig = np.log1p(np.clip(_band_signal(X, wn, bands), 0, None))
         tot = np.log1p(X.sum(1))[:, None]
-        # 라이브러리 서명은 모델 3성분(DQ/TBZ/THI) 순서 고정 — ratio_nb에
-        # 다른 비배경 클래스가 끼거나 순서가 달라도 그 3열만 골라 맞춘다
-        # (LEAF가 분석물로 잡히며 7 vs 8열로 깨졌던 2026-09-04 크래시 방지).
-        usubs = list(u.get("subs", ("DQ", "TBZ", "THI")))
-        nbn = [r.comps[j] for j in r.nonbg]
-        if not all(s in nbn for s in usubs):
-            return None
         Rq = np.clip(np.asarray(r.ratio_nb, float), 0, None)[hitm]
-        Rq = Rq[:, [nbn.index(s) for s in usubs]]
         F = (np.hstack([sig, tot, Rq]) - lib["mu"]) / lib["sd"]
         Fz = np.asarray(lib["Fz"], float); Y = np.asarray(lib["Y"], float)
         cond = np.asarray(lib["cond"]).astype(str)
@@ -1926,31 +2032,14 @@ class RealDataPage(QWidget):
 
     def _draw_conc_spiral(self, ax, r, nb, nbcols, um_all, hit, med,
                           out_of_lib):
-        """판독 스파이럴 — 그림 60 문법의 라이브판.
-        각도 = 픽셀의 표면(NNLS) THI 분율 순위, 반지름 = 픽셀 µM 판독 ÷
-        기준(truth 입력 시 참값, 아니면 그 성분의 맵 중앙값).
-        저채도 점 = 픽셀(raw 문법, 슬라이더로 표시 비율), 고채도 곡선 =
-        성분별 러닝 중앙값. 정확도-순위 등방축은 한 맵 안에서는 순위가
-        반지름과 같은 정보라 점이 곡선으로 늘어서 구름이 죽는다 — 폐기
-        (2026-09-02). 노랑 밴드 = 1.25/1.5/1.75/2×, 금색 링은 vs-truth만.
-        무응답(라이브러리 밖)이면 점 없이 과녁만 남긴다."""
-        RMAX = 2.0
+        """Circular heatmap inspired by radial expression plots.
 
-        def _rad(x):
-            return np.clip(np.log2(np.clip(x, 1e-3, None)), -RMAX, RMAX) + RMAX
-
-        from matplotlib.colors import to_rgb
-        th = np.linspace(0, 2 * np.pi, 180)
-        wr, wg, wb = to_rgb("#eab53a")
-        lo = 1.0
-        for f, fw in ((1.25, 0.45), (1.5, 0.62), (1.75, 0.76), (2.0, 0.88)):
-            c = (wr + (1 - wr) * fw, wg + (1 - wg) * fw, wb + (1 - wb) * fw)
-            ax.fill_between(th, _rad(lo), _rad(f), color=c, lw=0, zorder=0)
-            ax.fill_between(th, _rad(1 / f), _rad(1 / lo), color=c, lw=0,
-                            zorder=0)
-            lo = f
-        # 금색 1× 링은 뺐다 — 특히 vs-map-median 모드에선 기준이 자기 중앙값이라
-        # 줄이 정보를 담지 않는다. 밴드 대칭(가장 진한 밴드 중앙 = 1×)이면 충분.
+        Angle is the NNLS THI-share rank. Each coloured ring is one analyte's
+        concentration relative to truth (when supplied) or its map median:
+        purple < reference, ivory = reference, gold > reference. The centre curve
+        is the local mean absolute MLP-vs-NNLS composition change, so this panel
+        supports the dashboard's main comparison instead of being decorative.
+        """
         truth = None
         try:
             tv = [float(x) for x in
@@ -1962,22 +2051,7 @@ class RealDataPage(QWidget):
         ref = [(truth[i] if truth and truth[i] > 0 else
                 (med[i] if np.isfinite(med[i]) and med[i] > 0 else None))
                for i in range(len(nb))]
-        if truth:
-            # vs-truth 모드만 금색 과녁 링 — 그림(44f~k)과 표지 통일. map-median
-            # 모드에선 기준이 자기 중앙값이라 링이 정보를 담지 않아 뺀다.
-            ax.plot(th, np.full_like(th, RMAX), color="#c8930f", lw=1.6,
-                    zorder=2)
-        frac = (self.sl_spiral.value() / 100.0
-                if hasattr(self, "sl_spiral") else 0.25)
-
-        def _mute(c, f=0.55):
-            cr, cg, cb = to_rgb(c)
-            gr = 0.85
-            return (cr + (gr - cr) * f, cg + (gr - cg) * f,
-                    cb + (gr - cb) * f)
-
         shown = False
-        rng_sp = np.random.default_rng(260902)
         rnb = getattr(r, "ratio_nb", None)
         if not out_of_lib and hit.any() and rnb is not None:
             thi = nb.index("THI") if "THI" in nb else 0
@@ -1985,48 +2059,123 @@ class RealDataPage(QWidget):
             sel = np.where(hit)[0]
             order = sel[np.argsort(share[sel])]
             n = len(order)
-            ang_all = (np.deg2rad(100)
-                       + np.deg2rad(310) * np.arange(n) / max(n - 1, 1))
-            stations = np.linspace(0, n - 1, min(72, n)).astype(int)
-            win = max(12, int(n * 0.06))
+            bins = min(n, self.sl_spiral.value() if hasattr(self, "sl_spiral") else 36)
+            bins = max(1, bins)
+            edges_i = np.linspace(0, n, bins + 1).astype(int)
+            heat = np.full((len(nb), bins), np.nan)
             for i in range(len(nb)):
                 if ref[i] is None:
                     continue
                 v = um_all[order, i]
-                fin = np.isfinite(v) & (v > 0)
-                if fin.sum() < 5:
-                    continue
-                if frac > 0:
-                    idx = np.where(fin)[0]
-                    k = max(1, int(round(idx.size * frac)))
-                    pick = (idx if k >= idx.size
-                            else rng_sp.choice(idx, k, replace=False))
-                    ax.scatter(ang_all[pick],
-                               np.clip(_rad(v[pick] / ref[i]), 0.06,
-                                       2 * RMAX + 0.1),
-                               s=6, color=_mute(nbcols[i]), alpha=0.75,
-                               edgecolors="none", zorder=3)
-                a_st, q2s = [], []
-                for st in stations:
-                    w = v[max(0, st - win):min(n, st + win + 1)]
+                for b in range(bins):
+                    w = v[edges_i[b]:edges_i[b + 1]]
                     w = w[np.isfinite(w) & (w > 0)]
-                    if w.size >= 5:
-                        a_st.append(ang_all[st])
-                        q2s.append(np.median(w / ref[i]))
-                if a_st:
-                    ax.plot(np.asarray(a_st),
-                            np.clip(_rad(np.asarray(q2s)), 0.06,
-                                    2 * RMAX + 0.1),
-                            color=nbcols[i], lw=2.4, alpha=0.95, zorder=4,
-                            solid_capstyle="round")
-                shown = True
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_ylim(-0.7, 2 * RMAX + 0.3)
+                    if w.size:
+                        heat[i, b] = np.log2(np.median(w) / ref[i])
+                        shown = True
+            from matplotlib.colors import LinearSegmentedColormap
+            cmap = LinearSegmentedColormap.from_list(
+                "radial_ratio", ["#7775a5", "#f7f5ed", "#e6a63a"])
+            # Full, contiguous clockwise rings, matching the reference visual grammar.
+            ax.set_theta_zero_location("N")
+            ax.set_theta_direction(-1)
+            theta_e = np.linspace(0, 2 * np.pi, bins + 1)
+            theta_c = (theta_e[:-1] + theta_e[1:]) / 2.0
+            ax.grid(False)
+            # Mean in log2 space = geometric mean fold-change across DQ/TBZ/THI.
+            integrated = np.nanmean(heat, axis=0)
+            heat_rows = np.vstack([heat, integrated])
+            ring_names = list(nb) + ["Integrated"]
+            ring_h, pitch, inner = 0.76, 0.79, 1.35
+            for i, nm in enumerate(ring_names):
+                bottom = inner + i * pitch
+                colors = [cmap(np.clip((v + 1.0) / 2.0, 0.0, 1.0))
+                          if np.isfinite(v) else (0.92, 0.92, 0.92, 1.0)
+                          for v in heat_rows[i]]
+                ax.bar(theta_c, np.full(bins, ring_h), bottom=bottom,
+                       width=np.diff(theta_e) * 0.98, align="center",
+                       color=colors, edgecolor="white", linewidth=0.35, zorder=1)
+                # Like the reference figure, ring names sit together at 12 o'clock.
+                ax.text(0.0, bottom + ring_h / 2,
+                        nm, ha="center", va="center", fontsize=6.5,
+                        fontweight="bold", color="#30343a",
+                        bbox=dict(facecolor="white", alpha=0.72,
+                                  edgecolor="none", pad=0.35),
+                        zorder=6)
+            # Actual THI fractions around the perimeter, analogous to the reference's
+            # outer feature labels. Numeric values remove the old rank ambiguity.
+            outer = inner + len(ring_names) * pitch
+            label_bins = np.unique(np.linspace(0, bins - 1, min(8, bins)).astype(int))
+            for b in label_bins:
+                sw = share[order[edges_i[b]:edges_i[b + 1]]]
+                if not len(sw):
+                    continue
+                angle = theta_c[b]
+                deg = float(np.degrees(angle))
+                rotation = -deg
+                ha = "left"
+                if 90 < deg < 270:
+                    rotation += 180
+                    ha = "right"
+                ax.text(angle, outer + 0.10, f"THI {np.median(sw) * 100:.0f}%",
+                         rotation=rotation, rotation_mode="anchor",
+                         ha=ha, va="center", fontsize=5.5, color="#30343a")
+            # The reference graphic uses the centre for a separate summary.  Keep the
+            # fold colours exclusive to the rings and report model disagreement as a
+            # number, so %p can never be mistaken for a reference fold.
+            before = np.asarray(self._spectral_ratio_nb(r), float)
+            after = np.asarray(self._ratio_nb(r), float)
+            delta = np.mean(np.abs(after - before), axis=1) * 100.0
+            dmed = float(np.nanmedian(delta[hit])) if hit.any() else np.nan
+            ax.text(0.0, inner * 0.46,
+                    "MLP−NNLS\nmedian Δ\n" + (f"{dmed:.1f} %p" if np.isfinite(dmed) else "—"),
+                    ha="center", va="center", fontsize=6.3, fontweight="bold",
+                    color="#30343a", zorder=8)
+            ax.set_yticks([])
+            ax.set_xticks([])
+        else:
+            ax.set_xticks([]); ax.set_yticks([])
+        if shown:
+            # Match the reference: a compact vertical expression scale at upper-right.
+            from matplotlib.cm import ScalarMappable
+            from matplotlib.colors import Normalize
+            cax = ax.inset_axes([1.01, 0.64, 0.035, 0.27])
+            sm = ScalarMappable(norm=Normalize(vmin=-1.0, vmax=1.0), cmap=cmap)
+            cb = ax.figure.colorbar(sm, cax=cax, orientation="vertical")
+            cb.set_ticks([-1.0, 0.0, np.log2(1.5), 1.0])
+            cb.set_ticklabels(["0.5×", "1×", "1.5×", "2×"])
+            cb.ax.tick_params(labelsize=5, length=2, pad=1)
+            cb.outline.set_linewidth(0.45)
+            cax.set_title("Fold", fontsize=6, pad=2)
+        ax.set_ylim(0.0, inner + (len(nb) + 1) * pitch + 0.55
+                    if shown else len(nb) + 1.0)
         ax.spines["polar"].set_visible(False)
-        lab = "vs truth" if truth else "vs map median"
-        ax.set_title("readout spiral · " + (lab if shown else "no answer"),
-                     fontsize=10, color="#5a6067" if shown else "#c0392b")
+        ax.set_title("" if shown else "radial readout · no answer",
+                     fontsize=8, color="#c0392b", pad=8)
+
+    def _ensure_conc_scale_controls(self, names, auto_max):
+        """One editable colour maximum per apparent-concentration map."""
+        names = tuple(names)
+        if names == getattr(self, "_conc_scale_names", ()):
+            return
+        while self.conc_scale_lay.count():
+            item = self.conc_scale_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._conc_scale_names = names
+        self._conc_scale_spins = {}
+        self.conc_scale_lay.addStretch(1)
+        self.conc_scale_lay.addWidget(self._mk_lbl("map max (µM):"))
+        for nm in names:
+            self.conc_scale_lay.addWidget(self._mk_lbl(nm))
+            sp = QDoubleSpinBox(); sp.setDecimals(1); sp.setRange(0.1, 1e6)
+            sp.setValue(max(float(auto_max), 0.1)); sp.setFixedWidth(68)
+            sp.setToolTip(f"{nm} concentration-map colour maximum")
+            sp.editingFinished.connect(
+                lambda: self._res is not None and self._plot_conc(self._res))
+            self.conc_scale_lay.addWidget(sp)
+            self._conc_scale_spins[nm] = sp
+        self.conc_scale_lay.addStretch(1)
 
     def _plot_conc(self, r):
         """Per-substance apparent SERS-equivalent concentration (µM) heat-maps — only when a
@@ -2036,7 +2185,7 @@ class RealDataPage(QWidget):
             self.result_grid.setRowStretch(2, 0)
             return
         self.card_conc.setVisible(True)
-        self.result_grid.setRowStretch(2, 1)
+        self.result_grid.setRowStretch(2, 4)
         self.c_conc.fig.clear()
         self._exp_conc = []
         nb = [r.comps[i] for i in r.nonbg]; nbcols = self._nb_colors(r)
@@ -2044,7 +2193,7 @@ class RealDataPage(QWidget):
         origin, extent = self._extent_origin(ux, uy)
         # This row does not need to match the other rows' map size — use the width:
         # 3 wide map cells + spiral(2) + spacer + a wide distribution graph.
-        map_slots = 9
+        map_slots = 11
         hit = self._hit(r)                                 # exclude saturated/low-R² px
         # SHARED µM colour axis across substances, so the maps are directly comparable.
         # The maps and dots stay RAW (what signal + learning alone report); the batch
@@ -2103,11 +2252,6 @@ class RealDataPage(QWidget):
                 if mmed > 0 and np.isfinite(knn["uM"][i]):
                     um_all[:, i] = um_all[:, i] * (float(knn["uM"][i]) / mmed)
             knn_used = True
-        # 픽셀 클릭 판독용 스냅샷 — 스펙트럼 카드가 "현재 경로의 픽셀 µM"을
-        # 보여줄 수 있게, 경로 처리가 끝난 표시값을 보관한다 (2026-09-04).
-        self._um_display = None if out_of_lib else um_all.copy()
-        self._um_route_lbl = ({"knn": "library k-NN", "pxknn": "pixel k-NN"}
-                              .get(route, "model head"))
         anch = getattr(self, "_anchor", None)
         anchored = anch is not None and anch.get("subs") == nb
         afac = (np.asarray(anch["factor"], float) if anchored else None)
@@ -2133,6 +2277,17 @@ class RealDataPage(QWidget):
             # substance was blanking every other panel
             vmax = min(vmax, float(np.nanmax(hi_um[np.isfinite(hi_um)])))
         vmax = vmax or 1.0
+        vmax *= (self.sl_map_scale.value() / 100.0
+                 if hasattr(self, "sl_map_scale") else 1.0)
+        self._ensure_conc_scale_controls(nb, vmax)
+        vmaxes = [float(self._conc_scale_spins[nm].value()) for nm in nb]
+        # Snapshot the exact displayed values for a clean export-only grouped figure.
+        # Reusing screen axes can capture the neighbouring distribution's labels.
+        self._conc_export = dict(nb=list(nb), colors=list(nbcols),
+                                 um=np.asarray(um_all, float).copy(),
+                                 hit=np.asarray(hit, bool).copy(), rows=rows.copy(),
+                                 cols=cc.copy(), ny=ny, nx=nx, extent=list(extent),
+                                 origin=origin, vmax=list(vmaxes))
         from matplotlib.colors import LinearSegmentedColormap
         # Full-width spec of its own: _row_gs centres this row to the OTHER cards'
         # map width, which left both gutters empty. This row uses everything.
@@ -2140,8 +2295,10 @@ class RealDataPage(QWidget):
         if _old_cid is not None:
             self.c_conc.mpl_disconnect(_old_cid); self.c_conc._rowgs_cid = None
         gs = self.c_conc.fig.add_gridspec(
-            2, map_slots, height_ratios=[1.0, 0.06], hspace=0.05, wspace=0.05,
-            left=0.012, right=0.988, bottom=0.09, top=0.90)
+            2, map_slots, height_ratios=[1.0, 0.06],
+            width_ratios=[1, 1, 1, 0.22, 1, 1, 1, 0.22, 1, 1, 1],
+            hspace=0.05, wspace=0.04,
+            left=0.012, right=0.988, bottom=0.13, top=0.84)
         for i, nm in enumerate(nb):
             ax = self.c_conc.style(self.c_conc.fig.add_subplot(gs[0, i]))
             cax = self.c_conc.fig.add_subplot(gs[1, i])
@@ -2153,7 +2310,7 @@ class RealDataPage(QWidget):
             ax.set_facecolor("#0b0d10")
             im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                            interpolation="nearest", cmap=cmap, vmin=0.0,
-                           vmax=vmax)
+                           vmax=vmaxes[i])
             # 스케일 바 — 세 맵이 같은 0..vmax 램프를 쓴다는 것까지 같이 보인다.
             # aspect=equal 로 축 상자가 줄어들 때 맵은 아래(S), 바는 위(N)로
             # 붙여 둘 사이가 벌어지지 않게 한다 (2026-09-02).
@@ -2161,20 +2318,20 @@ class RealDataPage(QWidget):
             cax.set_anchor("N")
             cb = self.c_conc.fig.colorbar(im, cax=cax,
                                           orientation="horizontal")
-            cb.set_ticks([0.0, vmax])
-            cb.set_ticklabels(["0", f"{vmax:.0f} µM"])
+            cb.set_ticks([0.0, vmaxes[i]])
+            cb.set_ticklabels(["0", f"{vmaxes[i]:.0f} µM"])
             cax.tick_params(labelsize=8, length=2, pad=1)
             cb.outline.set_linewidth(0.4)
-            self._exp_conc.append((f"uM_{nm}", ax, None))
+            self._exp_conc.append((f"map_{nm}", ax, cax))
             ax.set_title(nm, fontsize=10)
             ax.set_xticks([]); ax.set_yticks([])
             self._click_axes.append(ax)
         # ---- pixel distribution: show the measurements, not only one median bar ----
-        # +3 = spiral 2칸 + spacer 1칸 so the graph's y-axis label never sits
-        # on top of the spiral.
-        dist_start = min(len(nb) + 3, map_slots - 1)
+        # Three balanced zones: concentration maps | distribution | radial heatmap.
+        dist_start = len(nb) + 1
+        dist_end = min(dist_start + 3, map_slots)
         axb = self.c_conc.style(
-            self.c_conc.fig.add_subplot(gs[:, dist_start:map_slots]))
+            self.c_conc.fig.add_subplot(gs[:, dist_start:dist_end]))
         med = np.full(len(nb), np.nan); q1 = med.copy(); q3 = med.copy()
         bad_frac = np.zeros(len(nb))
         total_n = np.zeros(len(nb), dtype=int)
@@ -2206,31 +2363,26 @@ class RealDataPage(QWidget):
         #    분율 순위, 반지름 = 픽셀 판독 ÷ 기준(truth 입력 시 참값, 없으면 맵
         #    중앙값 = 픽셀 산포). 무응답이면 점 없이 과녁만.
         ax_sp = self.c_conc.fig.add_subplot(
-            gs[:, len(nb):len(nb) + 2], projection="polar")
+            gs[:, dist_end + 1:map_slots], projection="polar")
         self._draw_conc_spiral(ax_sp, r, nb, nbcols, um_all, hit, med,
                                out_of_lib)
-        self._exp_conc.append(("uM_spiral", ax_sp, None))
+        self._exp_conc.append(("radial_readout", ax_sp, None))
         xs = np.arange(len(nb))
         ok = np.isfinite(med)
         rng = np.random.default_rng(260819)       # stable jitter across redraws
-        # Violin body (the pixel distribution's shape) + jittered dots + black
-        # IQR/median marks: "the pixels ran from small to large, and centred here".
+        # A light, genuinely jittered strip plot + black IQR/median marks.  The old
+        # violin body made dense samples read as one fat solid object and hid the
+        # individual pixels, which are the useful evidence here.
         # 라이브러리 밖이면 µM 축의 점을 아예 그리지 않는다 — "무응답"이라면서
         # 외삽 구름을 계속 보여주는 모순을 없앤다. 공간 지도는 상대 패턴이라 유지.
         for i, vv in enumerate(distributions if not out_of_lib else []):
-            if vv.size >= 2:
-                violin = axb.violinplot(vv, positions=[i], widths=0.7,
-                                        showmeans=False, showmedians=False,
-                                        showextrema=False)
-                for body_part in violin["bodies"]:
-                    body_part.set_facecolor(nbcols[i])
-                    body_part.set_edgecolor("none")
-                    body_part.set_alpha(0.20)
             if vv.size:
-                jitter = rng.uniform(-0.26, 0.26, size=vv.size)
-                axb.scatter(np.full(vv.size, i) + jitter, vv, s=9,
-                            color=nbcols[i], alpha=0.40, edgecolors="white",
-                            linewidths=0.3, zorder=2)
+                # Wider horizontal jitter, smaller translucent dots and no outlines:
+                # repeated/quantised y values remain separable instead of fusing.
+                jitter = rng.uniform(-0.34, 0.34, size=vv.size)
+                axb.scatter(np.full(vv.size, i) + jitter, vv, s=6,
+                            color=nbcols[i], alpha=0.30, edgecolors="none",
+                            linewidths=0.0, zorder=2, rasterized=True)
                 # black IQR and median marks are a compact summary on top of all dots
                 axb.vlines(i, q1[i], q3[i], color=INK, lw=1.2, zorder=3)
                 axb.hlines([q1[i], q3[i]], i - 0.08, i + 0.08,
@@ -2274,7 +2426,9 @@ class RealDataPage(QWidget):
         for _extra in (kt, tv):
             if _extra is not None:
                 _base = max(_base, float(np.nanmax(np.asarray(_extra, float))) * 1.15)
-        axb.set_ylim(0, max(_base, 1e-6) * 1.45)
+        _yfactor = (self.sl_dist_y.value() / 100.0
+                    if hasattr(self, "sl_dist_y") else 1.0)
+        axb.set_ylim(0, max(_base, 1e-6) * 1.45 * _yfactor)
         if out_of_lib and kt is None and tv is None:
             axb.set_ylim(0, 1); axb.set_yticks([])
             axb.set_ylabel("")
@@ -2398,7 +2552,7 @@ class RealDataPage(QWidget):
                       fontsize=9)
         axb.set_ylabel("µM per pixel", fontsize=9)
         axb.tick_params(labelsize=9)
-        self._exp_conc.append(("uM_pixel_distribution", axb, None))
+        self._exp_conc.append(("pixel_distribution", axb, None))
         self.c_conc.draw_idle()
 
     # Final pie-map style (settled with the 260812 trio map): pure black ground,
@@ -2410,15 +2564,15 @@ class RealDataPage(QWidget):
     PIE_GRID = "#ffffff"
 
     def _plot_pies(self, r):
-        """Draw stage-1 and final per-pixel composition at a stable, fixed layout."""
+        """Draw NNLS and final per-pixel composition at a stable, fixed layout."""
         from matplotlib.collections import LineCollection
         old = getattr(self.c_pie, "_rowgs_cid", None)
         if old is not None:
             self.c_pie.mpl_disconnect(old)
             self.c_pie._rowgs_cid = None
         self.c_pie.fig.clear()
-        self.c_pie.fig.subplots_adjust(left=0.02, right=0.98, bottom=0.22,
-                                       top=0.88, wspace=0.10)
+        pgs = self.c_pie.fig.add_gridspec(
+            1, 3, wspace=0.20, left=0.02, right=0.98, bottom=0.08, top=0.88)
         cols = self._nb_colors(r)
         x, y = r.coords[:, 0], r.coords[:, 1]
         ux, uy = np.unique(x), np.unique(y)
@@ -2428,11 +2582,11 @@ class RealDataPage(QWidget):
         hit = self._hit(r)
         before = self._spectral_ratio_nb(r)
         after = self._ratio_nb(r)
-        titles = ("Before · spectral/NNLS", "After · model" if r.method == "dlpx"
+        titles = ("NNLS (raw spectral)", "MLP" if r.method == "dlpx"
                   else f"After · {r.method.upper()}")
         axes = []
         for panel, (ratios, title) in enumerate(zip((before, after), titles), 1):
-            ax = self.c_pie.style(self.c_pie.fig.add_subplot(1, 2, panel))
+            ax = self.c_pie.style(self.c_pie.fig.add_subplot(pgs[0, panel - 1]))
             axes.append(ax); self._click_axes.append(ax)
             ax.set_facecolor(self.PIE_BG)
             gsegs = [[(ux[0] - sx/2 + j*sx, uy[0] - sy/2),
@@ -2459,11 +2613,41 @@ class RealDataPage(QWidget):
             ax.set_ylim(*((y.max()+sy, y.min()-sy) if self._flip()
                           else (y.min()-sy, y.max()+sy)))
             ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
-            ax.set_title(title, fontsize=8, pad=2)
+            ax.set_title(title, fontsize=9, fontweight="bold", pad=2)
+        # A direct difference panel removes the need to mentally subtract thousands
+        # of tiny pies. Value = mean absolute component change in percentage points.
+        axd = self.c_pie.style(self.c_pie.fig.add_subplot(pgs[0, 2]))
+        axes.append(axd); self._click_axes.append(axd)
+        delta = np.mean(np.abs(after - before), axis=1) * 100.0
+        dgrid = np.full((len(uy), len(ux)), np.nan)
+        xi = {v: i for i, v in enumerate(ux)}; yi = {v: i for i, v in enumerate(uy)}
+        for i in np.where(hit)[0]:
+            dgrid[yi[y[i]], xi[x[i]]] = delta[i]
+        vmax = float(np.nanquantile(delta[hit], 0.99)) if hit.any() else 1.0
+        vmax = max(vmax, 1.0)
+        delta_manual = self._parse_scale("delta")
+        dmin = delta_manual[0] if delta_manual is not None else 0.0
+        if delta_manual is not None:
+            vmax = delta_manual[1]
+        dim = axd.imshow(dgrid, extent=[ux.min()-sx/2, ux.max()+sx/2,
+                                      uy.min()-sy/2, uy.max()+sy/2],
+                         origin="lower", aspect="equal", interpolation="nearest",
+                         cmap="magma", vmin=dmin, vmax=vmax)
+        if self._flip():
+            axd.invert_yaxis()
+        axd.set_xticks([]); axd.set_yticks([])
+        axd.set_title("Mean |MLP − NNLS| (%p)", fontsize=9,
+                      fontweight="bold", pad=2)
+        # Use the same dedicated bottom row as the two blank peers above. This keeps
+        # all three map axes exactly aligned instead of shrinking only the delta map.
+        cb = self._side_colorbar(self.c_pie.fig, axd, dim,
+                                 ticks=[dmin, vmax],
+                                 labels=[f"{dmin:.0f}", f"{vmax:.0f} %p"])
         self._sel_arts = []
-        self._pie_ax = axes[-1]
+        self._pie_ax = axes[1]
         self._exp_pie = [("composition_before", axes[0], None),
-                         ("composition_after", axes[1], None)]
+                         ("composition_after", axes[1], None),
+                         ("composition_difference", axes[2], cb.ax)]
         # The persistent colour chips above the dashboard already identify each
         # substance; repeating them here only covers the bottom of both maps.
         self.c_pie.draw_idle()
@@ -2506,8 +2690,8 @@ class RealDataPage(QWidget):
 
     def _plot_comp(self, r):
         self.c_comp.fig.clear()
-        self.c_comp.fig.subplots_adjust(left=0.01, right=0.99, bottom=0.20,
-                                        top=0.86, wspace=0.05)
+        self.c_comp.fig.subplots_adjust(left=0.01, right=0.99, bottom=0.17,
+                                        top=0.80, wspace=0.02)
         cols = self._nb_colors(r); nb = [r.comps[i] for i in r.nonbg]
         hit = self._hit(r)
         weights = np.clip(np.asarray(r.spectra, float), 0.0, None).sum(axis=1)
@@ -2519,19 +2703,25 @@ class RealDataPage(QWidget):
                     if w.sum() > 0 else ratios[use].mean(axis=0))
 
         pairs = ((aggregate(self._spectral_ratio_nb(r)), "Before\nspectral/NNLS"),
-                 (aggregate(self._ratio_nb(r)),
-                  "After\nmodel" if r.method == "dlpx" else f"After\n{r.method.upper()}"))
+                  (aggregate(self._ratio_nb(r)),
+                   "After\nMLP" if r.method == "dlpx" else f"After\n{r.method.upper()}"))
+        changes = (pairs[1][0] - pairs[0][0]) * 100.0
+        change_text = "   ".join(f"{nm} {d:+.0f}%p" for nm, d in zip(nb, changes))
+        self.c_comp.fig.suptitle("Change:  " + change_text, fontsize=9,
+                                 fontweight="bold", y=0.98)
         for panel, (mr, title) in enumerate(pairs, 1):
             ax = self.c_comp.style(self.c_comp.fig.add_subplot(1, 2, panel))
             keep = [i for i in range(len(nb)) if mr[i] >= 0.01] or [int(mr.argmax())]
             ax.pie([mr[i] for i in keep], labels=None,
                    colors=[cols[i] for i in keep], autopct="%1.0f%%",
-                   textprops={"fontsize": 8, "color": INK}, radius=0.88)
-            ax.set_title(title, fontsize=8, pad=1)
+                   pctdistance=0.62,
+                   textprops={"fontsize": 11, "fontweight": "bold", "color": INK},
+                   radius=1.05)
+            ax.set_title(title, fontsize=9, fontweight="bold", pad=1)
             ax.set_aspect("equal")
         handles = [Patch(facecolor=cols[i], label=nm) for i, nm in enumerate(nb)]
         self.c_comp.fig.legend(handles=handles, loc="lower center", ncol=len(handles),
-                               fontsize=7, frameon=False, handlelength=1.0,
+                               fontsize=8, frameon=False, handlelength=1.0,
                                columnspacing=1.1, bbox_to_anchor=(0.5, 0.01))
         self.c_comp.draw_idle()
     def _plot_spec(self, r, i):
@@ -2586,49 +2776,14 @@ class RealDataPage(QWidget):
             tag += (f"  (!) low R²={r2:.2f} — references fit this pixel badly"
                     + (" (excluded)" if self.chk_rel.isChecked() else ""))
         if getattr(r, "conc", None) is not None and r.hit[i]:   # absolute µM per pixel
-            # 이 픽셀의 농도: 현재 판독 경로의 표시값 + 검량선 역산값 병기 —
-            # "원래 검량 구간(9–144)에서 얼마나 달라지는지"가 클릭마다 보인다.
-            um_d = getattr(self, "_um_display", None)
-            route_lbl = getattr(self, "_um_route_lbl", "model head")
-            if um_d is not None and len(um_d) == r.n_pixels:
-                um = np.asarray(um_d[i], float)
-            else:
-                um = r.conc[i] * 1e6
-                route_lbl = "raw"
-            cal_um = None
-            try:
-                u = (self.dl_model.get("uM")
-                     if isinstance(self.dl_model, dict) else None) or {}
-                from dl_model import _band_signal, _invert_calibration
-                _rng = np.asarray(u["cal_range_uM"], float)
-                sigp = _band_signal(np.clip(r.spectra[i:i + 1], 0, None),
-                                    np.asarray(r.wn, float),
-                                    np.asarray(u["bands_cm"], float))
-                cal_um = _invert_calibration(
-                    sigp, np.asarray(u["loglinear_ab"], float), _rng)[0]
-            except Exception:
-                cal_um = None
-
-            def _cal_txt(k):
-                if cal_um is None:
-                    return ""
-                v = float(cal_um[k])
-                lo_c, hi_c = float(_rng[k, 0]), float(_rng[k, 1])
-                if v <= lo_c * 1.01:
-                    return f" (cal ≤{lo_c:g})"
-                if v >= hi_c * 0.99:
-                    return f" (cal ≥{hi_c:g})"
-                return f" (cal {v:.3g})"
-
-            cs = "  ·  ".join(
-                f"{r.comps[j]} {um[k]:.3g}{_cal_txt(k)}µM"
-                for k, j in enumerate(r.nonbg)
-                if np.isfinite(um[k]) and um[k] > 0)
+            um = r.conc[i] * 1e6
+            cs = "  ·  ".join(f"{r.comps[j]} {um[k]:.3g}µM" for k, j in enumerate(r.nonbg)
+                              if np.isfinite(um[k]) and um[k] > 0)
             sat = ("  (!) saturated" if r.pp_theta is not None
                    and r.pp_theta[i] > 0.85 else "")
             ood_names = [r.comps[j] for k, j in enumerate(r.nonbg) if not np.isfinite(um[k])]
             if cs:
-                tag += f"  |  {route_lbl}: {cs}{sat}"
+                tag += f"  |  {cs}{sat}"
             if ood_names:
                 tag += "  |  OOD: " + ", ".join(ood_names)
         # the pixel readout goes in the TITLE. The card is short now, and this text
@@ -2660,6 +2815,41 @@ class RealDataPage(QWidget):
         self._update_sel_rings(r)                # rings on every map, never a rebuild
 
     # ---- export ----
+    def _save_concentration_group(self, folder):
+        """Export only the three real µM maps on a fresh, aligned canvas."""
+        data = getattr(self, "_conc_export", None)
+        if not data:
+            return False
+        from matplotlib.figure import Figure
+        from matplotlib.colors import LinearSegmentedColormap
+        fig = Figure(figsize=(12.0, 4.3))
+        gs = fig.add_gridspec(2, len(data["nb"]), height_ratios=[1.0, 0.065],
+                              hspace=0.08, wspace=0.06,
+                              left=0.015, right=0.985, bottom=0.08, top=0.91)
+        for i, (nm, color) in enumerate(zip(data["nb"], data["colors"])):
+            ax = fig.add_subplot(gs[0, i]); cax = fig.add_subplot(gs[1, i])
+            values = data["um"][:, i]
+            values = np.where(data["hit"] & np.isfinite(values) & (values > 0),
+                              values, np.nan)
+            grid = np.full((data["ny"], data["nx"]), np.nan)
+            grid[data["rows"], data["cols"]] = values
+            cmap = LinearSegmentedColormap.from_list("m", ["#0b0d10", color])
+            cmap.set_bad("#0b0d10")
+            ax.set_facecolor("#0b0d10")
+            im = ax.imshow(grid, extent=data["extent"], origin=data["origin"],
+                           aspect="equal", interpolation="nearest", cmap=cmap,
+                           vmin=0.0, vmax=data["vmax"][i])
+            ax.set_title(nm, fontsize=11, fontweight="bold", pad=4)
+            ax.set_xticks([]); ax.set_yticks([])
+            cb = fig.colorbar(im, cax=cax, orientation="horizontal")
+            cb.set_ticks([0.0, data["vmax"][i]])
+            cb.set_ticklabels(["0", f'{data["vmax"][i]:.0f} µM'])
+            cax.tick_params(labelsize=8, length=2, pad=1)
+            cb.outline.set_linewidth(0.5)
+        fig.savefig(os.path.join(folder, "real_concentration_maps.png"),
+                    dpi=300, transparent=True, bbox_inches="tight", pad_inches=0.04)
+        return True
+
     def _export(self):
         if self._res is None:
             self.status.setText("run first, then export")
@@ -2815,8 +3005,8 @@ class RealDataPage(QWidget):
                 ("real_composition_pies", self.c_pie),
                 ("real_composition", self.c_comp),
                 ("real_pixel_spectrum", self.c_spec)]
-        if getattr(r, "calibrated", False) and r.conc is not None:
-            figs.append(("real_concentration_maps", self.c_conc))
+        # Concentration is intentionally omitted from the composite figure list.
+        # Its maps, distribution and radial readout are exported separately below.
         n = _save_figs(figs, d)
         # one file PER PANEL as well — figures are for the screen, panels are what
         # actually lands in a slide. Each crop includes its own title and ramp.
@@ -2831,20 +3021,53 @@ class RealDataPage(QWidget):
             if not entries or not cv.isVisible():
                 continue
             cv.draw()                                    # renderer must be current
-            ren = cv.get_renderer() if hasattr(cv, "get_renderer") else None
             for label, ax, cbax in entries:
+                original_size = cv.fig.get_size_inches().copy()
                 try:
+                    ren = cv.get_renderer() if hasattr(cv, "get_renderer") else None
                     bb = ax.get_tightbbox(ren)
                     if cbax is not None:
                         bb = _mt.Bbox.union([bb, cbax.get_tightbbox(ren)])
                     bb = bb.transformed(cv.fig.dpi_scale_trans.inverted()).padded(0.05)
+                    # A cropped on-screen axes can be physically tiny even at 300 DPI.
+                    # Temporarily enlarge the complete figure so the crop itself has
+                    # publication-size inches, then render at a genuine 300 DPI.
+                    if label == "radial_readout":
+                        min_w, min_h = 5.0, 5.0       # >= 1500 × 1500 px
+                    elif label == "pixel_distribution":
+                        min_w, min_h = 7.0, 4.0       # >= 2100 × 1200 px
+                    elif label.startswith("map_"):
+                        min_w, min_h = 7.0, 3.5       # >= 2100 × 1050 px
+                    else:
+                        min_w, min_h = 5.0, 3.5
+                    scale = max(1.0, min_w / max(bb.width, 1e-6),
+                                min_h / max(bb.height, 1e-6))
+                    if scale > 1.0:
+                        cv.fig.set_size_inches(original_size * scale, forward=False)
+                        cv.draw()
+                        ren = cv.get_renderer() if hasattr(cv, "get_renderer") else None
+                        bb = ax.get_tightbbox(ren)
+                        if cbax is not None:
+                            bb = _mt.Bbox.union([bb, cbax.get_tightbbox(ren)])
+                        bb = bb.transformed(
+                            cv.fig.dpi_scale_trans.inverted()).padded(0.05)
                     safe = "".join(ch if ch.isalnum() or ch in "._-" else "_"
                                    for ch in label)
-                    cv.fig.savefig(os.path.join(pdir, f"{safe}.png"),
-                                   dpi=300, bbox_inches=bb, transparent=True)
+                    if cv is self.c_conc:
+                        out_path = os.path.join(d, f"real_concentration_{safe}.png")
+                    else:
+                        out_path = os.path.join(pdir, f"{safe}.png")
+                    cv.fig.savefig(out_path, dpi=300, bbox_inches=bb,
+                                   transparent=True)
                     np_ += 1
                 except Exception:
                     pass                                 # one bad crop must not kill export
+                finally:
+                    cv.fig.set_size_inches(original_size, forward=False)
+                    cv.draw_idle()
+        if getattr(r, "calibrated", False) and r.conc is not None:
+            if self._save_concentration_group(d):
+                n += 1
         if _sel is not None:
             self._sel = _sel; self._plot_pies(r)         # put the highlight back
         self._export_readme(d, r, nb, [f[0] for f in figs])
