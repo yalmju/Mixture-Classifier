@@ -1822,6 +1822,8 @@ class RealDataPage(QWidget):
         else:
             r.leaf_mask = None
             r.hit = r.hit_orig.copy()
+        if getattr(self, "lbl_floor", None) is not None:
+            self._floor_label()          # 라벨의 제외 픽셀 수를 이 맵 기준으로
         self._click_axes = []            # one reset per run — every plot re-registers
         self.pbar.hide()
         self.btn.setEnabled(True); self.btn.setText("Unmix")
