@@ -697,7 +697,7 @@ class RealDataPage(QWidget):
         caps = []
         for source, slots in ((self.c_maps.fig, 4), (self.c_abund.fig, 5)):
             fw = float(source.bbox.width)
-            if fw > 1:
+            if fw > 50:            # 레이아웃 전의 스테일 폭(수 px)은 무시
                 caps.append(_fit(slots) * (self._GS_R - self._GS_L) * fw /
                             (slots + (slots - 1) * self._GS_WS))
         if not caps:
@@ -709,7 +709,9 @@ class RealDataPage(QWidget):
         fw = max(float(fig.bbox.width), 1.0)
         cap = (self._GS_R - self._GS_L) * fw / (n + (n - 1) * self._GS_WS)
         requested = target / _fit(n)
-        requested = min(requested, cap)
+        # 공통폭 하한: 형제 카드의 스테일 폭이나 extra 밴드로 패널 수가 늘어도
+        # 자기 카드 용량의 60% 아래로는 안 내려간다 (맵 축소 버그 픽스).
+        requested = min(max(requested, 0.60 * cap), cap)
         span = requested * (n + (n - 1) * self._GS_WS) / fw
         return (1.0 - span) / 2.0, (1.0 + span) / 2.0
 
