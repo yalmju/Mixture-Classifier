@@ -3213,10 +3213,15 @@ class RealDataPage(QWidget):
                       "raw": "raw VIP band signal", "mlpsig": "MLP-corrected signal"
                       }.get(getattr(self, "_um_display_route", ""), "model head")
             _idx = np.where(_hd)[0]
+            _umz = np.where(_hd[:, None] & np.isfinite(um_d), um_d, 0.0)
             write_csv(os.path.join(d, "pixel_distribution.csv"),
-                      ["x", "y"] + [f"{nm}_{_units}" for nm in nb],
-                      [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}"]
-                       + [f"{um_d[i, k]:.6g}" for k in range(len(nb))] for i in _idx])
+                      ["x", "y", "hit"] + [f"{nm}_{_units}" for nm in nb],
+                      [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}", int(_hd[i])]
+                       + [f"{_umz[i, k]:.6g}" for k in range(len(nb))]
+                       for i in range(r.n_pixels)])
+            # 같은 값을 ny×nx 매트릭스로도 (Origin 히트맵): 비-hit 픽셀 = 0
+            for k, nm in enumerate(nb):
+                _mat(f"display_{_units}_{nm}.csv", _umz[:, k])
             _srows = []
             for k, nm in enumerate(nb):
                 v = um_d[_idx, k]; v = v[np.isfinite(v)]
