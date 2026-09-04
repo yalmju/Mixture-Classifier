@@ -1,0 +1,4 @@
+method,DQ_pct,TBZ_pct,THI_pct,composition_error_pct,delta_vs_MLP_pct_point,loss
+True,57.142857,28.571429,14.285714,0.000000,,reference
+MLP,51.995677,35.358860,12.645459,6.787434,0.000000,L_data
+MLP + Physics,57.561580,32.451850,9.986573,4.299144,-2.488290,L_data + 0.03 L_surface

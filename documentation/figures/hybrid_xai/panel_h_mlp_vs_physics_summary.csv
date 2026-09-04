@@ -1,0 +1,12 @@
+field,value,unit
+held_out_condition,DQ12-TBZ6-THI3,
+DQ_true,12,uM
+TBZ_true,6,uM
+THI_true,3,uM
+split,condition-held-out fold 2,
+random_seed,0,
+MLP_error,6.787434,%
+MLP_plus_physics_error,4.299144,%
+absolute_error_reduction,2.488290,percentage point
+relative_error_reduction,36.661714,%
+surface_loss_weight,0.03,

@@ -1,0 +1,3 @@
+﻿regime,condition,n_NNLS_hit_pixels,sg_window,sg_polyorder,sg_mode,std_ddof
+DQ-rich,DQ12_TBZ3_THI3,100,11,3,interp,1
+TBZ-rich,DQ6_TBZ24_THI6,100,11,3,interp,1

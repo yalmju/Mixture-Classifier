@@ -1,0 +1,89 @@
+diff --git a/page_real.py b/page_real.py
+index e24edd7..1c83a8a 100644
+--- a/page_real.py
++++ b/page_real.py
+@@ -231,6 +231,7 @@ class RealDataPage(QWidget):
+         corrcol = QVBoxLayout(); corrcol.setSpacing(2)
+         self.corr_lbl = QLabel("correction"); self.corr_lbl.setObjectName("field")
+         corrcol.addWidget(self.corr_lbl); corrcol.addWidget(self.chk_corr)
++        corr_b.setVisible(False); self.corr_lbl.setVisible(False); self.chk_corr.setVisible(False)
+         exp_b = QPushButton("Export…"); exp_b.setObjectName("ghost")
+         exp_b.clicked.connect(self._export)
+         self.btn = QPushButton("Unmix"); self.btn.setObjectName("primary")
+@@ -317,7 +318,7 @@ class RealDataPage(QWidget):
+         self.bandrow.addWidget(self._mk_lbl("bands (cm⁻¹):"))
+         self.bandrow.addStretch(1)
+         lay_maps.addLayout(self.bandrow)
+-        lay_maps.addWidget(self.c_maps); self.c_maps.setFixedHeight(190)
++        lay_maps.addWidget(self.c_maps); self.c_maps.setMinimumHeight(260)
+         # one min/max pair PER band panel (rebuilt with the band row) — the card-wide
+         # pair could not stretch a weak channel without flattening a strong one
+         self.scalerow = QHBoxLayout(); self.scalerow.setSpacing(6)
+@@ -331,7 +332,7 @@ class RealDataPage(QWidget):
+         self.c_abund = Canvas()
+         card_ab, lay_ab = _card(
+             "Stage-1 spectral evidence — full-spectrum NNLS + background gate")
+-        lay_ab.addWidget(self.c_abund); self.c_abund.setFixedHeight(190)
++        lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(260)
+         lay_ab.addLayout(self._scale_row("abund", 1.0))
+ 
+         # Nine equal map slots across the result area. Raw uses four (merge + 3),
+@@ -345,7 +346,7 @@ class RealDataPage(QWidget):
+         self.c_spec = Canvas()
+         scard, slay = _card("Selected pixel spectrum — measured vs reconstructed")
+         slay.addWidget(self.c_spec)
+-        self.c_spec.setFixedHeight(215)
++        self.c_spec.setMinimumHeight(260)
+ 
+         # 3) per-pixel composition pie | the same composition summed over the map —
+         #    the pie map and the number it adds up to belong on one row
+@@ -356,9 +357,9 @@ class RealDataPage(QWidget):
+         clay.addWidget(self.c_comp); self.c_comp.setFixedHeight(215)
+ 
+         # One comparison row, in reading order. All three stay visible.
+-        body.addWidget(scard, 1, 0, 1, 3)
+-        body.addWidget(pcard, 1, 3, 1, 3)
+-        body.addWidget(ccard, 1, 6, 1, 3)
++        body.addWidget(pcard, 1, 0, 1, 3)
++        body.addWidget(ccard, 1, 3, 1, 3)
++        body.addWidget(scard, 1, 6, 1, 3)
+ 
+         # 4) per-substance concentration (µM) maps — its own full-width row
+         self.c_conc = Canvas()
+@@ -989,10 +990,12 @@ class RealDataPage(QWidget):
+         which single rule will decide background."""
+         if not hasattr(self, "thr"):        # _adopt_model can fire before the widgets exist
+             return
+-        by_bg = bool(self.bg_paths)                    # a measured background map wins
++        by_bg = bool(self.bg_paths)
+         manual = not by_bg
+         self.chk_auto.setEnabled(manual)
+-        self.thr.itemAt(1).widget().setEnabled(manual and not self.chk_auto.isChecked())
++        # The fraction gate remains editable even when a measured background
++        # is loaded; this lets users tune the 0.15 default before re-running.
++        self.thr.itemAt(1).widget().setEnabled(not self.chk_auto.isChecked())
+         if by_bg:
+             tip = "not used: the loaded measured background map decides background"
+             self.chk_auto.setToolTip(tip)
+@@ -2462,6 +2465,21 @@ class RealDataPage(QWidget):
+                + [f"{c[i]:.6g}" for c in _chans] for i in range(r.n_pixels)]
+         write_csv(os.path.join(d, "band_maps.csv"), _bh, _br)
+         ncsv += 1
++        # Standalone map tables make the exported figures reproducible without
++        # opening the app: each row is one pixel and each column is one panel.
++        _ah = ["x", "y"] + [f"abundance_{c}" for c in r.comps]
++        _ar = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}"]
++               + [f"{evidence[i, k]:.6g}" for k in range(len(r.comps))]
++               for i in range(r.n_pixels)]
++        write_csv(os.path.join(d, "abundance_maps.csv"), _ah, _ar)
++        ncsv += 1
++        if cal:
++            _ch = ["x", "y"] + [f"conc_uM_{nm}" for nm in nb]
++            _cr = [[f"{r.coords[i, 0]:g}", f"{r.coords[i, 1]:g}"]
++                   + [f"{r.conc[i, k] * 1e6:.6g}" if np.isfinite(r.conc[i, k]) else ""
++                      for k in range(len(nb))] for i in range(r.n_pixels)]
++            write_csv(os.path.join(d, "concentration_maps.csv"), _ch, _cr)
++            ncsv += 1
+         # the µM summary-bar table, numbers identical to the drawn bars
+         if cal:
+             _hit = self._hit(r)

@@ -1,0 +1,139 @@
+{
+  "protocol": {
+    "conditions": 92,
+    "split": "absolute-condition-grouped 5-fold",
+    "ensemble": "equal mean of constant-distilled, linear-decay-distilled, and map-only full-spectrum MLPs",
+    "inference": "single unified ensemble; no condition-specific switch"
+  },
+  "members": [
+    {
+      "name": "constant",
+      "seed": 16100,
+      "metrics": {
+        "all": {
+          "n": 92,
+          "mae_pp": 13.252039778191696,
+          "median_recovery_pct": 96.7964306473732,
+          "within80_120_pct": 34.509803921568626,
+          "within1_5x_pct": 55.294117647058826,
+          "within2x_pct": 74.90196078431373,
+          "known_total_mae_fraction": 0.13589005700914578
+        },
+        "binary": {
+          "n": 21,
+          "mae_pp": 16.576422293074796,
+          "median_recovery_pct": 91.36021733283997,
+          "within80_120_pct": 26.190476190476193,
+          "within1_5x_pct": 45.23809523809524,
+          "within2x_pct": 61.904761904761905,
+          "known_total_mae_fraction": 0.20284478081333815
+        },
+        "ternary": {
+          "n": 71,
+          "mae_pp": 12.268771710409371,
+          "median_recovery_pct": 97.50603884458542,
+          "within80_120_pct": 36.15023474178404,
+          "within1_5x_pct": 57.27699530516433,
+          "within2x_pct": 77.46478873239437,
+          "known_total_mae_fraction": 0.12268771710409372
+        }
+      }
+    },
+    {
+      "name": "linear",
+      "seed": 17100,
+      "metrics": {
+        "all": {
+          "n": 92,
+          "mae_pp": 13.713288003965271,
+          "median_recovery_pct": 95.51934599876404,
+          "within80_120_pct": 28.627450980392155,
+          "within1_5x_pct": 52.156862745098046,
+          "within2x_pct": 75.68627450980392,
+          "known_total_mae_fraction": 0.1413901265807413
+        },
+        "binary": {
+          "n": 21,
+          "mae_pp": 16.743443927327352,
+          "median_recovery_pct": 89.51962321996689,
+          "within80_120_pct": 33.33333333333333,
+          "within1_5x_pct": 47.61904761904761,
+          "within2x_pct": 61.904761904761905,
+          "known_total_mae_fraction": 0.20843278717526476
+        },
+        "ternary": {
+          "n": 71,
+          "mae_pp": 12.817044702689163,
+          "median_recovery_pct": 98.16030859947205,
+          "within80_120_pct": 27.699530516431924,
+          "within1_5x_pct": 53.051643192488264,
+          "within2x_pct": 78.40375586854461,
+          "known_total_mae_fraction": 0.12817044702689162
+        }
+      }
+    },
+    {
+      "name": "maponly",
+      "seed": 18100,
+      "metrics": {
+        "all": {
+          "n": 92,
+          "mae_pp": 12.959444248374158,
+          "median_recovery_pct": 96.56007885932922,
+          "within80_120_pct": 32.549019607843135,
+          "within1_5x_pct": 58.43137254901961,
+          "within2x_pct": 76.07843137254902,
+          "known_total_mae_fraction": 0.12929796748599895
+        },
+        "binary": {
+          "n": 21,
+          "mae_pp": 18.54222227900094,
+          "median_recovery_pct": 85.74854373931885,
+          "within80_120_pct": 23.809523809523807,
+          "within1_5x_pct": 38.095238095238095,
+          "within2x_pct": 66.66666666666666,
+          "known_total_mae_fraction": 0.21153608617113434
+        },
+        "ternary": {
+          "n": 71,
+          "mae_pp": 11.308200042132434,
+          "median_recovery_pct": 98.06550592184067,
+          "within80_120_pct": 34.27230046948357,
+          "within1_5x_pct": 62.441314553990615,
+          "within2x_pct": 77.93427230046949,
+          "known_total_mae_fraction": 0.11308200042132434
+        }
+      }
+    }
+  ],
+  "ensemble_metrics": {
+    "all": {
+      "n": 92,
+      "mae_pp": 11.469858115356034,
+      "median_recovery_pct": 97.73452654480934,
+      "within80_120_pct": 39.21568627450981,
+      "within1_5x_pct": 65.49019607843137,
+      "within2x_pct": 85.09803921568627,
+      "known_total_mae_fraction": 0.11562808241114607
+    },
+    "binary": {
+      "n": 21,
+      "mae_pp": 16.430634837637363,
+      "median_recovery_pct": 87.16934472322464,
+      "within80_120_pct": 30.952380952380953,
+      "within1_5x_pct": 54.761904761904766,
+      "within2x_pct": 69.04761904761905,
+      "known_total_mae_fraction": 0.19475363248026514
+    },
+    "ternary": {
+      "n": 71,
+      "mae_pp": 10.00258612707564,
+      "median_recovery_pct": 100.70486068725586,
+      "within80_120_pct": 40.845070422535215,
+      "within1_5x_pct": 67.6056338028169,
+      "within2x_pct": 88.26291079812206,
+      "known_total_mae_fraction": 0.1000258612707564
+    }
+  },
+  "elapsed_s": 246.3035023212433
+}

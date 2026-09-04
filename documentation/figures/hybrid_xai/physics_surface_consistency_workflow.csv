@@ -1,0 +1,6 @@
+﻿stage,input,output,loss_scope
+spectral_mlp,NNLS-hit measured pixel spectrum,solution composition,all measured mixtures
+supervised,predicted and true composition,L_data,all labelled mixtures
+physical_layer,"predicted fraction × known total concentration; K,gA,m",predicted surface fraction,3–24 µM only
+surface_consistency,predicted and NNLS surface fraction,L_surface,3–24 µM only
+objective,L_data + 0.03 L_surface,MLP gradient,physics off for high concentration/OOD

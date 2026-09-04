@@ -1,0 +1,7 @@
+﻿stage,component,role,implementation
+1,Raman map,measured pixel spectra,real_data.load_map
+2,NNLS gate,hit/background fixed before MLP,dl_model._screened_map_spectra
+3,Physics simulator,"K, gA and DQ Sips exponent",dl_quantify.simulate_mixtures
+4,Composition MLP,full-spectrum softmax composition,dl_model.train_model
+5,Concentration head,NNLS ratio + intensity quantiles; map median loss,dl_model._concentration_context_features
+6,Interpretability,IG + band permutation + VIP ablation,dl_explain.dl_explain

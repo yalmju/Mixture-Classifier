@@ -1,0 +1,9 @@
+﻿key,value
+source_map,S:\Google Drive\내 드라이브\ACF_PEST_DB\Ratio\Baseline260808\DQ36\DQ36-TB18-TH9_corrected.csv
+final_concentrations_uM_DQ_TBZ_THI,"12,6,3"
+selection,largest NNLS-to-MLP error reduction among 65 held-out low-concentration conditions
+NNLS_error_pct,28.739770942949672
+MLP_error_pct,5.687877577440595
+error_reduction_percentage_points,23.051893365509077
+MLP_source,S:\Google Drive\내 드라이브\ACF_PEST_DB\260808_data interpret\piemap_260812\piemap_data.pkl
+MLP_evaluation,4-fold condition-held-out; blank+sips configuration
