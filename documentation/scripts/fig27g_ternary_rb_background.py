@@ -102,6 +102,8 @@ FOLD_FROM_SHARES = False
 CORRECT_BAND = 2          # 정답 = 밴드 index ≤ 이 값 (0: 1.25배, 1: 1.5배, 2: 2배)
 DISCRETE = False          # 배경 3단 이산색
 ALPHA = 0.82
+CONTINUOUS = False        # 점 색: 원래 그림처럼 RdYlGn(accuracy 0.4–1) 연속
+ACC_NORM = (0.4, 1.0)
 BAND_LABEL = {0: "1.25-fold", 1: "1.5-fold", 2: "2-fold"}
 
 
@@ -164,7 +166,11 @@ def draw(ax, method, pairs, sigma, title):
                                     shrinkA=3, shrinkB=3), zorder=4)
         ax.scatter([tx], [ty], s=26, marker=mk, facecolor="white", edgecolor="#8a919b",
                    linewidth=0.9, zorder=5)
-        ax.scatter([px], [py], s=26, marker=mk, color=BAND_COLORS[band(t, p, acc)],
+        if CONTINUOUS and np.isfinite(acc):
+            _c = plt.get_cmap("RdYlGn")((acc - ACC_NORM[0]) / (ACC_NORM[1] - ACC_NORM[0]))
+        else:
+            _c = BAND_COLORS[band(t, p, acc)]
+        ax.scatter([px], [py], s=26, marker=mk, color=_c,
                    edgecolor="white", linewidth=0.5, zorder=6)
     ax.text(*to_xy(np.array([0, 0, 100.0])), "THI", color=CO["THI"], ha="center",
             va="bottom", fontsize=11, weight="bold")
@@ -193,16 +199,18 @@ def main():
     ap.add_argument("--source", choices=["final92", "grid64"], default="final92",
                     help="final92: 27 FINAL composition overlap (92 conds); "
                          "grid64: 09b uM-head concentration accuracy (64 conds)")
+    ap.add_argument("--continuous", action="store_true",
+                    help="point colour = RdYlGn over accuracy 0.4-1 (original look)")
     ap.add_argument("--discrete", action="store_true", help="3-level background")
     ap.add_argument("--alpha", type=float, default=0.82)
     a = ap.parse_args()
-    global FOLD_FROM_SHARES, CORRECT_BAND, DISCRETE, ALPHA
-    DISCRETE = bool(a.discrete); ALPHA = float(a.alpha)
+    global FOLD_FROM_SHARES, CORRECT_BAND, DISCRETE, ALPHA, CONTINUOUS
+    DISCRETE = bool(a.discrete); ALPHA = float(a.alpha); CONTINUOUS = bool(a.continuous)
     FOLD_FROM_SHARES = bool(a.fold_from_shares)
     CORRECT_BAND = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
     tag = ((f"_{a.source}" if a.source != "final92" else "")
            + ("" if CORRECT_BAND == 2 else f"_{BAND_LABEL[CORRECT_BAND].replace('-fold', 'x')}")
-           + ("_discrete" if DISCRETE else ""))
+           + ("_discrete" if DISCRETE else "") + ("_cont" if CONTINUOUS else ""))
     loader = load_pairs_grid64 if a.source == "grid64" else load_pairs
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.6))
     for ax, (m, title) in zip(axes, (("nnls", "NNLS (surface)"), ("pls", "PLS-R"),
@@ -223,10 +231,18 @@ def main():
                       label="True composition (ternary)"),
                Line2D([], [], marker="s", ls="none", mfc="white", mec="#8a919b",
                       label="True composition (binary)")]
-    handles += [Line2D([], [], marker="o", ls="none", color=c, label=n)
-                for c, n in zip(BAND_COLORS, BAND_NAMES)]
+    if not CONTINUOUS:
+        handles += [Line2D([], [], marker="o", ls="none", color=c, label=n)
+                    for c, n in zip(BAND_COLORS, BAND_NAMES)]
     axes[2].legend(handles=handles, loc="upper right", bbox_to_anchor=(1.34, 1.0),
                    frameon=False, fontsize=8)
+    if CONTINUOUS:
+        _sm = plt.cm.ScalarMappable(cmap="RdYlGn", norm=plt.Normalize(*ACC_NORM))
+        _cb = fig.colorbar(_sm, ax=axes[2], orientation="vertical", fraction=0.05,
+                           pad=0.02, shrink=0.45, anchor=(0.0, 0.0))
+        _cb.set_label("accuracy" + (" = mean min(pred/true, true/pred)" if a.source == "grid64"
+                                    else " = 1 − ½Σ|Δshare|"), fontsize=7)
+        _cb.ax.tick_params(labelsize=7)
     from matplotlib.colors import ListedColormap, BoundaryNorm
     sm = (plt.cm.ScalarMappable(cmap=ListedColormap(["#d9a09b", "#f4f1ec", "#9db6dd"]),
                                 norm=BoundaryNorm([0, 1 / 3, 2 / 3, 1], 3)) if DISCRETE
