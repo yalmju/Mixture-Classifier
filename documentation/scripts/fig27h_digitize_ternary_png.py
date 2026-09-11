@@ -58,11 +58,16 @@ def find_triangle(img):
     lab, n = ndimage.label(ndimage.binary_dilation(dark, iterations=2))
     if n == 0:
         raise SystemExit("검은 삼각형 선을 찾지 못했습니다 (--crop 으로 삼각형만 잘라 주세요)")
-    sizes = ndimage.sum(np.ones_like(lab), lab, range(1, n + 1))
     objs = ndimage.find_objects(lab)
-    areas = [(o[0].stop - o[0].start) * (o[1].stop - o[1].start) for o in objs]
-    big = int(np.argmax(areas)) + 1
-    ys, xs = np.nonzero((lab == big) & dark)
+    H = img.shape[0]
+    # 세로로 긴(높이 ≥ 0.4 H) 어두운 성분들의 합집합 = 삼각형 변들 (글자·마커는 작다)
+    npx = ndimage.sum(dark, lab, range(1, n + 1))
+    keep = [i + 1 for i, o in enumerate(objs)
+            if (o[0].stop - o[0].start) >= 0.4 * H or npx[i] >= 300]
+    if not keep:
+        areas = [(o[0].stop - o[0].start) * (o[1].stop - o[1].start) for o in objs]
+        keep = [int(np.argmax(areas)) + 1]
+    ys, xs = np.nonzero(np.isin(lab, keep) & dark)
     top = (xs[ys.argmin()], ys.min())
     ybase = ys.max()
     base = ys > ybase - 0.02 * (ybase - top[1])
@@ -82,18 +87,26 @@ def to_bary(pts, top, left, right):
     return np.clip(np.array(out), 0, 1) * 100
 
 
-def find_dots(img, top, left, right, min_px=12):
+def find_dots(img, top, left, right, min_px=12, lut=None):
+    """반환: (cx, cy, DQ, TBZ, THI, band[, val]) 와 각 blob 의 가중치(면적/중앙값 면적)."""
     h, s, v = rgb2hsv(img)
-    colored = (s > 0.45) & (v > 0.5)
+    colored = (s > 0.18) & (v > 0.5)          # 연한 노랑(RdYlGn 중앙, s≈0.25)까지 포함
     lab, n = ndimage.label(colored)
     dots = []
+    areas = []
     for i in range(1, n + 1):
         m = lab == i
         if m.sum() < min_px:
             continue
+        areas.append(int(m.sum()))
         cy, cx = ndimage.center_of_mass(m)
         rgb = img[m].reshape(-1, 3).astype(float).mean(0)
-        band = min(REF, key=lambda k: np.sum((np.array(REF[k]) - rgb) ** 2))
+        if lut is not None:                       # continuous colour -> value
+            val = float(lut[0][np.argmin(((lut[1] - rgb) ** 2).sum(1))])
+            band = 0 if val >= 0.8 else 1 if val >= 2 / 3 else 2 if val >= 0.5 else 3
+            band = (band, val)
+        else:
+            band = min(REF, key=lambda k: np.sum((np.array(REF[k]) - rgb) ** 2))
         # 삼각형 밖(범례 등)은 제외
         d, t, th = to_bary([(cx, cy)], top, left, right)[0]
         inside = (d + t + th > 99.0) and min(d, t, th) > -0.5
@@ -103,15 +116,20 @@ def find_dots(img, top, left, right, min_px=12):
         if u < -0.02 or w < -0.02 or u + w > 1.02:
             continue
         dots.append((cx, cy, d, t, th, band))
+    med = float(np.median(areas)) if areas else 1.0
+    weights = np.array([max(1.0, round(a_ / med)) for a_ in areas], float)[:len(dots)]
+    find_dots.weights = weights
     return dots
 
 
-def field(bary, C, sigma):
+def field(bary, C, sigma, pw=None):
     grid = [(d, t, 100 - d - t) for d in np.arange(0, 101, 1.0)
             for t in np.arange(0, 101 - d, 1.0)]
     G = np.array(grid, float)
     d2 = ((G[:, None, :] - bary[None, :, :]) ** 2).sum(-1)
     w = np.exp(-0.5 * d2 / sigma ** 2)
+    if pw is not None:
+        w = w * np.asarray(pw, float)[None, :]
     dens = w.sum(1)
     return G, (w * C[None, :]).sum(1) / np.maximum(dens, 1e-12), dens
 
@@ -128,46 +146,80 @@ def main():
     ap.add_argument("--vrange", nargs=2, type=float, default=[0, 1])
     ap.add_argument("--crop", nargs=4, type=int, default=None, help="x0 y0 x1 y1 (px)")
     ap.add_argument("--alpha", type=float, default=0.85)
+    ap.add_argument("--cmap", default=None,
+                    help="dots are continuous colours from this matplotlib colormap "
+                         "(e.g. RdYlGn); each dot's colour is inverted to a value")
+    ap.add_argument("--norm", nargs=2, type=float, default=[0.4, 1.0],
+                    help="value range of --cmap (28b: 0.4 1.0)")
+    ap.add_argument("--panels", type=int, default=1,
+                    help="split the image into N equal horizontal panels (strip figure)")
+    ap.add_argument("--out-prefix", default=None)
     a = ap.parse_args()
-    img = np.asarray(Image.open(a.png).convert("RGB"))
+    full = np.asarray(Image.open(a.png).convert("RGB"))
     if a.crop:
         x0, y0, x1, y1 = a.crop
-        img = img[y0:y1, x0:x1]
-    top, left, right = find_triangle(img)
-    dots = find_dots(img, top, left, right)
-    if not dots:
-        raise SystemExit("색 점을 찾지 못했습니다")
-    bary = np.array([[d, t, th] for _, _, d, t, th, _ in dots])
-    bands = np.array([b for *_, b in dots])
-    cb_idx = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
-    C = ((bands <= cb_idx).astype(float) if a.field == "fraction"
-         else np.array([1.0, 0.67, 0.33, 0.0])[bands])
-    G, frac, dens = field(bary, C, a.sigma)
-    stem = os.path.splitext(a.png)[0]
+        full = full[y0:y1, x0:x1]
+    lut = None
+    if a.cmap:
+        cm = plt.get_cmap(a.cmap)
+        tt = np.linspace(0, 1, 512)
+        lut = (a.norm[0] + (a.norm[1] - a.norm[0]) * tt, np.array(cm(tt))[:, :3] * 255.0)
+    Hf, Wf = full.shape[:2]
+    stem0 = a.out_prefix or os.path.splitext(a.png)[0]
+    bg_full = np.zeros((Hf, Wf, 4))
+    for pi in range(a.panels):
+        xa, xb = int(Wf * pi / a.panels), int(Wf * (pi + 1) / a.panels)
+        img = full[:, xa:xb]
+        top, left, right = find_triangle(img)
+        dots = find_dots(img, top, left, right, lut=lut)
+        if not dots:
+            raise SystemExit(f"panel {pi}: no coloured dots found")
+        bary = np.array([[d, t, th] for _, _, d, t, th, _ in dots])
+        if lut is not None:
+            vals = np.array([b[1] for *_, b in dots]); bands = np.array([b[0] for *_, b in dots])
+        else:
+            bands = np.array([b for *_, b in dots]); vals = np.array([1.0, 0.67, 0.33, 0.0])[bands]
+        cb_idx = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
+        C = ((bands <= cb_idx).astype(float) if a.field == "fraction" else vals)
+        pw = getattr(find_dots, "weights", None)
+        G, frac, dens = field(bary, C, a.sigma, pw)
+        stem = stem0 + (f"_p{pi + 1}" if a.panels > 1 else "")
+        _write(stem, dots, vals, G, frac, dens, top, left, right, img, a, bg_full, xa)
+        n = [int((bands == k).sum()) for k in range(4)]
+        print(f"panel {pi + 1}: {len(dots)} blobs (~{int(pw.sum()) if pw is not None else len(dots)} dots) · green/yellow/orange/red {n} · mean value "
+              f"{vals.mean():.3f} · field mean {frac[dens > 0.05 * dens.max()].mean():.2f}")
+    Image.fromarray((np.clip(bg_full, 0, 1) * 255).astype(np.uint8), "RGBA").save(stem0 + "_bg.png")
+    print("saved", stem0 + "_bg.png")
+
+
+def _write(stem, dots, vals, G, frac, dens, top, left, right, img, a, bg_full, xa):
     with open(stem + "_points.csv", "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.writer(f); w.writerow(["x_px", "y_px", "DQ_pct", "TBZ_pct", "THI_pct", "band"])
-        for cx, cy, d, t, th, b in dots:
-            w.writerow([f"{cx:.1f}", f"{cy:.1f}", f"{d:.1f}", f"{t:.1f}", f"{th:.1f}",
-                        ["within 1.25-fold", "within 1.5-fold", "within 2-fold", "Beyond 2-fold"][b]])
+        w = csv.writer(f); w.writerow(["x_px", "y_px", "DQ_pct", "TBZ_pct", "THI_pct", "value", "band"])
+        for (cx, cy, d, t, th, b), v in zip(dots, vals):
+            bi = b[0] if isinstance(b, tuple) else b
+            w.writerow([f"{cx + xa:.1f}", f"{cy:.1f}", f"{d:.1f}", f"{t:.1f}", f"{th:.1f}", f"{v:.3f}",
+                        ["within 1.25-fold", "within 1.5-fold", "within 2-fold", "Beyond 2-fold"][bi]])
     with open(stem + "_field_XYZZ.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f); w.writerow(["DQ_pct_X", "TBZ_pct_Y", "THI_pct_Z", "Z2", "density"])
         for g, fr, dn in zip(G, frac, dens / dens.max()):
             w.writerow([f"{g[0]:.0f}", f"{g[1]:.0f}", f"{g[2]:.0f}", f"{fr:.4f}", f"{dn:.4f}"])
-    # 배경 PNG: 원본과 같은 픽셀 크기, 삼각형 안만 칠하고 나머지 투명
+    # background: per-pixel barycentric interpolation of the field inside the triangle,
+    # written into the full-size RGBA canvas (transparent outside)
     H, W = img.shape[:2]
-    fig = plt.figure(figsize=(W / 100, H / 100), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1]); ax.set_xlim(0, W); ax.set_ylim(H, 0); ax.set_axis_off()
-    gx = left[0] + (right[0] - left[0]) * G[:, 0] / 100 + (top[0] - left[0]) * G[:, 2] / 100
-    gy = left[1] + (right[1] - left[1]) * G[:, 0] / 100 + (top[1] - left[1]) * G[:, 2] / 100
-    tri = mtri.Triangulation(gx, gy)
-    ax.tripcolor(tri, frac, cmap=RB if a.palette == "rb" else PO, vmin=a.vrange[0],
-                 vmax=a.vrange[1], shading="gouraud", alpha=a.alpha, rasterized=True)
-    fig.savefig(stem + "_bg.png", dpi=100, transparent=True)
-    n = [int((bands == k).sum()) for k in range(4)]
-    print(f"triangle top {top} left {left} right {right}")
-    print(f"dots: green {n[0]} yellow {n[1]} orange {n[2]} red {n[3]}  → field mean "
-          f"{frac[dens > 0.05 * dens.max()].mean():.2f}")
-    print("saved", stem + "_bg.png", stem + "_points.csv", stem + "_field_XYZZ.csv")
+    yy, xx = np.mgrid[0:H, 0:W]
+    A = np.array([[right[0] - left[0], top[0] - left[0]], [right[1] - left[1], top[1] - left[1]]])
+    inv = np.linalg.inv(A)
+    u = inv[0, 0] * (xx - left[0]) + inv[0, 1] * (yy - left[1])
+    wv = inv[1, 0] * (xx - left[0]) + inv[1, 1] * (yy - left[1])
+    inside = (u >= 0) & (wv >= 0) & (u + wv <= 1)
+    tri = mtri.Triangulation(G[:, 0] / 100, G[:, 2] / 100)
+    interp = mtri.LinearTriInterpolator(tri, frac)
+    zi = np.asarray(interp(np.clip(u, 0, 1), np.clip(wv, 0, 1)).filled(np.nan))
+    cmap = RB if a.palette == "rb" else PO
+    rgba = cmap(np.clip((zi - a.vrange[0]) / (a.vrange[1] - a.vrange[0]), 0, 1))
+    rgba[..., 3] = np.where(inside & np.isfinite(zi), a.alpha, 0.0)
+    bg_full[:, xa:xa + W] = rgba
+    print(f"  triangle top {top} left {left} right {right}")
 
 
 if __name__ == "__main__":
