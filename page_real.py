@@ -409,7 +409,7 @@ class RealDataPage(QWidget):
         #     what the camera saw, abundances = what NNLS unmixing made of it.
         self.c_abund = Canvas()
         card_ab, lay_ab = _card(
-            "MLP reconstruction — components + background gate")
+            "MLP reconstruction — composition + background gate")
         lay_ab.addWidget(self.c_abund); self.c_abund.setMinimumHeight(220)
         _abrow = self._scale_row("abund", 1.0)
         # 명암: 모델 조성에 픽셀의 상대 마커밴드 신호(99퍼센타일 정규화)를 곱해
@@ -418,7 +418,7 @@ class RealDataPage(QWidget):
         self.chk_abund_shade.setChecked(True)
         self.chk_abund_shade.setToolTip(
             "multiply each pixel's model composition by its relative marker-band "
-            "signal (sum of the three VIP bands, p5–p95 mapped to 0.3–1.0 brightness) so the "
+            "signal (sum of the three VIP bands, p5–p95 mapped to 0.45–1.0 brightness) so the "
             "reconstruction carries the raw map's light and shade. Off = flat composition.")
         self.chk_abund_shade.toggled.connect(
             lambda _=False: self._res is not None and self._plot_abund(self._res))
@@ -2051,7 +2051,7 @@ class RealDataPage(QWidget):
                 _lo, _hi = np.quantile(_S[hit], [0.05, 0.95])
             else:
                 _lo, _hi = 0.0, 0.0
-            _b = (0.3 + 0.7 * np.clip((_S - _lo) / (_hi - _lo), 0.0, 1.0)
+            _b = (0.45 + 0.55 * np.clip((_S - _lo) / (_hi - _lo), 0.0, 1.0)
                   if _hi > _lo else np.ones_like(_S))
             Anb = np.asarray(Anb, float) * _b[:, None]
         # Values remain available in the export for every measured pixel, but an
@@ -2088,6 +2088,14 @@ class RealDataPage(QWidget):
 
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
+        # 문맥 밑그림: 모든 픽셀의 총 신호를 어두운 회색(0.06–0.30)으로 깐다 —
+        # raw 밴드맵이 보여주는 잎·잉크 형태가 복원 맵에도 남고, hit 픽셀은 그
+        # 위에 조성 색(밝기 ≥ 0.45)으로 얹힌다 (사용자 2026-09-11).
+        _tot = np.clip(np.asarray(r.spectra, float), 0, None).sum(axis=1)
+        _g_lo, _g_hi = np.percentile(_tot, [2, 98])
+        _gray = (0.06 + 0.24 * np.clip((_tot - _g_lo) / max(_g_hi - _g_lo, 1e-9), 0, 1))
+        under = np.zeros((ny, nx, 3))
+        under[rows, cc] = _gray[:, None]
         specs = self._single_row_specs(self.c_abund.fig, len(panels))
         for idx, (title, values, panel_color) in enumerate(panels):
             ax = self.c_abund.style(self.c_abund.fig.add_subplot(specs[idx]))
@@ -2096,9 +2104,10 @@ class RealDataPage(QWidget):
                 cols = np.array([to_rgb(c) for c in nbcols])
                 norm = np.nan_to_num(np.clip(Anb_draw / mscale, 0.0, 1.0), nan=0.0)
                 weights = np.maximum(norm.sum(axis=1, keepdims=True), 1.0)
-                img = np.zeros((ny, nx, 3))
-                img[rows, cc] = np.clip((norm / weights) @ cols * np.minimum(
+                col_px = np.clip((norm / weights) @ cols * np.minimum(
                     norm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
+                img = under.copy()
+                img[rows[hit], cc[hit]] = col_px[hit]
                 ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest")
                 self._leaf_outline(ax, r, extent, origin)
@@ -2107,9 +2116,15 @@ class RealDataPage(QWidget):
                 grid = np.full((ny, nx), np.nan); grid[rows, cc] = values
                 cmap = LinearSegmentedColormap.from_list(
                     "m", ["#0b0d10", panel_color])
-                cmap.set_bad("#0b0d10")
                 ax.set_facecolor("#0b0d10")
                 is_bg = title.startswith("background")
+                if is_bg:
+                    cmap.set_bad("#0b0d10")
+                else:
+                    # 비-hit 픽셀은 투명 → 아래 회색 밑그림이 비친다
+                    cmap.set_bad((0.0, 0.0, 0.0, 0.0))
+                    ax.imshow(under, extent=extent, origin=origin, aspect="equal",
+                              interpolation="nearest", zorder=0)
                 _vmax = 1.0 if is_bg else vshared
                 panel_im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                                      interpolation="nearest", cmap=cmap,
@@ -2121,7 +2136,7 @@ class RealDataPage(QWidget):
                     labels=[f"{0.0 if is_bg else vlo:.2g}", f"{_vmax:.2g}"])
             ax.set_title(title, fontsize=8)
             ax.set_xticks([]); ax.set_yticks([])
-            self._exp_abund.append((f"abund_{title.split(' ')[0]}", ax, None))
+            self._exp_abund.append((f"comp_{title.split(' ')[0]}", ax, None))
             self._click_axes.append(ax)
         self.c_abund.draw_idle()
 
@@ -3335,7 +3350,7 @@ class RealDataPage(QWidget):
         if _sel is not None:
             self._sel = None; self._plot_pies(r)
         figs = [("real_band_maps", self.c_maps),
-                ("real_abundance_maps", self.c_abund),
+                ("real_composition_maps", self.c_abund),
                 ("real_composition_pies", self.c_pie),
                 ("real_composition", self.c_comp),
                 ("real_pixel_spectrum", self.c_spec)]
@@ -3441,7 +3456,7 @@ class RealDataPage(QWidget):
         tables = [("composition.csv", "composition.csv — mean ratios"),
                   ("per_pixel.csv", "per_pixel.csv — every pixel, all channels"),
                   ("band_maps.csv", "band_maps.csv — displayed band values"),
-                  ("abundance_maps.csv", "abundance_maps.csv — spectral evidence")]
+                  ("abundance_maps.csv", "abundance_maps.csv — NNLS spectral evidence (not composition)")]
         if cal:
             tables += [("concentration_maps.csv", "concentration_maps.csv — model-head µM per pixel"),
                        ("um_summary.csv", "um_summary.csv — µM medians / recovery")]
@@ -3453,7 +3468,7 @@ class RealDataPage(QWidget):
         tables += [("matrix", "matrix/ — one ny×nx table per map (Origin heatmap)"),
                    ("README", "README.txt")]
         figs = [("fig:real_band_maps", "raw band maps"),
-                ("fig:real_abundance_maps", "MLP reconstruction"),
+                ("fig:real_composition_maps", "MLP reconstruction (composition)"),
                 ("fig:real_composition_pies", "primary comparison"),
                 ("fig:real_composition", "overall fractions"),
                 ("fig:real_pixel_spectrum", "selected pixel spectrum")]
@@ -3497,8 +3512,10 @@ class RealDataPage(QWidget):
                                "substance, and those channels read as R/G/B — no "
                                "unmixing, so it shows what a band/RGB readout alone can "
                                "separate."),
-            "real_abundance_maps": ("full-spectrum NNLS spectral evidence for each "
-                                    "analyte plus the combined background gate."),
+            "real_composition_maps": ("per-pixel composition (share of each analyte, "
+                                      "composition model) on gated pixels, shaded by the "
+                                      "pixel's relative VIP-band signal; grey underlay = "
+                                      "total signal for context; plus the background gate."),
             "real_composition_pies": ("per-pixel composition map from the loaded "
                                       "composition model."),
             "real_composition": ("signal-weighted mean composition (pie) over the "
