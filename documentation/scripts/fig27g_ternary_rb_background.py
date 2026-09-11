@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""27g — FINAL 삼각도(true → prediction 화살표, 28d 문법)에 정답/오답 배경(R/B).
+"""27g — 삼각도(true → prediction 화살표, 28d 문법)에 정답/오답 배경(R/B).
 
-입력: documentation/results/27_ternary_truepred_FINAL_{nnls,pls,mlp}.csv
-      (type = true/pred 행 쌍, 단위 %)
+입력(--source):
+  final92 : 27_ternary_truepred_FINAL_{nnls,pls,mlp}.csv — 92조건, accuracy 열 =
+            조성 겹침률 1 − ½Σ|Δ몫| (PLS ≥ MLP 로 나오는 지표)
+  grid64  : 09b_grid64_concentration_predictions_long.csv — 64격자 µM 헤드,
+            accuracy = 성분별 min(pred/true, true/pred) 평균 (원래 28_concAcc 그림;
+            NNLS 0.40 / PLS 0.64 / MLP 0.68)
 밴드: 기본은 파일의 accuracy 열(0–1)을 1/fold 로 읽어 ≥0.8 / ≥0.667 / ≥0.5 / 미만
       = 1.25 / 1.5 / 2배 / 초과. --fold-from-shares 를 주면 몫에서 직접 계산
       (존재 성분의 최악 fold = pred 몫 / true 몫). 점 색과 배경은 같은 판정을 쓴다.
@@ -68,6 +72,25 @@ def worst_fold(t, p):
     """존재 성분(true > 0)의 |log2(pred/true)| 최댓값 (몫 = 선언 총량 하 농도)."""
     m = t > 0
     return float(np.max(np.abs(np.log2(np.maximum(p[m], 1e-3) / t[m]))))
+
+
+def load_pairs_grid64(method):
+    """64격자 µM 헤드 예측(09b): 위치 = µM 을 몫으로 정규화, accuracy =
+    성분별 min(pred/true, true/pred) 평균 (= 09 conc_acc, 원래 28_concAcc 그림)."""
+    import collections
+    col = {"nnls": "nnls_Ccal_uM", "pls": "pls_uM", "mlp": "mlp_uM"}[method]
+    rows = list(csv.DictReader(open(os.path.join(RES,
+        "09b_grid64_concentration_predictions_long.csv"), encoding="utf-8-sig")))
+    conds = collections.OrderedDict()
+    for r in rows:
+        conds.setdefault(r["condition"], {})[r["component"]] = r
+    pairs = []
+    for c, d in conds.items():
+        t = np.array([float(d[s_]["true_uM"]) for s_ in SUBS])
+        pm = np.maximum(np.array([float(d[s_][col]) for s_ in SUBS]), 1e-6)
+        acc = float(np.mean(np.minimum(pm / t, t / pm)))
+        pairs.append((c, t / t.sum() * 100, pm / pm.sum() * 100, acc, "ternary"))
+    return pairs
 
 
 def band_of(f):
@@ -167,6 +190,9 @@ def main():
                     help="bands from pred/true share fold instead of the accuracy column")
     ap.add_argument("--correct-band", type=float, default=2.0, choices=[1.25, 1.5, 2.0],
                     help="a condition counts as correct when within this fold")
+    ap.add_argument("--source", choices=["final92", "grid64"], default="final92",
+                    help="final92: 27 FINAL composition overlap (92 conds); "
+                         "grid64: 09b uM-head concentration accuracy (64 conds)")
     ap.add_argument("--discrete", action="store_true", help="3-level background")
     ap.add_argument("--alpha", type=float, default=0.82)
     a = ap.parse_args()
@@ -174,11 +200,14 @@ def main():
     DISCRETE = bool(a.discrete); ALPHA = float(a.alpha)
     FOLD_FROM_SHARES = bool(a.fold_from_shares)
     CORRECT_BAND = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
-    tag = ("" if CORRECT_BAND == 2 else f"_{BAND_LABEL[CORRECT_BAND].replace('-fold', 'x')}") + ("_discrete" if DISCRETE else "")
+    tag = ((f"_{a.source}" if a.source != "final92" else "")
+           + ("" if CORRECT_BAND == 2 else f"_{BAND_LABEL[CORRECT_BAND].replace('-fold', 'x')}")
+           + ("_discrete" if DISCRETE else ""))
+    loader = load_pairs_grid64 if a.source == "grid64" else load_pairs
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.6))
     for ax, (m, title) in zip(axes, (("nnls", "NNLS (surface)"), ("pls", "PLS-R"),
                                      ("mlp", "MLP"))):
-        pairs = load_pairs(m)
+        pairs = loader(m)
         G, frac, dens = draw(ax, m, pairs, a.sigma, title)
         with open(os.path.join(RES, f"27g_ternary_correct_fraction{tag}_{m}_XYZZ.csv"),
                   "w", newline="", encoding="utf-8-sig") as f:
@@ -204,7 +233,9 @@ def main():
           else plt.cm.ScalarMappable(cmap=RB, norm=plt.Normalize(0, 1)))
     cb = fig.colorbar(sm, ax=axes, orientation="horizontal", fraction=0.035,
                       pad=0.02, aspect=40)
-    cb.set_label(f"local fraction within {BAND_LABEL[CORRECT_BAND]} (kernel σ = {a.sigma:.0f} %p)",
+    cb.set_label(f"local fraction within {BAND_LABEL[CORRECT_BAND]} (kernel σ = {a.sigma:.0f} %p)"
+                 + ("  ·  µM-head concentration accuracy, 64-grid" if a.source == "grid64"
+                    else "  ·  composition overlap, 92 conditions"),
                  fontsize=8)
     cb.set_ticks([0, 0.5, 1]); cb.ax.tick_params(labelsize=7)
     out = os.path.join(RES, f"27g_ternary_rb{tag}.png")
