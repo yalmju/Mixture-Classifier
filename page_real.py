@@ -434,6 +434,15 @@ class RealDataPage(QWidget):
         self.chk_abund_shade.toggled.connect(
             lambda _=False: self._res is not None and self._plot_abund(self._res))
         _abrow.addWidget(self.chk_abund_shade)
+        # 픽셀 격자: 검정 배경 위 각 픽셀의 흰 테두리 — composition·concentration 카드
+        # (raw 밴드맵은 제외). 사용자 2026-09-11.
+        self.chk_grid = QCheckBox("pixel grid"); self.chk_grid.setChecked(True)
+        self.chk_grid.setToolTip("draw a thin white border around every pixel on the "
+                                 "composition and concentration maps")
+        self.chk_grid.toggled.connect(
+            lambda _=False: (self._plot_abund(self._res), self._plot_conc(self._res))
+            if self._res is not None else None)
+        _abrow.addWidget(self.chk_grid)
         lay_ab.addLayout(_abrow)
 
         # Nine equal map slots across the result area. Raw uses four (merge + 3),
@@ -1860,6 +1869,23 @@ class RealDataPage(QWidget):
         except Exception:
             pass
 
+    def _pixel_grid(self, ax, r, extent, origin):
+        """픽셀 경계선(흰색, 가늘게) — chk_grid 가 켜져 있을 때만."""
+        if getattr(self, "chk_grid", None) is None or not self.chk_grid.isChecked():
+            return
+        _ri, _ci, _ny, _nx, ux, uy = self._grid_rc(r)
+        if len(ux) > 400 or len(uy) > 400:
+            return                                  # 너무 촘촘하면 격자가 면이 된다
+        px = float(np.min(np.diff(ux))) if len(ux) > 1 else 1.0
+        py = float(np.min(np.diff(uy))) if len(uy) > 1 else 1.0
+        xs = np.concatenate([ux - px / 2, [ux[-1] + px / 2]])
+        ys = np.concatenate([uy - py / 2, [uy[-1] + py / 2]])
+        x0, x1, y0, y1 = extent
+        ax.vlines(xs, min(y0, y1), max(y0, y1), colors="white", linewidths=0.25,
+                  alpha=0.45, zorder=5)
+        ax.hlines(ys, min(x0, x1), max(x0, x1), colors="white", linewidths=0.25,
+                  alpha=0.45, zorder=5)
+
     def _apply(self, r):
         self._res = r; self._sel = None
         # 잎 마스크: 원본 hit을 보관해 두고 토글에 따라 외부 픽셀을 null 처리
@@ -2159,6 +2185,7 @@ class RealDataPage(QWidget):
                 img[rows[hit], cc[hit]] = col_px[hit]
                 ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest")
+                self._pixel_grid(ax, r, extent, origin)
                 self._leaf_outline(ax, r, extent, origin)
                 title = f"merged ({vlo:.3g}–{vshared:.3g})"
             else:
@@ -2178,6 +2205,8 @@ class RealDataPage(QWidget):
                 panel_im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                                      interpolation="nearest", cmap=cmap,
                                      vmin=0.0 if is_bg else vlo, vmax=_vmax)
+                if not is_bg:
+                    self._pixel_grid(ax, r, extent, origin)
                 self._leaf_outline(ax, r, extent, origin)
                 self._side_colorbar(
                     self.c_abund.fig, ax, panel_im,
@@ -2637,6 +2666,7 @@ class RealDataPage(QWidget):
         axm = self.c_conc.style(self.c_conc.fig.add_subplot(gs[0, 0]))
         axm.imshow(_img, extent=extent, origin=origin, aspect="equal",
                    interpolation="nearest")
+        self._pixel_grid(axm, r, extent, origin)
         self._leaf_outline(axm, r, extent, origin)
         axm.set_anchor("S")
         axm.set_title("merged (R/G/B)", fontsize=10)
@@ -2655,6 +2685,7 @@ class RealDataPage(QWidget):
             im = ax.imshow(grid, extent=extent, origin=origin, aspect="equal",
                            interpolation="nearest", cmap=cmap, vmin=0.0,
                            vmax=vmaxes[i])
+            self._pixel_grid(ax, r, extent, origin)
             self._leaf_outline(ax, r, extent, origin)
             # 스케일 바 — 세 맵이 같은 0..vmax 램프를 쓴다는 것까지 같이 보인다.
             # aspect=equal 로 축 상자가 줄어들 때 맵은 아래(S), 바는 위(N)로
