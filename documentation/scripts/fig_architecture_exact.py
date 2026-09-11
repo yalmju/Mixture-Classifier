@@ -57,7 +57,9 @@ def arrow(x0, y0, x1, y1, txt=None, col=INK):
 ax.text(0.20, 0.95, "Compositional unmixing", ha="center", fontsize=12.5, weight="bold", color=INK)
 box(0.02, 0.62, 0.12, 0.22, ["one spectrum", "per pixel", "500–2500 cm$^{-1}$", "1,290 points"],
     title="Pixel spectrum")
-arrow(0.14, 0.73, 0.175, 0.73, "NNLS gate\n(background px dropped)")
+arrow(0.14, 0.73, 0.175, 0.73)
+ax.text(0.158, 0.79, "NNLS gate", ha="center", fontsize=7.4, color=MUTE)
+ax.text(0.158, 0.675, "background px\ndropped", ha="center", va="top", fontsize=6.6, color=MUTE)
 box(0.18, 0.50, 0.21, 0.34,
     ["1,290 → 256   FC · BN · ReLU · Dropout 0.15",
      "256 → 64       FC · ReLU",
