@@ -282,6 +282,8 @@ def main():
     ap.add_argument("--subset", choices=["all", "grid64"], default="all",
                     help="restrict conditions to the 3/6/12/24 uM grid")
     ap.add_argument("--palette", choices=list(PALETTES), default="rb")
+    ap.add_argument("--labels", nargs="*", default=None,
+                    help="panel titles for --pairs-csv files (default: file names)")
     ap.add_argument("--pairs-csv", nargs="*", default=None,
                     help="user worksheet(s) instead of the repo sources: one file per "
                          "panel, in the order nnls,pls,mlp (fewer files = fewer panels)")
@@ -302,13 +304,15 @@ def main():
            + ("_discrete" if DISCRETE else "") + ("_cont" if CONTINUOUS else ""))
     _base = {"grid64": load_pairs_grid64, "kt": load_pairs_kt}.get(a.source, load_pairs)
     if a.pairs_csv:
-        _files = dict(zip(("nnls", "pls", "mlp"), a.pairs_csv))
+        _keys = [f"user{i}" for i in range(len(a.pairs_csv))]
+        _files = dict(zip(_keys, a.pairs_csv))
         _base = lambda m_: load_pairs_csv(_files[m_])
     loader = ((lambda m_: [x for x in _base(m_) if is_grid64(x[0])])
               if a.subset == "grid64" else _base)
     _panels = [("nnls", "NNLS (surface)"), ("pls", "PLS-R"), ("mlp", "MLP")]
     if a.pairs_csv:
-        _panels = _panels[:len(a.pairs_csv)]
+        _names = a.labels or [os.path.splitext(os.path.basename(f))[0] for f in a.pairs_csv]
+        _panels = [(f"user{i}", n) for i, n in enumerate(_names)]
     fig, axes = plt.subplots(1, len(_panels), figsize=(4.5 * len(_panels), 4.6),
                              squeeze=False)
     axes = axes[0]
