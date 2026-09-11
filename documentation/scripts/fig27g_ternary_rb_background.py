@@ -266,7 +266,8 @@ def draw(ax, method, pairs, sigma, title):
     ok = sum(band(t, p, a) <= CORRECT_BAND for _, t, p, a, _ in pairs)
     okb = sum(band(t, p, a) <= CORRECT_BAND for _, t, p, a, sb in pairs if sb == "binary")
     nb_ = sum(1 for *_, sb in pairs if sb == "binary")
-    ax.set_title(f"{title}  ·  within {BAND_LABEL[CORRECT_BAND]} {ok}/{len(pairs)}"
+    ax.set_title("" if not title.strip() else
+                 f"{title}  ·  within {BAND_LABEL[CORRECT_BAND]} {ok}/{len(pairs)}"
                  + (f"  (binary {okb}/{nb_})" if nb_ else ""), fontsize=9,
                  color="#3f454c")
     ax.set_xlim(-0.08, 1.08); ax.set_ylim(-0.08, 0.95)
