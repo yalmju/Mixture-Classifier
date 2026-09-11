@@ -181,6 +181,7 @@ def band_of(f):
 
 FOLD_FROM_SHARES = False
 ACC_THRESHOLDS = None     # (t1, t2, t3): accuracy 열을 직접 밴드로 자르는 임계값
+FIELD = "fraction"        # 배경: fraction = 정답 비율, mean = accuracy 국소 평균
 CORRECT_BAND = 2          # 정답 = 밴드 index ≤ 이 값 (0: 1.25배, 1: 1.5배, 2: 2배)
 DISCRETE = False          # 배경 3단 이산색
 ALPHA = 0.82
@@ -213,7 +214,10 @@ def field(pairs, sigma):
             for t in np.arange(0, 100 + step - d, step)]
     G = np.array(grid, float)
     T = np.array([t for _, t, _, _, _ in pairs])
-    C = np.array([1.0 if band(t, p, a) <= CORRECT_BAND else 0.0 for _, t, p, a, _ in pairs])
+    if FIELD == "mean":
+        C = np.array([np.clip(a, 0, 1) if np.isfinite(a) else 0.0 for _, _, _, a, _ in pairs])
+    else:
+        C = np.array([1.0 if band(t, p, a) <= CORRECT_BAND else 0.0 for _, t, p, a, _ in pairs])
     d2 = ((G[:, None, :] - T[None, :, :]) ** 2).sum(-1)
     w = np.exp(-0.5 * d2 / sigma ** 2)
     dens = w.sum(1)
@@ -293,6 +297,8 @@ def main():
                     metavar=("T1", "T2", "T3"),
                     help="band the accuracy column at these cut-offs instead of 1/fold "
                          "(e.g. 0.887 0.786 0.5 reproduces the user's MLP figure)")
+    ap.add_argument("--field", choices=["fraction", "mean"], default="fraction",
+                    help="background: local fraction within --correct-band, or local mean accuracy")
     ap.add_argument("--methods", default="nnls,pls,mlp",
                     help="comma list of repo panels to draw (ignored with --pairs-csv)")
     ap.add_argument("--labels", nargs="*", default=None,
@@ -308,10 +314,12 @@ def main():
     global FOLD_FROM_SHARES, CORRECT_BAND, DISCRETE, ALPHA, CONTINUOUS, BG, BG3, ACC_THRESHOLDS
     DISCRETE = bool(a.discrete); ALPHA = float(a.alpha); CONTINUOUS = bool(a.continuous)
     ACC_THRESHOLDS = tuple(a.acc_thresholds) if a.acc_thresholds else None
+    global FIELD
+    FIELD = a.field
     BG, BG3 = PALETTES[a.palette]
     FOLD_FROM_SHARES = bool(a.fold_from_shares)
     CORRECT_BAND = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
-    tag = (("_user" if a.pairs_csv else "") + ("_thr" if a.acc_thresholds else "") + (f"_{a.source}" if a.source != "final92" and not a.pairs_csv else "")
+    tag = (("_user" if a.pairs_csv else "") + ("_thr" if a.acc_thresholds else "") + ("_mean" if a.field == "mean" else "") + (f"_{a.source}" if a.source != "final92" and not a.pairs_csv else "")
            + (f"_{a.subset}" if a.subset != "all" else "")
            + (f"_{a.palette}" if a.palette != "rb" else "")
            + ("" if CORRECT_BAND == 2 else f"_{BAND_LABEL[CORRECT_BAND].replace('-fold', 'x')}")
@@ -343,6 +351,14 @@ def main():
                 wri.writerow([f"{g[0]:.0f}", f"{g[1]:.0f}", f"{g[2]:.0f}",
                               f"{fr:.4f}", f"{dn:.4f}"])
         print(f"{m}: {len(pairs)} pairs · field mean {frac[dens > 0.05 * dens.max()].mean():.2f}")
+        with open(os.path.join(RES, f"27g_conditions{tag}_{m}.csv"), "w", newline="",
+                  encoding="utf-8-sig") as f:
+            wri = csv.writer(f)
+            wri.writerow(["condition", "subset", "true_DQ", "true_TBZ", "true_THI",
+                          "pred_DQ", "pred_TBZ", "pred_THI", "accuracy", "band"])
+            for c, t, p_, acc, sub in pairs:
+                wri.writerow([c, sub] + [f"{v:.2f}" for v in t] + [f"{v:.2f}" for v in p_]
+                             + [f"{acc:.4f}", BAND_NAMES[band(t, p_, acc)]])
     handles = [Line2D([], [], marker=">", color="#8a919b", lw=0.8, label="Prediction"),
                Line2D([], [], marker="o", ls="none", mfc="white", mec="#8a919b",
                       label="True composition (ternary)"),
@@ -366,7 +382,8 @@ def main():
           else plt.cm.ScalarMappable(cmap=BG, norm=plt.Normalize(0, 1)))
     cb = fig.colorbar(sm, ax=axes, orientation="horizontal", fraction=0.035,
                       pad=0.02, aspect=40)
-    cb.set_label(f"local fraction within {BAND_LABEL[CORRECT_BAND]} (kernel σ = {a.sigma:.0f} %p)"
+    cb.set_label((f"local mean accuracy (kernel σ = {a.sigma:.0f} %p)" if a.field == "mean" else
+                  f"local fraction within {BAND_LABEL[CORRECT_BAND]} (kernel σ = {a.sigma:.0f} %p)")
                  + {"grid64": "  ·  µM-head concentration accuracy",
                     "kt": "  ·  concentration accuracy under declared total",
                     "final92": "  ·  composition overlap"}[a.source]
