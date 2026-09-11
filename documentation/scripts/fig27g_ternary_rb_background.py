@@ -91,6 +91,62 @@ def load_pairs_kt(method):
     return out
 
 
+def load_pairs_csv(path, method=None):
+    """사용자 워크시트(Origin export) 읽기. 두 형식을 받는다.
+    (a) 27 형식: DQ_pct_X,TBZ_pct_Y,THI_pct_Z,type(true/pred),condition[,accuracy|band]
+    (b) 넓은 형식: condition,DQ_true,TBZ_true,THI_true,DQ_pred,TBZ_pred,THI_pred[,band|accuracy]
+    band 열은 0–3 숫자 또는 'within 1.25-fold' 같은 문자열; accuracy 열은 0–1.
+    둘 다 없으면 몫-fold(존재 성분 최악)로 밴드를 만든다. 점 색·배경 모두 이 밴드."""
+    rows = list(csv.DictReader(open(path, encoding="utf-8-sig")))
+    if not rows:
+        return []
+    cols = {k.strip().lower(): k for k in rows[0].keys()}
+
+    def _band_from(r):
+        for key in ("band", "class", "fold_band"):
+            if key in cols and r[cols[key]].strip():
+                v = r[cols[key]].strip().lower()
+                if v.isdigit():
+                    return int(v)
+                for i, n in enumerate(BAND_NAMES):
+                    if n.lower().split()[-1].split("-")[0] in v and ("beyond" in v) == (i == 3):
+                        return i
+                if "beyond" in v:
+                    return 3
+        if "accuracy" in cols and r[cols["accuracy"]].strip():
+            return band_of(-np.log2(max(float(r[cols["accuracy"]]), 1e-6)))
+        return None
+
+    pairs = []
+    if "type" in cols:                                   # (a)
+        cur = None
+        for r in rows:
+            ty = r[cols["type"]].strip().lower()
+            if ty == "true":
+                cur = [r[cols.get("condition", "condition")].strip(),
+                       np.array([float(r[cols["dq_pct_x"]]), float(r[cols["tbz_pct_y"]]),
+                                 float(r[cols["thi_pct_z"]])]), None, None, "ternary", _band_from(r)]
+            elif ty == "pred" and cur is not None:
+                cur[2] = np.array([float(r[cols["dq_pct_x"]]), float(r[cols["tbz_pct_y"]]),
+                                   float(r[cols["thi_pct_z"]])])
+                if cur[5] is None:
+                    cur[5] = _band_from(r)
+                pairs.append(cur); cur = None
+    else:                                                # (b)
+        for r in rows:
+            t = np.array([float(r[cols["dq_true"]]), float(r[cols["tbz_true"]]), float(r[cols["thi_true"]])])
+            p = np.array([float(r[cols["dq_pred"]]), float(r[cols["tbz_pred"]]), float(r[cols["thi_pred"]])])
+            pairs.append([r.get(cols.get("condition", ""), "").strip(), t, p, None, "ternary", _band_from(r)])
+    out = []
+    for c, t, p, _a, sub, b in pairs:
+        if b is None:
+            b = band_of(worst_fold(t, p))
+        sub = "binary" if (t <= 0).any() else "ternary"
+        # band 를 accuracy 로 역부호화해 두면 band()가 그대로 읽는다 (1.25/1.5/2/초과 → 0.9/0.75/0.55/0.3)
+        out.append((c, t, p, {0: 0.9, 1: 0.75, 2: 0.55, 3: 0.3}[int(b)], sub))
+    return out
+
+
 def is_grid64(cond):
     import re
     m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)$", cond)
@@ -226,6 +282,9 @@ def main():
     ap.add_argument("--subset", choices=["all", "grid64"], default="all",
                     help="restrict conditions to the 3/6/12/24 uM grid")
     ap.add_argument("--palette", choices=list(PALETTES), default="rb")
+    ap.add_argument("--pairs-csv", nargs="*", default=None,
+                    help="user worksheet(s) instead of the repo sources: one file per "
+                         "panel, in the order nnls,pls,mlp (fewer files = fewer panels)")
     ap.add_argument("--continuous", action="store_true",
                     help="point colour = RdYlGn over accuracy 0.4-1 (original look)")
     ap.add_argument("--discrete", action="store_true", help="3-level background")
@@ -236,17 +295,24 @@ def main():
     BG, BG3 = PALETTES[a.palette]
     FOLD_FROM_SHARES = bool(a.fold_from_shares)
     CORRECT_BAND = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
-    tag = ((f"_{a.source}" if a.source != "final92" else "")
+    tag = (("_user" if a.pairs_csv else "") + (f"_{a.source}" if a.source != "final92" and not a.pairs_csv else "")
            + (f"_{a.subset}" if a.subset != "all" else "")
            + (f"_{a.palette}" if a.palette != "rb" else "")
            + ("" if CORRECT_BAND == 2 else f"_{BAND_LABEL[CORRECT_BAND].replace('-fold', 'x')}")
            + ("_discrete" if DISCRETE else "") + ("_cont" if CONTINUOUS else ""))
     _base = {"grid64": load_pairs_grid64, "kt": load_pairs_kt}.get(a.source, load_pairs)
+    if a.pairs_csv:
+        _files = dict(zip(("nnls", "pls", "mlp"), a.pairs_csv))
+        _base = lambda m_: load_pairs_csv(_files[m_])
     loader = ((lambda m_: [x for x in _base(m_) if is_grid64(x[0])])
               if a.subset == "grid64" else _base)
-    fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.6))
-    for ax, (m, title) in zip(axes, (("nnls", "NNLS (surface)"), ("pls", "PLS-R"),
-                                     ("mlp", "MLP"))):
+    _panels = [("nnls", "NNLS (surface)"), ("pls", "PLS-R"), ("mlp", "MLP")]
+    if a.pairs_csv:
+        _panels = _panels[:len(a.pairs_csv)]
+    fig, axes = plt.subplots(1, len(_panels), figsize=(4.5 * len(_panels), 4.6),
+                             squeeze=False)
+    axes = axes[0]
+    for ax, (m, title) in zip(axes, _panels):
         pairs = loader(m)
         G, frac, dens = draw(ax, m, pairs, a.sigma, title)
         with open(os.path.join(RES, f"27g_ternary_correct_fraction{tag}_{m}_XYZZ.csv"),
@@ -266,11 +332,11 @@ def main():
     if not CONTINUOUS:
         handles += [Line2D([], [], marker="o", ls="none", color=c, label=n)
                     for c, n in zip(BAND_COLORS, BAND_NAMES)]
-    axes[2].legend(handles=handles, loc="upper right", bbox_to_anchor=(1.34, 1.0),
-                   frameon=False, fontsize=8)
+    axes[-1].legend(handles=handles, loc="upper right", bbox_to_anchor=(1.34, 1.0),
+                    frameon=False, fontsize=8)
     if CONTINUOUS:
         _sm = plt.cm.ScalarMappable(cmap="RdYlGn", norm=plt.Normalize(*ACC_NORM))
-        _cb = fig.colorbar(_sm, ax=axes[2], orientation="vertical", fraction=0.05,
+        _cb = fig.colorbar(_sm, ax=axes[-1], orientation="vertical", fraction=0.05,
                            pad=0.02, shrink=0.45, anchor=(0.0, 0.0))
         _cb.set_label("accuracy" + (" = mean min(pred/true, true/pred)" if a.source == "grid64"
                                     else " = 1 − ½Σ|Δshare|"), fontsize=7)
