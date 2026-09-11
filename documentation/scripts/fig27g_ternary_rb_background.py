@@ -76,6 +76,8 @@ def band_of(f):
 
 FOLD_FROM_SHARES = False
 CORRECT_BAND = 2          # 정답 = 밴드 index ≤ 이 값 (0: 1.25배, 1: 1.5배, 2: 2배)
+DISCRETE = False          # 배경 3단 이산색
+ALPHA = 0.82
 BAND_LABEL = {0: "1.25-fold", 1: "1.5-fold", 2: "2-fold"}
 
 
@@ -115,11 +117,16 @@ def draw(ax, method, pairs, sigma, title):
     # 데이터에서 먼 곳(밀도 < 최대의 5 %)은 투명 → 배경이 근거 없는 색을 안 만든다
     alpha_pt = np.clip(dens / (0.05 * dens.max()), 0, 1)
     tri.set_mask(alpha_pt[tri.triangles].min(1) < 0.2)
-    ax.tripcolor(tri, frac, cmap=RB, vmin=0, vmax=1, shading="gouraud",
-                 alpha=0.82, zorder=0, rasterized=True)
+    if DISCRETE:
+        # 3단: < 1/3 빨강 · 1/3–2/3 흰 · > 2/3 파랑 — 얼룩 대신 영역
+        ax.tricontourf(tri, frac, levels=[0, 1 / 3, 2 / 3, 1.0001],
+                       colors=["#d9a09b", "#f4f1ec", "#9db6dd"], alpha=ALPHA, zorder=0)
+    else:
+        ax.tripcolor(tri, frac, cmap=RB, vmin=0, vmax=1, shading="gouraud",
+                     alpha=ALPHA, zorder=0, rasterized=True)
     vx, vy = to_xy(np.array([[0, 100, 0], [100, 0, 0], [0, 0, 100], [0, 100, 0]]))
     ax.plot(vx, vy, color="#30343a", lw=1.2, zorder=3)
-    for k in range(10, 100, 10):
+    for k in range(20, 100, 20):
         for a, b in (((k, 100 - k, 0), (k, 0, 100 - k)),
                      ((100 - k, k, 0), (0, k, 100 - k)),
                      ((0, 100 - k, k), (100 - k, 0, k))):
@@ -155,11 +162,14 @@ def main():
                     help="bands from pred/true share fold instead of the accuracy column")
     ap.add_argument("--correct-band", type=float, default=2.0, choices=[1.25, 1.5, 2.0],
                     help="a condition counts as correct when within this fold")
+    ap.add_argument("--discrete", action="store_true", help="3-level background")
+    ap.add_argument("--alpha", type=float, default=0.82)
     a = ap.parse_args()
-    global FOLD_FROM_SHARES, CORRECT_BAND
+    global FOLD_FROM_SHARES, CORRECT_BAND, DISCRETE, ALPHA
+    DISCRETE = bool(a.discrete); ALPHA = float(a.alpha)
     FOLD_FROM_SHARES = bool(a.fold_from_shares)
     CORRECT_BAND = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
-    tag = "" if CORRECT_BAND == 2 else f"_{BAND_LABEL[CORRECT_BAND].replace('-fold', 'x')}"
+    tag = ("" if CORRECT_BAND == 2 else f"_{BAND_LABEL[CORRECT_BAND].replace('-fold', 'x')}") + ("_discrete" if DISCRETE else "")
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.6))
     for ax, (m, title) in zip(axes, (("nnls", "NNLS (surface)"), ("pls", "PLS-R"),
                                      ("mlp", "MLP"))):
@@ -181,7 +191,10 @@ def main():
                 for c, n in zip(BAND_COLORS, BAND_NAMES)]
     axes[2].legend(handles=handles, loc="upper right", bbox_to_anchor=(1.34, 1.0),
                    frameon=False, fontsize=8)
-    sm = plt.cm.ScalarMappable(cmap=RB, norm=plt.Normalize(0, 1))
+    from matplotlib.colors import ListedColormap, BoundaryNorm
+    sm = (plt.cm.ScalarMappable(cmap=ListedColormap(["#d9a09b", "#f4f1ec", "#9db6dd"]),
+                                norm=BoundaryNorm([0, 1 / 3, 2 / 3, 1], 3)) if DISCRETE
+          else plt.cm.ScalarMappable(cmap=RB, norm=plt.Normalize(0, 1)))
     cb = fig.colorbar(sm, ax=axes, orientation="horizontal", fraction=0.035,
                       pad=0.02, aspect=40)
     cb.set_label(f"local fraction within {BAND_LABEL[CORRECT_BAND]} (kernel σ = {a.sigma:.0f} %p)",
