@@ -74,35 +74,28 @@ box(0.43, 0.56, 0.15, 0.22,
 
 # ---------------- right: concentration ----------------
 ax.text(0.79, 0.95, "Concentration (µM)", ha="center", fontsize=12.5, weight="bold", color=INK)
-# route A: residual net
-box(0.62, 0.60, 0.35, 0.30,
+# concentration net g(map)
+box(0.62, 0.50, 0.35, 0.40,
     ["inputs (12, map-level): log10 Ccal ×3 · composition ×3",
      "log1p band signal ×3 · log-total p10 / p50 / p90",
      "12 → 128   FC · BN · ReLU · Dropout 0.25",
-     "128 → 32   FC · ReLU        32 → 3   FC (Δlog10, |Δ| ≤ 2)",
-     "C = Ccal · 10^Δ ;  Ccal = log-linear band calibration (9–144 µM)"],
-    title="Route A — concentration net  g(map)", fs=7.4)
-# route B: pixel library
-box(0.62, 0.20, 0.35, 0.28,
-    ["pixel signature (7): log1p band ×3 · log1p total · composition ×3",
-     "z-scored → k = 15 nearest of 6,828 library pixels",
-     "(93 prepared maps ≤ 100 µM + 175 calibration spectra)",
-     "µM = distance-weighted mean in log space (per pixel)"],
-    title="Route B — pixel library k-NN", fs=7.4)
-# router
-box(0.43, 0.16, 0.15, 0.30,
-    ["map nearest-library", "distance ≤ 3 → Route A", "else pixel median", "distance ≤ 3 → Route B",
-     "else: no answer"], title="auto", fs=7.4)
-arrow(0.58, 0.67, 0.62, 0.75, col=INK)      # composition → route A
-arrow(0.505, 0.56, 0.505, 0.46, col=INK)    # composition → router
-arrow(0.58, 0.34, 0.62, 0.34, col=INK)      # router → route B
-arrow(0.58, 0.40, 0.62, 0.70, col=MUTE)     # router → route A (thin)
+     "128 → 32   FC · ReLU",
+     "32 → 3      FC   (Δlog10, |Δ| ≤ 2)",
+     "C = Ccal · 10^Δ",
+     "Ccal = log-linear band calibration, clipped 9–144 µM"],
+    title="Concentration net  g(map)", fs=7.4)
+arrow(0.58, 0.67, 0.62, 0.70, col=INK)      # composition → g(map)
+# applicability-domain guard (k-NN distance to the training-map library)
+box(0.62, 0.20, 0.35, 0.22,
+    ["nearest training-map z-distance (12 features) ≤ 3 → report",
+     "otherwise refuse (no µM reported)",
+     "no value averaging: the library only guards the domain"],
+    title="Domain check (training-map library, k-NN distance)", fs=7.4, ls="--", edge=MUTE)
+arrow(0.795, 0.50, 0.795, 0.42, col=MUTE)
 # outputs
 for i, s in enumerate(SUBS):
-    ax.scatter(0.985, 0.78 - i * 0.05, s=70, color=CO[s], zorder=5, clip_on=False)
-    ax.scatter(0.985, 0.38 - i * 0.05, s=70, color=CO[s], zorder=5, clip_on=False)
-ax.text(0.985, 0.88, "µM", ha="center", fontsize=8, color=INK)
-ax.text(0.985, 0.48, "µM", ha="center", fontsize=8, color=INK)
+    ax.scatter(0.985, 0.74 - i * 0.05, s=70, color=CO[s], zorder=5, clip_on=False)
+ax.text(0.985, 0.84, "µM", ha="center", fontsize=8, color=INK)
 # declared-total overlay
 box(0.43, 0.02, 0.54, 0.12,
     ["Ĉᵢ = pᵢ · C_total — used only when the sample's total concentration is declared"],
