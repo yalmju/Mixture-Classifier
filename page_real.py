@@ -3126,7 +3126,22 @@ class RealDataPage(QWidget):
                    "After\nMLP" if r.method == "dlpx" else f"After\n{r.method.upper()}"))
         changes = (pairs[1][0] - pairs[0][0]) * 100.0
         change_text = "   ".join(f"{nm} {d:+.0f}%p" for nm, d in zip(nb, changes))
-        self.c_comp.fig.suptitle("Change:  " + change_text, fontsize=9,
+        # 참값이 입력돼 있으면(true µM a,b,c) 조성 참값 = 몫으로 환산해 오차를 병기:
+        # 표면(NNLS)·복원(MLP) 각각의 평균 절대 몫 오차(%p). 검증용 표시일 뿐이다.
+        _tv_txt = self.true_edit.text().strip() if hasattr(self, "true_edit") else ""
+        _truth_line = ""
+        if _tv_txt:
+            try:
+                _tv = [float(t) for t in _tv_txt.replace(" ", "").split(",")]
+                if len(_tv) == len(nb) and sum(_tv) > 0:
+                    _ts = np.asarray(_tv, float) / sum(_tv)
+                    _e0 = float(np.mean(np.abs(pairs[0][0] - _ts))) * 100
+                    _e1 = float(np.mean(np.abs(pairs[1][0] - _ts))) * 100
+                    _truth_line = (chr(10) + "truth " + "/".join(f"{v * 100:.0f}" for v in _ts)
+                                   + f" %  ·  mean |error|  NNLS {_e0:.0f} %p  →  MLP {_e1:.0f} %p")
+            except ValueError:
+                _truth_line = ""
+        self.c_comp.fig.suptitle("Change:  " + change_text + _truth_line, fontsize=9,
                                  fontweight="bold", y=0.98)
         for panel, (mr, title) in enumerate(pairs, 1):
             ax = self.c_comp.style(self.c_comp.fig.add_subplot(1, 2, panel))
