@@ -182,6 +182,7 @@ def band_of(f):
 FOLD_FROM_SHARES = False
 ACC_THRESHOLDS = None     # (t1, t2, t3): accuracy 열을 직접 밴드로 자르는 임계값
 FIELD = "fraction"        # 배경: fraction = 정답 비율, mean = accuracy 국소 평균
+VRANGE = (0.0, 1.0)       # 배경 색축 범위
 CORRECT_BAND = 2          # 정답 = 밴드 index ≤ 이 값 (0: 1.25배, 1: 1.5배, 2: 2배)
 DISCRETE = False          # 배경 3단 이산색
 ALPHA = 0.82
@@ -237,7 +238,7 @@ def draw(ax, method, pairs, sigma, title):
         ax.tricontourf(tri, frac, levels=[0, 1 / 3, 2 / 3, 1.0001],
                        colors=BG3, alpha=ALPHA, zorder=0)
     else:
-        ax.tripcolor(tri, frac, cmap=BG, vmin=0, vmax=1, shading="gouraud",
+        ax.tripcolor(tri, frac, cmap=BG, vmin=VRANGE[0], vmax=VRANGE[1], shading="gouraud",
                      alpha=ALPHA, zorder=0, rasterized=True)
     vx, vy = to_xy(np.array([[0, 100, 0], [100, 0, 0], [0, 0, 100], [0, 100, 0]]))
     ax.plot(vx, vy, color="#30343a", lw=1.2, zorder=3)
@@ -297,6 +298,8 @@ def main():
                     metavar=("T1", "T2", "T3"),
                     help="band the accuracy column at these cut-offs instead of 1/fold "
                          "(e.g. 0.887 0.786 0.5 reproduces the user's MLP figure)")
+    ap.add_argument("--vrange", nargs=2, type=float, default=None, metavar=("LO", "HI"),
+                    help="background colour-axis range (default 0-1; e.g. 0.4 0.9 for --field mean)")
     ap.add_argument("--field", choices=["fraction", "mean"], default="fraction",
                     help="background: local fraction within --correct-band, or local mean accuracy")
     ap.add_argument("--methods", default="nnls,pls,mlp",
@@ -314,8 +317,9 @@ def main():
     global FOLD_FROM_SHARES, CORRECT_BAND, DISCRETE, ALPHA, CONTINUOUS, BG, BG3, ACC_THRESHOLDS
     DISCRETE = bool(a.discrete); ALPHA = float(a.alpha); CONTINUOUS = bool(a.continuous)
     ACC_THRESHOLDS = tuple(a.acc_thresholds) if a.acc_thresholds else None
-    global FIELD
+    global FIELD, VRANGE
     FIELD = a.field
+    VRANGE = tuple(a.vrange) if a.vrange else (0.0, 1.0)
     BG, BG3 = PALETTES[a.palette]
     FOLD_FROM_SHARES = bool(a.fold_from_shares)
     CORRECT_BAND = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
@@ -379,7 +383,7 @@ def main():
     from matplotlib.colors import ListedColormap, BoundaryNorm
     sm = (plt.cm.ScalarMappable(cmap=ListedColormap(BG3),
                                 norm=BoundaryNorm([0, 1 / 3, 2 / 3, 1], 3)) if DISCRETE
-          else plt.cm.ScalarMappable(cmap=BG, norm=plt.Normalize(0, 1)))
+          else plt.cm.ScalarMappable(cmap=BG, norm=plt.Normalize(*VRANGE)))
     cb = fig.colorbar(sm, ax=axes, orientation="horizontal", fraction=0.035,
                       pad=0.02, aspect=40)
     cb.set_label((f"local mean accuracy (kernel σ = {a.sigma:.0f} %p)" if a.field == "mean" else
@@ -389,7 +393,8 @@ def main():
                     "final92": "  ·  composition overlap"}[a.source]
                  + (", 64-grid" if (a.subset == "grid64" or a.source == "grid64") else ", 92 conditions"),
                  fontsize=8)
-    cb.set_ticks([0, 0.5, 1]); cb.ax.tick_params(labelsize=7)
+    cb.set_ticks([VRANGE[0], (VRANGE[0] + VRANGE[1]) / 2, VRANGE[1]] if not DISCRETE else [0, 0.5, 1])
+    cb.ax.tick_params(labelsize=7)
     out = os.path.join(RES, f"27g_ternary_rb{tag}.png")
     fig.savefig(out, dpi=400, bbox_inches="tight", facecolor="white")
     print("saved", out)
