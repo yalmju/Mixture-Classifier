@@ -110,6 +110,9 @@ class RealDataPage(QWidget):
         self._bl_override = None    # set when the model's baseline flag overrides the folder's
         self._sel = None
         self._click_axes = []       # axes that accept a pixel click
+        self._roi = None            # (x0, x1, y0, y1) map coords — drag-selected region
+        self._roi_drag = None       # press start while dragging
+        self._roi_rubber = None     # live rectangle patch during the drag
         self._colors = {}           # per-substance colour override {name: '#hex'}
         self._bands = {}            # per-substance mapped wavenumber {name: cm⁻¹}
         self._band_spins = {}
@@ -264,6 +267,14 @@ class RealDataPage(QWidget):
         self.chk_leaf.toggled.connect(
             lambda _=False: self._apply(self._res) if self._res is not None else None)
         relrow.addWidget(self.chk_leaf)
+        # ROI: 아무 맵에서나 드래그하면 그 사각 영역만 리포트(조성·µM·KPI·export).
+        self.btn_roi = QPushButton("clear ROI"); self.btn_roi.setObjectName("ghost")
+        self.btn_roi.setToolTip("drag a rectangle on any map to report only that region "
+                                "(composition, µM, KPIs, export). Click = pixel spectrum "
+                                "as before. This button clears the region.")
+        self.btn_roi.setEnabled(False)
+        self.btn_roi.clicked.connect(self._clear_roi)
+        relrow.addWidget(self.btn_roi)
         relcol.addWidget(_rl); relcol.addLayout(relrow)
         # saturation is quarantined AS saturation — its own category, not a repair
         # you have to trust: clipped pixels leave every statistic and are painted
@@ -696,10 +707,10 @@ class RealDataPage(QWidget):
                       (self.c_comp, "Composition appears here"),
                       (self.c_spec, "Click a pixel in a map to see its spectrum")]:
             cv.placeholder(m)
-        self.c_maps.mpl_connect("button_press_event", self._on_click)
-        self.c_abund.mpl_connect("button_press_event", self._on_click)
-        self.c_pie.mpl_connect("button_press_event", self._on_click)
-        self.c_conc.mpl_connect("button_press_event", self._on_click)
+        for _cv in (self.c_maps, self.c_abund, self.c_pie, self.c_conc):
+            _cv.mpl_connect("button_press_event", self._on_click)
+            _cv.mpl_connect("motion_notify_event", self._on_drag)
+            _cv.mpl_connect("button_release_event", self._on_release)
         self._autoload_default_model()
 
 
@@ -1627,7 +1638,38 @@ class RealDataPage(QWidget):
         if self.chk_sat.isChecked():
             keep = keep & ~self._clipped(r)
         keep = keep & self._floor_mask(r)
+        keep = keep & self._roi_mask(r)
         return keep
+
+    def _roi_mask(self, r):
+        roi = getattr(self, "_roi", None)
+        if roi is None:
+            return np.ones(r.n_pixels, bool)
+        x0, x1, y0, y1 = roi
+        xy = np.asarray(r.coords, float)
+        return (xy[:, 0] >= x0) & (xy[:, 0] <= x1) & (xy[:, 1] >= y0) & (xy[:, 1] <= y1)
+
+    def _clear_roi(self):
+        self._roi = None
+        self.btn_roi.setEnabled(False)
+        if self._res is not None:
+            self._apply(self._res)
+
+    def _roi_report(self, r):
+        """상태줄용: ROI 안 조성 vs 전체 맵 조성 (신호가중 평균)."""
+        if self._roi is None:
+            return ""
+        nb = [r.comps[i] for i in r.nonbg]
+        inside = self._mean_ratio(r)
+        n_in = int(self._hit(r).sum())
+        roi, self._roi = self._roi, None
+        try:
+            whole = self._mean_ratio(r); n_all = int(self._hit(r).sum())
+        finally:
+            self._roi = roi
+        f = lambda v: "/".join(f"{x * 100:.0f}" for x in v)
+        return (f" · ROI {n_in}/{n_all} px · composition {'/'.join(nb)} "
+                f"{f(inside)} % (whole map {f(whole)} %)")
 
     def _sig_sum(self, r):
         """픽셀별 VIP 밴드 신호합(비-배경 성분 밴드, 음수 클립). 밴드 설정으로 캐시."""
@@ -1799,7 +1841,14 @@ class RealDataPage(QWidget):
         return g[rows, cc]
 
     def _leaf_outline(self, ax, r, extent, origin):
-        """잉크 도포 영역 경계 윤곽선 — 마스크가 있을 때만."""
+        """잉크 도포 영역 경계 윤곽선 — 마스크가 있을 때만. ROI 사각형도 여기서."""
+        roi = getattr(self, "_roi", None)
+        if roi is not None:
+            from matplotlib.patches import Rectangle
+            x0, x1, y0, y1 = roi
+            ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False,
+                                   edgecolor="white", linestyle="--", linewidth=1.0,
+                                   zorder=7))
         m = getattr(r, "leaf_mask", None)
         if m is None:
             return
@@ -1842,7 +1891,7 @@ class RealDataPage(QWidget):
                             + ("" if ov is None else
                             f" · baseline removal {'on' if ov else 'off'} — followed the "
                             f"model's own setting, not this folder's")
-                            + _conc_note)
+                            + _conc_note + self._roi_report(r))
         # The dynamic band/scale controls settle their card widths on the next Qt
         # layout pass. Refit once then so all four map groups use the same slot width.
         QTimer.singleShot(0, self._redraw)
@@ -3103,10 +3152,57 @@ class RealDataPage(QWidget):
     # ---- interaction ----
     def _on_click(self, event):
         r = self._res
-        if r is None or event.xdata is None or event.inaxes not in self._click_axes:
+        if (r is None or event.xdata is None or event.inaxes not in self._click_axes
+                or event.button != 1):
             return
-        d = ((r.coords[:, 0] - event.xdata) ** 2
-             + (r.coords[:, 1] - event.ydata) ** 2)
+        self._roi_drag = (float(event.xdata), float(event.ydata), event.inaxes)
+
+    def _pitch(self, r):
+        _ri, _ci, _ny, _nx, ux, uy = self._grid_rc(r)
+        px = float(np.min(np.diff(ux))) if len(ux) > 1 else 1.0
+        py = float(np.min(np.diff(uy))) if len(uy) > 1 else 1.0
+        return px, py
+
+    def _on_drag(self, event):
+        st = self._roi_drag
+        if st is None or event.xdata is None or event.inaxes is not st[2]:
+            return
+        from matplotlib.patches import Rectangle
+        x0, y0, ax = st
+        if self._roi_rubber is None:
+            self._roi_rubber = Rectangle((x0, y0), 0, 0, fill=True, alpha=0.18,
+                                         facecolor="white", edgecolor="white",
+                                         linestyle="--", linewidth=1.0, zorder=8)
+            ax.add_patch(self._roi_rubber)
+        self._roi_rubber.set_bounds(min(x0, event.xdata), min(y0, event.ydata),
+                                    abs(event.xdata - x0), abs(event.ydata - y0))
+        ax.figure.canvas.draw_idle()
+
+    def _on_release(self, event):
+        r = self._res; st = self._roi_drag; self._roi_drag = None
+        if self._roi_rubber is not None:
+            try:
+                self._roi_rubber.remove()
+            except Exception:
+                pass
+            self._roi_rubber = None
+        if r is None or st is None:
+            return
+        x0, y0, ax = st
+        x1 = float(event.xdata) if event.xdata is not None else x0
+        y1 = float(event.ydata) if event.ydata is not None else y0
+        px, py = self._pitch(r)
+        if abs(x1 - x0) >= px and abs(y1 - y0) >= py:        # a real drag → ROI
+            hx, hy = px / 2, py / 2
+            self._roi = (min(x0, x1) - hx, max(x0, x1) + hx,
+                         min(y0, y1) - hy, max(y0, y1) + hy)
+            if not self._roi_mask(r).any():
+                self._roi = None
+                return
+            self.btn_roi.setEnabled(True)
+            self._apply(r)
+            return
+        d = ((r.coords[:, 0] - x0) ** 2 + (r.coords[:, 1] - y0) ** 2)   # a click
         self._sel = int(d.argmin())
         self._plot_spec(r, self._sel)
         self._update_sel_rings(r)                # rings on every map, never a rebuild
@@ -3542,7 +3638,9 @@ class RealDataPage(QWidget):
                 f"{' (' + self.lbl_floor.text() + ')' if getattr(self, 'lbl_floor', None) is not None and self.lbl_floor.text() != 'off' else ''}; "
                 f"low-R² drop {'on' if self.chk_rel.isChecked() else 'off'}; "
                 f"saturation quarantine {'on' if self.chk_sat.isChecked() else 'off'}; "
-                f"ink-area-only {'on' if getattr(self, 'chk_leaf', None) is not None and self.chk_leaf.isChecked() else 'off'}"],
+                f"ink-area-only {'on' if getattr(self, 'chk_leaf', None) is not None and self.chk_leaf.isChecked() else 'off'}"
+                + (f"; ROI x {self._roi[0]:.0f}–{self._roi[1]:.0f}, y {self._roi[2]:.0f}–{self._roi[3]:.0f} "
+                   f"({int(self._hit(r).sum())} px)" if getattr(self, '_roi', None) is not None else "")],
             "Results": [
                 f"- Dominant substance: {r.dominant}",
                 f"- Substance pixels (hit fraction): {r.hit_frac:.0%} by the gate; "
