@@ -3142,7 +3142,9 @@ class RealDataPage(QWidget):
             except ValueError:
                 _truth_line = ""
         self.c_comp.fig.suptitle("Change:  " + change_text + _truth_line, fontsize=9,
-                                 fontweight="bold", y=0.98)
+                                 fontweight="bold", y=0.99)
+        if _truth_line:
+            self.c_comp.fig.subplots_adjust(top=0.72)
         for panel, (mr, title) in enumerate(pairs, 1):
             ax = self.c_comp.style(self.c_comp.fig.add_subplot(1, 2, panel))
             keep = [i for i in range(len(nb)) if mr[i] >= 0.01] or [int(mr.argmax())]
@@ -3460,10 +3462,18 @@ class RealDataPage(QWidget):
                 _mat(f"conc_uM_{nm}.csv", r.conc[:, k] * 1e6); nmat += 1
         _mat("hit.csv", np.asarray(_eff, float)); nmat += 1
         ncsv += nmat
-        # the µM summary-bar table, numbers identical to the drawn bars
-        if cal:
+        # the µM summary-bar table, numbers identical to the drawn bars:
+        # 화면 판독 경로 값(_um_display, µM 단위일 때)을 쓴다 — 헤드 값과 다를 수 있다.
+        _umd = getattr(self, "_um_display", None)
+        _use_disp = (_umd is not None and getattr(self, "_um_display_units", "uM") == "uM"
+                     and np.asarray(_umd).shape == (r.n_pixels, len(nb)))
+        if cal or _use_disp:
             _hit = self._hit(r)
-            _um = r.conc * 1e6
+            _um = np.asarray(_umd, float) if _use_disp else r.conc * 1e6
+            _route_name = ({"knn": "library k-NN", "pxknn": "pixel k-NN",
+                            "raw": "raw VIP band signal", "mlpsig": "MLP-corrected signal"
+                            }.get(getattr(self, "_um_display_route", ""), "model head")
+                           if _use_disp else "model head")
             _tv = None
             _txt = self.true_edit.text().strip() if hasattr(self, "true_edit") else ""
             if _txt:
@@ -3497,10 +3507,13 @@ class RealDataPage(QWidget):
                             f"{min(med, _tot):.4f}" if _tot is not None else "",
                             ("known-total capped" if _tot is not None and med > _tot
                              else "known-total" if _tot is not None else "")])
+            for _row in _sr:
+                _row.append(_route_name)
             write_csv(os.path.join(d, "um_summary.csv"),
                       ["substance", "n_hit_px", "median_uM", "q1_uM", "q3_uM",
                        "true_uM", "recovery_pct", "apparent_amount_pmol",
-                       "known_total_uM", "median_capped_uM", "constraint_flag"], _sr)
+                       "known_total_uM", "median_capped_uM", "constraint_flag",
+                       "readout_route"], _sr)
             ncsv += 1
         # 화면의 픽셀 분포(활성 판독 경로 값 그대로) — Origin에서 다시 그리기용.
         um_d = getattr(self, "_um_display", None)
