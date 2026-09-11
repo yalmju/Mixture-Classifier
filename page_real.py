@@ -3350,10 +3350,21 @@ class RealDataPage(QWidget):
         mr_un = (r.ratio_nb[self._hit(r)].mean(axis=0) if self._hit(r).any()
                  else r.ratio_nb.mean(axis=0))
         mr_w = self._mean_ratio(r)
+        # 파이 값 그대로: Before = 스펙트럼(NNLS) 조성의 신호가중 평균, After = mr_w,
+        # change = After − Before (%p). _plot_comp 의 aggregate 와 같은 가중치.
+        _wts = np.clip(np.asarray(r.spectra, float), 0.0, None).sum(axis=1)
+        _use = _eh if _eh.any() else np.ones(r.n_pixels, bool)
+        _sp = np.asarray(self._spectral_ratio_nb(r), float)
+        _wsum = float(_wts[_use].sum())
+        pie_before = ((_sp[_use] * _wts[_use][:, None]).sum(axis=0) / _wsum
+                      if _wsum > 0 else _sp[_use].mean(axis=0))
         write_csv(os.path.join(d, "composition.csv"),
                   ["substance", "mean_ratio_unweighted", "mean_ratio_signal_weighted",
-                   "mean_spectral_evidence_share"],
-                  [[nm, f"{mr_un[i]:.4f}", f"{mr_w[i]:.4f}", f"{ev_mean[i]:.4f}"]
+                   "mean_spectral_evidence_share", "pie_before_NNLS_pct",
+                   "pie_after_MLP_pct", "change_pp"],
+                  [[nm, f"{mr_un[i]:.4f}", f"{mr_w[i]:.4f}", f"{ev_mean[i]:.4f}",
+                    f"{pie_before[i] * 100:.2f}", f"{mr_w[i] * 100:.2f}",
+                    f"{(mr_w[i] - pie_before[i]) * 100:+.2f}"]
                    for i, nm in enumerate(nb)])
         inten = r.spectra.sum(axis=1)                      # total baseline-removed signal
         cal = getattr(r, "conc", None) is not None
