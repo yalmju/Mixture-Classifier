@@ -443,6 +443,16 @@ class RealDataPage(QWidget):
             lambda _=False: (self._plot_abund(self._res), self._plot_conc(self._res))
             if self._res is not None else None)
         _abrow.addWidget(self.chk_grid)
+        # 색 밑그림: 비-hit 픽셀도 모델 조성 색을 신호 밝기로 어둡게 칠한다 —
+        # raw merged 처럼 잎·잉크 결이 색으로 보인다 (사용자 2026-09-11). 끄면 회색.
+        self.chk_under_colour = QCheckBox("colour underlay"); self.chk_under_colour.setChecked(True)
+        self.chk_under_colour.setToolTip("merged panel: paint non-gated pixels with their model "
+                                         "composition colour at low brightness (signal-scaled) "
+                                         "instead of grey, like the raw R/G/B map. Gated pixels "
+                                         "are drawn on top at full brightness.")
+        self.chk_under_colour.toggled.connect(
+            lambda _=False: self._plot_abund(self._res) if self._res is not None else None)
+        _abrow.addWidget(self.chk_under_colour)
         lay_ab.addLayout(_abrow)
 
         # Nine equal map slots across the result area. Raw uses four (merge + 3),
@@ -2182,6 +2192,14 @@ class RealDataPage(QWidget):
                 col_px = np.clip((norm / weights) @ cols * np.minimum(
                     norm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
                 img = under.copy()
+                if (model_view and getattr(self, "chk_under_colour", None) is not None
+                        and self.chk_under_colour.isChecked()):
+                    # 비-hit: 조성 색조 × (0.12–0.55) 밝기 — raw merged 의 결을 색으로
+                    _Rall = np.clip(np.asarray(r.ratio_nb, float), 0, None)
+                    _Rall = _Rall / (_Rall.sum(axis=1, keepdims=True) + 1e-12)
+                    _lum = (_gray - 0.06) / 0.24                       # 0–1
+                    _under_col = np.clip(_Rall @ cols, 0, 1) * (0.12 + 0.43 * _lum)[:, None]
+                    img[rows, cc] = _under_col
                 img[rows[hit], cc[hit]] = col_px[hit]
                 ax.imshow(img, extent=extent, origin=origin, aspect="equal",
                           interpolation="nearest")
