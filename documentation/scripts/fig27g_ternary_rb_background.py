@@ -13,7 +13,7 @@
       27g_ternary_correct_fraction_{m}_XYZZ.csv (Origin ternary contour 용:
       X = DQ %, Y = TBZ %, Z = THI %, Z2 = 국소 정답률; alpha 열 = 데이터 밀도)
 
-실행:  python -u fig27g_ternary_rb_background.py [--sigma 12]
+실행:  python -u fig27g_ternary_rb_background.py [--sigma 12] [--correct-band 1.25|1.5|2]
 """
 from __future__ import annotations
 
@@ -75,6 +75,8 @@ def band_of(f):
 
 
 FOLD_FROM_SHARES = False
+CORRECT_BAND = 2          # 정답 = 밴드 index ≤ 이 값 (0: 1.25배, 1: 1.5배, 2: 2배)
+BAND_LABEL = {0: "1.25-fold", 1: "1.5-fold", 2: "2-fold"}
 
 
 def band(t, p, acc):
@@ -98,7 +100,7 @@ def field(pairs, sigma):
             for t in np.arange(0, 100 + step - d, step)]
     G = np.array(grid, float)
     T = np.array([t for _, t, _, _ in pairs])
-    C = np.array([1.0 if band(t, p, a) <= 2 else 0.0 for _, t, p, a in pairs])
+    C = np.array([1.0 if band(t, p, a) <= CORRECT_BAND else 0.0 for _, t, p, a in pairs])
     d2 = ((G[:, None, :] - T[None, :, :]) ** 2).sum(-1)
     w = np.exp(-0.5 * d2 / sigma ** 2)
     dens = w.sum(1)
@@ -138,8 +140,8 @@ def draw(ax, method, pairs, sigma, title):
             va="top", fontsize=11, weight="bold")
     ax.text(*to_xy(np.array([100.0, 0, 0])), " DQ", color=CO["DQ"], ha="left",
             va="top", fontsize=11, weight="bold")
-    ok = sum(band(t, p, a) <= 2 for _, t, p, a in pairs)
-    ax.set_title(f"{title}  ·  within 2-fold {ok}/{len(pairs)}", fontsize=9,
+    ok = sum(band(t, p, a) <= CORRECT_BAND for _, t, p, a in pairs)
+    ax.set_title(f"{title}  ·  within {BAND_LABEL[CORRECT_BAND]} {ok}/{len(pairs)}", fontsize=9,
                  color="#3f454c")
     ax.set_xlim(-0.08, 1.08); ax.set_ylim(-0.08, 0.95)
     ax.set_aspect("equal"); ax.set_axis_off()
@@ -151,15 +153,19 @@ def main():
     ap.add_argument("--sigma", type=float, default=12.0, help="kernel width, %p")
     ap.add_argument("--fold-from-shares", action="store_true",
                     help="bands from pred/true share fold instead of the accuracy column")
+    ap.add_argument("--correct-band", type=float, default=2.0, choices=[1.25, 1.5, 2.0],
+                    help="a condition counts as correct when within this fold")
     a = ap.parse_args()
-    global FOLD_FROM_SHARES
+    global FOLD_FROM_SHARES, CORRECT_BAND
     FOLD_FROM_SHARES = bool(a.fold_from_shares)
+    CORRECT_BAND = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
+    tag = "" if CORRECT_BAND == 2 else f"_{BAND_LABEL[CORRECT_BAND].replace('-fold', 'x')}"
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.6))
     for ax, (m, title) in zip(axes, (("nnls", "NNLS (surface)"), ("pls", "PLS-R"),
                                      ("mlp", "MLP"))):
         pairs = load_pairs(m)
         G, frac, dens = draw(ax, m, pairs, a.sigma, title)
-        with open(os.path.join(RES, f"27g_ternary_correct_fraction_{m}_XYZZ.csv"),
+        with open(os.path.join(RES, f"27g_ternary_correct_fraction{tag}_{m}_XYZZ.csv"),
                   "w", newline="", encoding="utf-8-sig") as f:
             wri = csv.writer(f)
             wri.writerow(["DQ_pct_X", "TBZ_pct_Y", "THI_pct_Z",
@@ -178,10 +184,10 @@ def main():
     sm = plt.cm.ScalarMappable(cmap=RB, norm=plt.Normalize(0, 1))
     cb = fig.colorbar(sm, ax=axes, orientation="horizontal", fraction=0.035,
                       pad=0.02, aspect=40)
-    cb.set_label(f"local fraction within 2-fold (kernel σ = {a.sigma:.0f} %p)",
+    cb.set_label(f"local fraction within {BAND_LABEL[CORRECT_BAND]} (kernel σ = {a.sigma:.0f} %p)",
                  fontsize=8)
     cb.set_ticks([0, 0.5, 1]); cb.ax.tick_params(labelsize=7)
-    out = os.path.join(RES, "27g_ternary_rb.png")
+    out = os.path.join(RES, f"27g_ternary_rb{tag}.png")
     fig.savefig(out, dpi=400, bbox_inches="tight", facecolor="white")
     print("saved", out)
 
