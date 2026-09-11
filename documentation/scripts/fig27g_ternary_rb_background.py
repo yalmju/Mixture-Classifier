@@ -114,7 +114,7 @@ def load_pairs_csv(path, method=None):
                 if "beyond" in v:
                     return 3
         if "accuracy" in cols and r[cols["accuracy"]].strip():
-            return band_of(-np.log2(max(float(r[cols["accuracy"]]), 1e-6)))
+            return ("acc", float(r[cols["accuracy"]]))
         return None
 
     pairs = []
@@ -139,10 +139,12 @@ def load_pairs_csv(path, method=None):
             pairs.append([r.get(cols.get("condition", ""), "").strip(), t, p, None, "ternary", _band_from(r)])
     out = []
     for c, t, p, _a, sub, b in pairs:
+        sub = "binary" if (t <= 0).any() else "ternary"
+        if isinstance(b, tuple):                        # raw accuracy → band() decides
+            out.append((c, t, p, b[1], sub)); continue
         if b is None:
             b = band_of(worst_fold(t, p))
-        sub = "binary" if (t <= 0).any() else "ternary"
-        # band 를 accuracy 로 역부호화해 두면 band()가 그대로 읽는다 (1.25/1.5/2/초과 → 0.9/0.75/0.55/0.3)
+        # explicit band → encode as an accuracy band() maps back (0.9/0.75/0.55/0.3 under 1/fold)
         out.append((c, t, p, {0: 0.9, 1: 0.75, 2: 0.55, 3: 0.3}[int(b)], sub))
     return out
 
@@ -178,6 +180,7 @@ def band_of(f):
 
 
 FOLD_FROM_SHARES = False
+ACC_THRESHOLDS = None     # (t1, t2, t3): accuracy 열을 직접 밴드로 자르는 임계값
 CORRECT_BAND = 2          # 정답 = 밴드 index ≤ 이 값 (0: 1.25배, 1: 1.5배, 2: 2배)
 DISCRETE = False          # 배경 3단 이산색
 ALPHA = 0.82
@@ -190,6 +193,9 @@ def band(t, p, acc):
     """조건의 밴드 — 파일 accuracy 열(기본) 또는 몫-fold(옵션)."""
     if FOLD_FROM_SHARES or not np.isfinite(acc):
         return band_of(worst_fold(t, p))
+    if ACC_THRESHOLDS is not None:
+        t1, t2, t3 = ACC_THRESHOLDS
+        return 0 if acc >= t1 else 1 if acc >= t2 else 2 if acc >= t3 else 3
     return band_of(-np.log2(max(acc, 1e-6)))
 
 
@@ -282,6 +288,10 @@ def main():
     ap.add_argument("--subset", choices=["all", "grid64"], default="all",
                     help="restrict conditions to the 3/6/12/24 uM grid")
     ap.add_argument("--palette", choices=list(PALETTES), default="rb")
+    ap.add_argument("--acc-thresholds", nargs=3, type=float, default=None,
+                    metavar=("T1", "T2", "T3"),
+                    help="band the accuracy column at these cut-offs instead of 1/fold "
+                         "(e.g. 0.887 0.786 0.5 reproduces the user's MLP figure)")
     ap.add_argument("--labels", nargs="*", default=None,
                     help="panel titles for --pairs-csv files (default: file names)")
     ap.add_argument("--pairs-csv", nargs="*", default=None,
@@ -292,12 +302,13 @@ def main():
     ap.add_argument("--discrete", action="store_true", help="3-level background")
     ap.add_argument("--alpha", type=float, default=0.82)
     a = ap.parse_args()
-    global FOLD_FROM_SHARES, CORRECT_BAND, DISCRETE, ALPHA, CONTINUOUS, BG, BG3
+    global FOLD_FROM_SHARES, CORRECT_BAND, DISCRETE, ALPHA, CONTINUOUS, BG, BG3, ACC_THRESHOLDS
     DISCRETE = bool(a.discrete); ALPHA = float(a.alpha); CONTINUOUS = bool(a.continuous)
+    ACC_THRESHOLDS = tuple(a.acc_thresholds) if a.acc_thresholds else None
     BG, BG3 = PALETTES[a.palette]
     FOLD_FROM_SHARES = bool(a.fold_from_shares)
     CORRECT_BAND = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
-    tag = (("_user" if a.pairs_csv else "") + (f"_{a.source}" if a.source != "final92" and not a.pairs_csv else "")
+    tag = (("_user" if a.pairs_csv else "") + ("_thr" if a.acc_thresholds else "") + (f"_{a.source}" if a.source != "final92" and not a.pairs_csv else "")
            + (f"_{a.subset}" if a.subset != "all" else "")
            + (f"_{a.palette}" if a.palette != "rb" else "")
            + ("" if CORRECT_BAND == 2 else f"_{BAND_LABEL[CORRECT_BAND].replace('-fold', 'x')}")
