@@ -154,6 +154,10 @@ def main():
     ap.add_argument("--panels", type=int, default=1,
                     help="split the image into N equal horizontal panels (strip figure)")
     ap.add_argument("--out-prefix", default=None)
+    ap.add_argument("--acc-levels", nargs="*", default=None, metavar="COLOR",
+                    help="discrete background by local mean accuracy: colours for "
+                         "[>=0.8 (1.25-fold), 0.667-0.8 (1.5-fold), 0.5-0.667 (2-fold), <0.5]; "
+                         "give 3 colours to merge the last two. e.g. --acc-levels '#c8322b' '#f6f1ec' '#2b64b5'")
     a = ap.parse_args()
     full = np.asarray(Image.open(a.png).convert("RGB"))
     if a.crop:
@@ -215,8 +219,16 @@ def _write(stem, dots, vals, G, frac, dens, top, left, right, img, a, bg_full, x
     tri = mtri.Triangulation(G[:, 0] / 100, G[:, 2] / 100)
     interp = mtri.LinearTriInterpolator(tri, frac)
     zi = np.asarray(interp(np.clip(u, 0, 1), np.clip(wv, 0, 1)).filled(np.nan))
-    cmap = RB if a.palette == "rb" else PO
-    rgba = cmap(np.clip((zi - a.vrange[0]) / (a.vrange[1] - a.vrange[0]), 0, 1))
+    if a.acc_levels:
+        from matplotlib.colors import to_rgba, ListedColormap, BoundaryNorm
+        cols = list(a.acc_levels)
+        bounds = [0, 0.5, 2 / 3, 0.8, 1.0001] if len(cols) == 4 else [0, 2 / 3, 0.8, 1.0001]
+        cols = cols[::-1]                                  # 낮은 값 → 마지막 색
+        cmap = ListedColormap([to_rgba(c) for c in cols]); nrm = BoundaryNorm(bounds, len(cols))
+        rgba = cmap(nrm(np.nan_to_num(zi, nan=0.0)))
+    else:
+        cmap = RB if a.palette == "rb" else PO
+        rgba = cmap(np.clip((zi - a.vrange[0]) / (a.vrange[1] - a.vrange[0]), 0, 1))
     rgba[..., 3] = np.where(inside & np.isfinite(zi), a.alpha, 0.0)
     bg_full[:, xa:xa + W] = rgba
     print(f"  triangle top {top} left {left} right {right}")
