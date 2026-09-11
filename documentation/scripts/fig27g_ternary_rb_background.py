@@ -55,7 +55,8 @@ def load_pairs(method):
         if r["type"] == "true":
             cur = [r["condition"], np.array([float(r["DQ_pct_X"]), float(r["TBZ_pct_Y"]),
                                              float(r["THI_pct_Z"])]), None,
-                   float(r["accuracy"]) if r.get("accuracy", "").strip() else float("nan")]
+                   float(r["accuracy"]) if r.get("accuracy", "").strip() else float("nan"),
+                   r.get("subset", "").strip()]
         elif r["type"] == "pred" and cur is not None:
             cur[2] = np.array([float(r["DQ_pct_X"]), float(r["TBZ_pct_Y"]),
                                float(r["THI_pct_Z"])])
@@ -101,8 +102,8 @@ def field(pairs, sigma):
     grid = [(d, t, 100 - d - t) for d in np.arange(0, 100 + step, step)
             for t in np.arange(0, 100 + step - d, step)]
     G = np.array(grid, float)
-    T = np.array([t for _, t, _, _ in pairs])
-    C = np.array([1.0 if band(t, p, a) <= CORRECT_BAND else 0.0 for _, t, p, a in pairs])
+    T = np.array([t for _, t, _, _, _ in pairs])
+    C = np.array([1.0 if band(t, p, a) <= CORRECT_BAND else 0.0 for _, t, p, a, _ in pairs])
     d2 = ((G[:, None, :] - T[None, :, :]) ** 2).sum(-1)
     w = np.exp(-0.5 * d2 / sigma ** 2)
     dens = w.sum(1)
@@ -132,14 +133,15 @@ def draw(ax, method, pairs, sigma, title):
                      ((0, 100 - k, k), (100 - k, 0, k))):
             x, y = to_xy(np.array([a, b], float))
             ax.plot(x, y, color="#c9ced4", lw=0.35, zorder=1)
-    for _, t, p, acc in pairs:
+    for _, t, p, acc, sub in pairs:
         tx, ty = to_xy(t); px, py = to_xy(p)
+        mk = "s" if sub == "binary" else "o"          # binary(부재 성분 있음) = 사각
         ax.annotate("", xy=(px, py), xytext=(tx, ty),
                     arrowprops=dict(arrowstyle="-|>", color="#8a919b", lw=0.7,
                                     shrinkA=3, shrinkB=3), zorder=4)
-        ax.scatter([tx], [ty], s=26, facecolor="white", edgecolor="#8a919b",
+        ax.scatter([tx], [ty], s=26, marker=mk, facecolor="white", edgecolor="#8a919b",
                    linewidth=0.9, zorder=5)
-        ax.scatter([px], [py], s=26, color=BAND_COLORS[band(t, p, acc)],
+        ax.scatter([px], [py], s=26, marker=mk, color=BAND_COLORS[band(t, p, acc)],
                    edgecolor="white", linewidth=0.5, zorder=6)
     ax.text(*to_xy(np.array([0, 0, 100.0])), "THI", color=CO["THI"], ha="center",
             va="bottom", fontsize=11, weight="bold")
@@ -147,8 +149,11 @@ def draw(ax, method, pairs, sigma, title):
             va="top", fontsize=11, weight="bold")
     ax.text(*to_xy(np.array([100.0, 0, 0])), " DQ", color=CO["DQ"], ha="left",
             va="top", fontsize=11, weight="bold")
-    ok = sum(band(t, p, a) <= CORRECT_BAND for _, t, p, a in pairs)
-    ax.set_title(f"{title}  ·  within {BAND_LABEL[CORRECT_BAND]} {ok}/{len(pairs)}", fontsize=9,
+    ok = sum(band(t, p, a) <= CORRECT_BAND for _, t, p, a, _ in pairs)
+    okb = sum(band(t, p, a) <= CORRECT_BAND for _, t, p, a, sb in pairs if sb == "binary")
+    nb_ = sum(1 for *_, sb in pairs if sb == "binary")
+    ax.set_title(f"{title}  ·  within {BAND_LABEL[CORRECT_BAND]} {ok}/{len(pairs)}"
+                 + (f"  (binary {okb}/{nb_})" if nb_ else ""), fontsize=9,
                  color="#3f454c")
     ax.set_xlim(-0.08, 1.08); ax.set_ylim(-0.08, 0.95)
     ax.set_aspect("equal"); ax.set_axis_off()
@@ -186,7 +191,9 @@ def main():
         print(f"{m}: {len(pairs)} pairs · field mean {frac[dens > 0.05 * dens.max()].mean():.2f}")
     handles = [Line2D([], [], marker=">", color="#8a919b", lw=0.8, label="Prediction"),
                Line2D([], [], marker="o", ls="none", mfc="white", mec="#8a919b",
-                      label="True composition")]
+                      label="True composition (ternary)"),
+               Line2D([], [], marker="s", ls="none", mfc="white", mec="#8a919b",
+                      label="True composition (binary)")]
     handles += [Line2D([], [], marker="o", ls="none", color=c, label=n)
                 for c, n in zip(BAND_COLORS, BAND_NAMES)]
     axes[2].legend(handles=handles, loc="upper right", bbox_to_anchor=(1.34, 1.0),
