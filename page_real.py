@@ -2487,8 +2487,8 @@ class RealDataPage(QWidget):
         rows, cc, ny, nx, ux, uy = self._grid_rc(r)
         origin, extent = self._extent_origin(ux, uy)
         # This row does not need to match the other rows' map size — use the width:
-        # 3 wide map cells + spiral(2) + spacer + a wide distribution graph.
-        map_slots = 11
+        # merged + 3 map cells + spacer + distribution(3) + spacer + radial(3).
+        map_slots = 12
         hit = self._hit(r)                                 # exclude saturated/low-R² px
         # SHARED µM colour axis across substances, so the maps are directly comparable.
         # The maps and dots stay RAW (what signal + learning alone report); the batch
@@ -2616,12 +2616,36 @@ class RealDataPage(QWidget):
             self.c_conc.mpl_disconnect(_old_cid); self.c_conc._rowgs_cid = None
         gs = self.c_conc.fig.add_gridspec(
             2, map_slots, height_ratios=[1.0, 0.06],
-            width_ratios=[1, 1, 1, 0.22, 1, 1, 1, 0.22, 1, 1, 1],
+            width_ratios=[1, 1, 1, 1, 0.22, 1, 1, 1, 0.22, 1, 1, 1],
             hspace=0.05, wspace=0.04,
             left=0.012, right=0.988, bottom=0.13, top=0.84)
+        # merged (R/G/B): 성분별 µM ÷ 그 성분의 map max 를 채널로, raw/composition
+        # 카드와 같은 색상 규칙(색조 유지·합>1 정규화) + 회색 총신호 밑그림.
+        _tot = np.clip(np.asarray(r.spectra, float), 0, None).sum(axis=1)
+        _g_lo, _g_hi = np.percentile(_tot, [2, 98])
+        _gray = 0.06 + 0.24 * np.clip((_tot - _g_lo) / max(_g_hi - _g_lo, 1e-9), 0, 1)
+        _img = np.zeros((ny, nx, 3)); _img[rows, cc] = _gray[:, None]
+        _chan = np.stack([np.clip(np.nan_to_num(um_all[:, i], nan=0.0)
+                                  / max(vmaxes[i], 1e-9), 0.0, 1.0)
+                          for i in range(len(nb))], axis=1)
+        _cols = np.array([to_rgb(c) for c in nbcols])
+        _wsum = np.maximum(_chan.sum(axis=1, keepdims=True), 1.0)
+        _rgb = np.clip((_chan / _wsum) @ _cols
+                       * np.minimum(_chan.sum(axis=1, keepdims=True), 1.0), 0, 1)
+        _lit = hit & (_chan.sum(axis=1) > 0)
+        _img[rows[_lit], cc[_lit]] = _rgb[_lit]
+        axm = self.c_conc.style(self.c_conc.fig.add_subplot(gs[0, 0]))
+        axm.imshow(_img, extent=extent, origin=origin, aspect="equal",
+                   interpolation="nearest")
+        self._leaf_outline(axm, r, extent, origin)
+        axm.set_anchor("S")
+        axm.set_title("merged (R/G/B)", fontsize=10)
+        axm.set_xticks([]); axm.set_yticks([])
+        self._exp_conc.append(("map_merged", axm, None))
+        self._click_axes.append(axm)
         for i, nm in enumerate(nb):
-            ax = self.c_conc.style(self.c_conc.fig.add_subplot(gs[0, i]))
-            cax = self.c_conc.fig.add_subplot(gs[1, i])
+            ax = self.c_conc.style(self.c_conc.fig.add_subplot(gs[0, i + 1]))
+            cax = self.c_conc.fig.add_subplot(gs[1, i + 1])
             um = np.where(hit & np.isfinite(um_all[:, i]) & (um_all[:, i] > 0),
                           um_all[:, i], np.nan)
             grid = np.full((ny, nx), np.nan); grid[rows, cc] = um
@@ -2649,7 +2673,7 @@ class RealDataPage(QWidget):
             self._click_axes.append(ax)
         # ---- pixel distribution: show the measurements, not only one median bar ----
         # Three balanced zones: concentration maps | distribution | radial heatmap.
-        dist_start = len(nb) + 1
+        dist_start = len(nb) + 2
         dist_end = min(dist_start + 3, map_slots)
         axb = self.c_conc.style(
             self.c_conc.fig.add_subplot(gs[:, dist_start:dist_end]))
