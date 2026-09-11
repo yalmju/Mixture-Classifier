@@ -300,6 +300,8 @@ def main():
                          "(e.g. 0.887 0.786 0.5 reproduces the user's MLP figure)")
     ap.add_argument("--vrange", nargs=2, type=float, default=None, metavar=("LO", "HI"),
                     help="background colour-axis range (default 0-1; e.g. 0.4 0.9 for --field mean)")
+    ap.add_argument("--bare", action="store_true",
+                    help="no titles, legend or colour bar - triangles only")
     ap.add_argument("--field", choices=["fraction", "mean"], default="fraction",
                     help="background: local fraction within --correct-band, or local mean accuracy")
     ap.add_argument("--methods", default="nnls,pls,mlp",
@@ -363,6 +365,13 @@ def main():
             for c, t, p_, acc, sub in pairs:
                 wri.writerow([c, sub] + [f"{v:.2f}" for v in t] + [f"{v:.2f}" for v in p_]
                              + [f"{acc:.4f}", BAND_NAMES[band(t, p_, acc)]])
+    if a.bare:
+        for ax in axes:
+            ax.set_title("")
+        out = os.path.join(RES, f"27g_ternary_rb{tag}_bare.png")
+        fig.savefig(out, dpi=400, bbox_inches="tight", facecolor="white", transparent=False)
+        print("saved", out)
+        return
     handles = [Line2D([], [], marker=">", color="#8a919b", lw=0.8, label="Prediction"),
                Line2D([], [], marker="o", ls="none", mfc="white", mec="#8a919b",
                       label="True composition (ternary)"),
