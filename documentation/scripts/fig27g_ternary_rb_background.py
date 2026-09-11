@@ -293,6 +293,8 @@ def main():
                     metavar=("T1", "T2", "T3"),
                     help="band the accuracy column at these cut-offs instead of 1/fold "
                          "(e.g. 0.887 0.786 0.5 reproduces the user's MLP figure)")
+    ap.add_argument("--methods", default="nnls,pls,mlp",
+                    help="comma list of repo panels to draw (ignored with --pairs-csv)")
     ap.add_argument("--labels", nargs="*", default=None,
                     help="panel titles for --pairs-csv files (default: file names)")
     ap.add_argument("--pairs-csv", nargs="*", default=None,
@@ -321,7 +323,8 @@ def main():
         _base = lambda m_: load_pairs_csv(_files[m_])
     loader = ((lambda m_: [x for x in _base(m_) if is_grid64(x[0])])
               if a.subset == "grid64" else _base)
-    _panels = [("nnls", "NNLS (surface)"), ("pls", "PLS-R"), ("mlp", "MLP")]
+    _panels = [(k, n) for k, n in (("nnls", "NNLS (surface)"), ("pls", "PLS-R"), ("mlp", "MLP"))
+               if k in a.methods.split(",")]
     if a.pairs_csv:
         _names = a.labels or [os.path.splitext(os.path.basename(f))[0] for f in a.pairs_csv]
         _panels = [(f"user{i}", n) for i, n in enumerate(_names)]
