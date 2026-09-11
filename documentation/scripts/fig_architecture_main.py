@@ -160,7 +160,7 @@ fc_net([0.315, 0.362, 0.409, 0.456],
        heights=[0.44, 0.36, 0.27, 0.19],
        slots=[12, 9, 7, 4], ells=[True, True, False, False],
        cy=CY, dims=["1,290", "256", "64", "4"],
-       descs=["input", "FC · ReLU", "FC · ReLU", "softmax"],
+       descs=["input", "FC · BN · ReLU\nDropout 0.15", "FC · ReLU", "softmax"],
        label_y=0.255, desc_y=0.195, out_colors=CLASS_COLORS)
 cap(0.390, 0.135, "trained on prepared mixtures · held-out by condition", fs=5.8)
 for (yy, s_, c_) in zip(np.linspace(CY + 0.072, CY - 0.072, 4),
@@ -196,17 +196,20 @@ fc_net([0.772, 0.815, 0.858, 0.901],
        heights=[0.34, 0.30, 0.22, 0.13],
        slots=[8, 7, 5, 3], ells=[True, True, True, False],
        cy=CY, dims=["12", "128", "32", "3"],
-       descs=["map features", "FC · ReLU", "FC · ReLU", "µM"],
-       label_y=0.30, desc_y=0.245, node_s=14,
+       descs=["map\nfeatures", "FC · BN · ReLU\nDropout 0.25", "FC\nReLU", "Δlog10\n→ µM"],
+       label_y=0.32, desc_y=0.265, node_s=14,
        out_colors=[CO[s] for s in SUBS])
 for (yy, s_, c_) in zip(np.linspace(CY + 0.045, CY - 0.045, 3), SUBS,
                         [CO[s] for s in SUBS]):
     ov.text(0.908, yy, s_, fontsize=6.2, color=c_, ha="left", va="center",
             weight="bold", zorder=4)
-cap(0.858, 0.845, "band Ieq · composition · intensity (3 ea + p10/50/90)",
-    fs=5.6)
-# 캐스케이드·가드 문구는 그림에서 뺀다 — 핵심만 (설명은 캡션/Methods 몫).
-box(0.752, 0.035, 0.212, 0.105,
+cap(0.858, 0.845, "12 features: log10 Ccal ·3 · composition ·3 · log1p band ·3 · log-total p10/50/90",
+    fs=5.4)
+cap(0.858, 0.200, "C = Ccal · 10^Δ ;  Ccal = log-linear band calibration (9–144 µM)",
+    fs=5.6, col=PLAIN)
+cap(0.858, 0.163, "reported only if the nearest training map is within z-distance 3 · else refused",
+    fs=5.4, col=MUTE)
+box(0.752, 0.030, 0.212, 0.095,
     [("declared total (optional)", "t"),
      (r"$\hat{C}_i$ = $\bar{p}_i$ · C$_{total}$ — overlay when known", "s")],
     ls="--", lw=0.9)
