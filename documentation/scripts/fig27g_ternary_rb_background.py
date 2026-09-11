@@ -48,6 +48,11 @@ SUBS = ["DQ", "TBZ", "THI"]
 BAND_COLORS = ["#1f9d55", "#e8c33a", "#ee7f2d", "#d62728"]   # 1.25 / 1.5 / 2 / beyond
 BAND_NAMES = ["within 1.25-fold", "within 1.5-fold", "within 2-fold", "Beyond 2-fold"]
 RB = LinearSegmentedColormap.from_list("rb", ["#c8322b", "#f6f1ec", "#2b64b5"])
+PO = LinearSegmentedColormap.from_list("po", ["#5b4a8a", "#f7f5ed", "#e8a13a"])   # 사용자 Abundance 팔레트
+PALETTES = {"rb": (RB, ["#d9a09b", "#f4f1ec", "#9db6dd"]),
+            "po": (PO, ["#a89ec4", "#f4f1ec", "#efc97f"])}
+BG = RB
+BG3 = PALETTES["rb"][1]
 
 
 def load_pairs(method):
@@ -72,6 +77,24 @@ def worst_fold(t, p):
     """존재 성분(true > 0)의 |log2(pred/true)| 최댓값 (몫 = 선언 총량 하 농도)."""
     m = t > 0
     return float(np.max(np.abs(np.log2(np.maximum(p[m], 1e-3) / t[m]))))
+
+
+def load_pairs_kt(method):
+    """27 FINAL 쌍 + known-total 정확도: Cᵢ = 몫ᵢ × C_total 이므로
+    accuracy = 존재 성분의 min(pred 몫/true 몫, true/pred) 평균 (28d '선언 총량 하')."""
+    out = []
+    for c, t, p, _a, sub in load_pairs(method):
+        mk = t > 0
+        pp = np.maximum(p, 1e-6)
+        acc = float(np.mean(np.minimum(pp[mk] / t[mk], t[mk] / pp[mk])))
+        out.append((c, t, p, acc, sub))
+    return out
+
+
+def is_grid64(cond):
+    import re
+    m = re.match(r"DQ(\d+)-TB(\d+)-TH(\d+)$", cond)
+    return bool(m) and all(int(v) in (3, 6, 12, 24) for v in m.groups())
 
 
 def load_pairs_grid64(method):
@@ -146,9 +169,9 @@ def draw(ax, method, pairs, sigma, title):
     if DISCRETE:
         # 3단: < 1/3 빨강 · 1/3–2/3 흰 · > 2/3 파랑 — 얼룩 대신 영역
         ax.tricontourf(tri, frac, levels=[0, 1 / 3, 2 / 3, 1.0001],
-                       colors=["#d9a09b", "#f4f1ec", "#9db6dd"], alpha=ALPHA, zorder=0)
+                       colors=BG3, alpha=ALPHA, zorder=0)
     else:
-        ax.tripcolor(tri, frac, cmap=RB, vmin=0, vmax=1, shading="gouraud",
+        ax.tripcolor(tri, frac, cmap=BG, vmin=0, vmax=1, shading="gouraud",
                      alpha=ALPHA, zorder=0, rasterized=True)
     vx, vy = to_xy(np.array([[0, 100, 0], [100, 0, 0], [0, 0, 100], [0, 100, 0]]))
     ax.plot(vx, vy, color="#30343a", lw=1.2, zorder=3)
@@ -196,22 +219,31 @@ def main():
                     help="bands from pred/true share fold instead of the accuracy column")
     ap.add_argument("--correct-band", type=float, default=2.0, choices=[1.25, 1.5, 2.0],
                     help="a condition counts as correct when within this fold")
-    ap.add_argument("--source", choices=["final92", "grid64"], default="final92",
+    ap.add_argument("--source", choices=["final92", "grid64", "kt"], default="final92",
                     help="final92: 27 FINAL composition overlap (92 conds); "
-                         "grid64: 09b uM-head concentration accuracy (64 conds)")
+                         "grid64: 09b uM-head concentration accuracy (64 conds); "
+                         "kt: 27 FINAL shares with known-total accuracy (28d legend)")
+    ap.add_argument("--subset", choices=["all", "grid64"], default="all",
+                    help="restrict conditions to the 3/6/12/24 uM grid")
+    ap.add_argument("--palette", choices=list(PALETTES), default="rb")
     ap.add_argument("--continuous", action="store_true",
                     help="point colour = RdYlGn over accuracy 0.4-1 (original look)")
     ap.add_argument("--discrete", action="store_true", help="3-level background")
     ap.add_argument("--alpha", type=float, default=0.82)
     a = ap.parse_args()
-    global FOLD_FROM_SHARES, CORRECT_BAND, DISCRETE, ALPHA, CONTINUOUS
+    global FOLD_FROM_SHARES, CORRECT_BAND, DISCRETE, ALPHA, CONTINUOUS, BG, BG3
     DISCRETE = bool(a.discrete); ALPHA = float(a.alpha); CONTINUOUS = bool(a.continuous)
+    BG, BG3 = PALETTES[a.palette]
     FOLD_FROM_SHARES = bool(a.fold_from_shares)
     CORRECT_BAND = {1.25: 0, 1.5: 1, 2.0: 2}[a.correct_band]
     tag = ((f"_{a.source}" if a.source != "final92" else "")
+           + (f"_{a.subset}" if a.subset != "all" else "")
+           + (f"_{a.palette}" if a.palette != "rb" else "")
            + ("" if CORRECT_BAND == 2 else f"_{BAND_LABEL[CORRECT_BAND].replace('-fold', 'x')}")
            + ("_discrete" if DISCRETE else "") + ("_cont" if CONTINUOUS else ""))
-    loader = load_pairs_grid64 if a.source == "grid64" else load_pairs
+    _base = {"grid64": load_pairs_grid64, "kt": load_pairs_kt}.get(a.source, load_pairs)
+    loader = ((lambda m_: [x for x in _base(m_) if is_grid64(x[0])])
+              if a.subset == "grid64" else _base)
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.6))
     for ax, (m, title) in zip(axes, (("nnls", "NNLS (surface)"), ("pls", "PLS-R"),
                                      ("mlp", "MLP"))):
@@ -244,14 +276,16 @@ def main():
                                     else " = 1 − ½Σ|Δshare|"), fontsize=7)
         _cb.ax.tick_params(labelsize=7)
     from matplotlib.colors import ListedColormap, BoundaryNorm
-    sm = (plt.cm.ScalarMappable(cmap=ListedColormap(["#d9a09b", "#f4f1ec", "#9db6dd"]),
+    sm = (plt.cm.ScalarMappable(cmap=ListedColormap(BG3),
                                 norm=BoundaryNorm([0, 1 / 3, 2 / 3, 1], 3)) if DISCRETE
-          else plt.cm.ScalarMappable(cmap=RB, norm=plt.Normalize(0, 1)))
+          else plt.cm.ScalarMappable(cmap=BG, norm=plt.Normalize(0, 1)))
     cb = fig.colorbar(sm, ax=axes, orientation="horizontal", fraction=0.035,
                       pad=0.02, aspect=40)
     cb.set_label(f"local fraction within {BAND_LABEL[CORRECT_BAND]} (kernel σ = {a.sigma:.0f} %p)"
-                 + ("  ·  µM-head concentration accuracy, 64-grid" if a.source == "grid64"
-                    else "  ·  composition overlap, 92 conditions"),
+                 + {"grid64": "  ·  µM-head concentration accuracy",
+                    "kt": "  ·  concentration accuracy under declared total",
+                    "final92": "  ·  composition overlap"}[a.source]
+                 + (", 64-grid" if (a.subset == "grid64" or a.source == "grid64") else ", 92 conditions"),
                  fontsize=8)
     cb.set_ticks([0, 0.5, 1]); cb.ax.tick_params(labelsize=7)
     out = os.path.join(RES, f"27g_ternary_rb{tag}.png")
