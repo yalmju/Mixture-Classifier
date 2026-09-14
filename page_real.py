@@ -2187,7 +2187,10 @@ class RealDataPage(QWidget):
             panel_im = None
             if values is None:
                 cols = np.array([to_rgb(c) for c in nbcols])
-                norm = np.nan_to_num(np.clip(Anb_draw / mscale, 0.0, 1.0), nan=0.0)
+                # merged 채널은 성분 패널과 같은 (vlo, vshared) 스케일 — manual scale
+                # 0–0.5 로 바꾸면 merged 도 같이 따라간다 (사용자 2026-09-14).
+                norm = np.nan_to_num(np.clip((Anb_draw - vlo) / max(vshared - vlo, 1e-9),
+                                             0.0, 1.0), nan=0.0)
                 weights = np.maximum(norm.sum(axis=1, keepdims=True), 1.0)
                 col_px = np.clip((norm / weights) @ cols * np.minimum(
                     norm.sum(axis=1, keepdims=True), 1.0), 0.0, 1.0)
