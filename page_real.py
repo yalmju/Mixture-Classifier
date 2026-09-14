@@ -3375,6 +3375,25 @@ class RealDataPage(QWidget):
         _wsum = float(_wts[_use].sum())
         pie_before = ((_sp[_use] * _wts[_use][:, None]).sum(axis=0) / _wsum
                       if _wsum > 0 else _sp[_use].mean(axis=0))
+        # 파이 전용 파일: Overall fractions 카드의 두 파이와 Change 줄, 참값(입력 시)
+        _tv_txt = self.true_edit.text().strip() if hasattr(self, "true_edit") else ""
+        _truth_pct = None
+        if _tv_txt:
+            try:
+                _tvv = [float(t) for t in _tv_txt.replace(" ", "").split(",")]
+                if len(_tvv) == len(nb) and sum(_tvv) > 0:
+                    _truth_pct = [v / sum(_tvv) * 100 for v in _tvv]
+            except ValueError:
+                _truth_pct = None
+        write_csv(os.path.join(d, "overall_fractions_pie.csv"),
+                  ["substance", "before_NNLS_pct", "after_MLP_pct", "change_pp",
+                   "truth_pct", "abs_error_NNLS_pp", "abs_error_MLP_pp"],
+                  [[nm, f"{pie_before[i] * 100:.2f}", f"{mr_w[i] * 100:.2f}",
+                    f"{(mr_w[i] - pie_before[i]) * 100:+.2f}",
+                    f"{_truth_pct[i]:.2f}" if _truth_pct else "",
+                    f"{abs(pie_before[i] * 100 - _truth_pct[i]):.2f}" if _truth_pct else "",
+                    f"{abs(mr_w[i] * 100 - _truth_pct[i]):.2f}" if _truth_pct else ""]
+                   for i, nm in enumerate(nb)])
         write_csv(os.path.join(d, "composition.csv"),
                   ["substance", "mean_ratio_unweighted", "mean_ratio_signal_weighted",
                    "mean_spectral_evidence_share", "pie_before_NNLS_pct",
@@ -3664,7 +3683,9 @@ class RealDataPage(QWidget):
         "README" / "fig:<name>" / "panel:<label>"."""
         r = self._res
         cal = getattr(r, "conc", None) is not None
-        tables = [("composition.csv", "composition.csv — mean ratios"),
+        tables = [("overall_fractions_pie.csv",
+                   "overall_fractions_pie.csv — the two pies (Before NNLS / After MLP), change, truth"),
+                  ("composition.csv", "composition.csv — mean ratios"),
                   ("per_pixel.csv", "per_pixel.csv — every pixel, all channels"),
                   ("band_maps.csv", "band_maps.csv — displayed band values"),
                   ("abundance_maps.csv", "abundance_maps.csv — NNLS spectral evidence (not composition)")]
