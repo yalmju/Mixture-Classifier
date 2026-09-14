@@ -3507,13 +3507,16 @@ class RealDataPage(QWidget):
                             f"{min(med, _tot):.4f}" if _tot is not None else "",
                             ("known-total capped" if _tot is not None and med > _tot
                              else "known-total" if _tot is not None else "")])
-            for _row in _sr:
-                _row.append(_route_name)
+            for i, _row in enumerate(_sr):
+                # known-total 회수율: Ĉᵢ = pᵢ·C_total 을 참값으로 나눈 값 (둘 다 있을 때)
+                _kt_rec = (f"{100 * _kt[i] / _tv[i]:.1f}"
+                           if (_kt is not None and _tv and _tv[i] > 0) else "")
+                _row.extend([_kt_rec, _route_name])
             write_csv(os.path.join(d, "um_summary.csv"),
                       ["substance", "n_hit_px", "median_uM", "q1_uM", "q3_uM",
                        "true_uM", "recovery_pct", "apparent_amount_pmol",
                        "known_total_uM", "median_capped_uM", "constraint_flag",
-                       "readout_route"], _sr)
+                       "known_total_recovery_pct", "readout_route"], _sr)
             ncsv += 1
         # 화면의 픽셀 분포(활성 판독 경로 값 그대로) — Origin에서 다시 그리기용.
         um_d = getattr(self, "_um_display", None)
