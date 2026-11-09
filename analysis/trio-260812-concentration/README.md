@@ -134,3 +134,5 @@ droplet-campaign numbers without stating the deposition mode.
 - Effective TBZ LOD inside the trio rises accordingly: 1.74 µM (single) →
   ~8 µM (mixture), so the 12 µM dispense sits only ~1.5× above it.
 - Data paths in the scripts are hard-coded for the Windows box (S: drive).
+
+7. `07_assembly_figure.py` — **Fig 4 조립 그림** (픽셀 분류 → NNLS 표면 조성 → 혼합 학습 MLP 용액 복원, `figures/Fig_assembly.png`). A·B 는 재계산(`out/assembly_cache.npz`), C 는 위 표의 확정값. B 의 설명 상자가 Fig 3(응답곡선·DFT)을 가리키는 다리다.
