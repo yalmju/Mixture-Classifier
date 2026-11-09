@@ -50,7 +50,7 @@ import os, re, glob, hashlib, collections
 import paths
 
 DB = paths.DB
-FINAL = f"{DB}/Ratio/260814_mixture_final"
+FINAL = f"{paths.DATA}/Ratio/260814_mixture_final"
 SUB = ["DQ", "TBZ", "THI"]
 GRID_LEVELS = {3, 6, 12, 24}
 

@@ -35,7 +35,21 @@ REPO = _first([os.environ.get("MIXTURE_REPO"),
                f"{_MAC}/github/Mixture Classifier",
                f"{_WIN}/github/Mixture Classifier"], "Mixture Classifier 저장소")
 
-PURE = f"{DB}/Pure"
+
+def _root(sub, cands, what):
+    """`sub` 폴더를 품은 첫 후보. 2026-11 드라이브 재편으로 데이터는 `0. data/`,
+    결과는 `1. results/` 아래로 들어갔다 — 옛 평평한 구조도 계속 받는다."""
+    for p in cands:
+        if os.path.isdir(os.path.join(p, sub)):
+            return p
+    raise FileNotFoundError(f"{what} 를 못 찾았다 ({sub!r} 가 있는 곳).\n"
+                            + "\n".join(f"  찾아본 곳: {p}" for p in cands))
+
+
+DATA = _root("Ratio", [DB, f"{DB}/0. data"], "데이터 루트")
+RESULTS = _root("STD", [DB, f"{DB}/1. results"], "결과 루트")
+
+PURE = f"{DATA}/Pure"
 
 # 결과가 나가는 곳. `INTERP_OUT` 로 딴 데를 가리키면 기존 export 를 덮어쓰지 않고
 # 나란히 놓고 비교할 수 있다.
@@ -43,15 +57,17 @@ PURE = f"{DB}/Pure"
 # 2026-08-14 에 `260808_data interpret` → `260814_data interpret` 로 옮겼다. 고농도
 # 라벨 정정(원액 → 최종농도) 전후를 한 폴더에 섞으면 어느 판인지 구분이 안 된다.
 # **08-08 폴더는 손대지 않았다** — 정정 전 판이 그대로 남아 있어 대조에 쓸 수 있다.
-INTERP = os.environ.get("INTERP_OUT") or f"{DB}/260814_data interpret"
+INTERP = os.environ.get("INTERP_OUT") or f"{RESULTS}/260814_data interpret"
 
 # 같은 md5(ce184a98…) 사본이 여러 폴더에 있다. 먼저 찾히는 것을 쓴다.
+# ⚠ `1. results/260821_Calib_144-9/` 에 다른 검량이 생겼다 — md5 가 다르면 딴 판이므로
+#   여기 목록에 넣지 않는다. 쓰려면 어느 쪽인지 명시적으로 결정할 것.
 _CALIB = [
-    f"{DB}/Ratio/results/calibration_spectra.csv",        # 문서·스크립트가 적어온 자리
-    f"{DB}/STD/260727_Spec/calibration_spectra.csv",
-    f"{DB}/STD/260727_VIP/calibration_spectra.csv",
-    f"{DB}/Pest/Standard/260729/calibration_spectra.csv",
-    f"{DB}/code results/260731-22/stand/calibration_spectra.csv",
+    f"{DATA}/Ratio/results/calibration_spectra.csv",      # 문서·스크립트가 적어온 자리
+    f"{RESULTS}/STD/260727_Spec/calibration_spectra.csv",
+    f"{RESULTS}/STD/260727_VIP/calibration_spectra.csv",
+    f"{DATA}/Pest/Standard/260729/calibration_spectra.csv",
+    f"{RESULTS}/code results/260731-22/stand/calibration_spectra.csv",
 ]
 
 
