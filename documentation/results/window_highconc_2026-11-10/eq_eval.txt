@@ -1,0 +1,27 @@
+{np.str_('hi'): 31, np.str_('extreme'): 3, np.str_('eq'): 4, np.str_('grid'): 64}
+CV grid  n=64  NNLS  16.3  PLS  13.0
+CV hi    n=31  NNLS  26.4  PLS  22.9
+
+train=grid+hi(89)
+  DQ10-TB10-TH10           true [33 33 33]  NNLS [31 23 46] (12.5)  PLS [38 22 40] (11.6)
+  DQ100-TB100-TH100        true [33 33 33]  NNLS [ 1  0 99] (65.6)  PLS [23 17 60] (27.1)
+  DQ3-TB333-TH333          true [ 0 50 50]  NNLS [ 0  1 99] (49.0)  PLS [11 15 75] (35.1)
+  DQ33-TB33-TH33           true [33 33 33]  NNLS [ 9 48 43] (24.0)  PLS [31 40 30] ( 6.2)
+  DQ333-TB3-TH333          true [50  0 50]  NNLS [ 1  0 99] (49.5)  PLS [22  7 71] (28.0)
+  DQ333-TB333-TH3          true [50 50  0]  NNLS [64 27 10] (23.2)  PLS [60 29 11] (20.3)
+  DQ333-TB333-TH333 (2)    true [33 33 33]  NNLS [ 1  0 99] (65.4)  PLS [18 19 63] (29.4)
+
+train=grid(64)
+  DQ10-TB10-TH10           true [33 33 33]  NNLS [31 23 46] (12.5)  PLS [37 25 38] ( 8.4)
+  DQ100-TB100-TH100        true [33 33 33]  NNLS [ 1  0 99] (65.6)  PLS [36 11 53] (22.5)
+  DQ3-TB333-TH333          true [ 0 50 50]  NNLS [ 0  1 99] (49.0)  PLS [26 12 62] (38.2)
+  DQ33-TB33-TH33           true [33 33 33]  NNLS [ 9 48 43] (24.0)  PLS [29 36 34] ( 4.1)
+  DQ333-TB3-TH333          true [50  0 50]  NNLS [ 1  0 99] (49.5)  PLS [43  4 52] ( 6.5)
+  DQ333-TB333-TH3          true [50 50  0]  NNLS [64 27 10] (23.2)  PLS [50 28 22] (21.7)
+  DQ333-TB333-TH333 (2)    true [33 33 33]  NNLS [ 1  0 99] (65.4)  PLS [38  9 52] (24.0)
+
+격자 등몰 (CV)
+  DQ12-TB12-TH12           NNLS [14 37 49] (19.5)  PLS [28 38 34] ( 4.9)
+  DQ24-TB24-TH24           NNLS [ 6 40 54] (27.7)  PLS [25 42 34] ( 8.6)
+  DQ3-TB3-TH3              NNLS [47 30 23] (13.8)  PLS [39 29 33] ( 5.2)
+  DQ6-TB6-TH6              NNLS [39 39 22] (11.8)  PLS [40 38 22] (11.3)
