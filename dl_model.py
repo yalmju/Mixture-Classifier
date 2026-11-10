@@ -1098,7 +1098,7 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         # ratio input from the trained COMPOSITION HEAD (full spectrum), not the
         # template projection: the projection reads any strong ~1580 band as DQ,
         # and the µM head inherited that single-band misreading. Falls back to
-        # the projection for non-torch composition heads.
+        # the projection only when there is no trained head (method="nnls").
         uM_input_mode = "nnls_ratio+intensity_quantiles_v1"
         Rabs = None
         if method in ("mlp", "cnn") and comp is not None:
@@ -1108,6 +1108,16 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
                 pk = torch.softmax(comp(torch.tensor(feats_abs)), 1).numpy()
             cols = [subs.index(s_) for s_ in conc_subs]
             R_ = np.clip(pk[:, cols], 0, None)
+            Rabs = R_ / (R_.sum(axis=1, keepdims=True) + 1e-12)
+            uM_input_mode = f"{method}_ratio+intensity_quantiles_v1"
+        elif method in ("pls", "rf") and comp_store.get("sk") is not None:
+            # Same eyes at training and at apply. _apply_calibration_residual hands this
+            # head apply_model_pixels' ratios — the sklearn head's — so training it on the
+            # NNLS projection (the old fallback) fitted one input and served another.
+            feats_abs = np.stack([_composition_features(y) for y in Xabs[hv]]).astype(np.float64)
+            pk = np.clip(np.asarray(comp_store["sk"].predict(feats_abs), float), 0, None)
+            cols = [subs.index(s_) for s_ in conc_subs]
+            R_ = pk[:, cols]
             Rabs = R_ / (R_.sum(axis=1, keepdims=True) + 1e-12)
             uM_input_mode = f"{method}_ratio+intensity_quantiles_v1"
         if Rabs is None:
@@ -2002,7 +2012,9 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False, hit=None):
     if X.shape[1] == len(wn):
         X = X[:, mask]
     if u.get("input_mode") in ("mlp_ratio+intensity_quantiles_v1",
-                                  "cnn_ratio+intensity_quantiles_v1"):
+                                  "cnn_ratio+intensity_quantiles_v1",
+                                  "pls_ratio+intensity_quantiles_v1",
+                                  "rf_ratio+intensity_quantiles_v1"):
         # the composition head's full-spectrum ratios — the same eyes that already
         # call this pixel right — normalised over the µM head's substances
         pk = np.clip(np.asarray(apply_model_pixels(model, wn, spectra), float), 0, None)
