@@ -2,28 +2,64 @@
 
 > 추가 실험 없음을 전제로, 지금 있는 데이터가 버티는 주장만으로 세운다.
 > Fig 3 구성은 `FIG3_LOGIC_2026-11-09.md` 그대로 — 이 문서는 그 위의 "말"을 정한다.
+> **개정(같은 날)**: 모델 서술·수치를 최종 배포 모델(`260831_Model_FINAL`, 드라이브 클론
+> `documentation/ALGORITHM_2026-09-11.md` · `FIGURE_B_FINAL_2026-10-08.md`) 기준으로 고쳤다.
+> 처음 판은 08-12 구버전(물리 사전학습, 13.1 % · 76 %)을 보고 썼던 것.
 
 ## 한 줄
 
 **혼합물 SERS 의 한계는 아래(감도)가 아니라 위(자리 경쟁)에 있다.**
 표면이 포화되면 가장 센 흡착종이 신호를 가져가 1:1:1 용액이 단일 성분으로 읽힌다.
 쓸 수 있는 CNF@Au 잉크에서 그 경쟁을 재고(곡선 하나), 설명하고(DFT), 읽을 수 있는
-구간 안에서는 조성을 복원하고 밖에서는 스스로 거부하는 판독을 붙였다.
+구간 안에서 조성과 겉보기 농도를 차례로 복원하는 판독(DUET-Net)을 붙였다.
 
 ## 판독 구간(window)이 이야기의 뼈대다
 
 ```
 아래 경계  ~1–2 µM   흡착 친화도가 정함 (재료·분자 물성)   혼합물에서도 유지 (기울기 76–118%)
-구간       3–24 µM   조성 13.1% (반복 하한 9.6%) · 농도 2배 이내 76%
-위 경계    33–100 µM 사이  자리 경쟁이 정함                33 µM 은 아직 읽힘(21/39/41) · 100 µM 은 0/0/100
+구간       3–24 µM   조성 12.3 %p (반복 하한 11.6 %p*) · 농도 2배 이내 81 % (농도 신경망, 총량 전제 없음)
+위 경계    33–100 µM 사이  자리 경쟁이 정함                33 µM 은 아직 읽힘(PLS 28/43/29) · 100 µM 은 신호로 0/0/100
 ```
+
+> 구간 줄은 논문용 PLS 모델 기준으로 고쳤다(11-10). 구간은 **성분당** 3–24 µM 이고, "총량을 안다"는 전제는
+> 쓰지 않는다(사용자 결정) — 본문에 쓸 수치만 모은 것은 `PAPER_CONTENT_2026-11-10.md`.
 
 - 문헌은 아래 경계(LOD)에서 경쟁한다. **이 논문의 새 내용은 위 경계다** — 왜 생기는지
   (DFT: THI > DQ > TBZ, DQ 는 눕기→세움으로 0.7 eV 손해), 얼마나 휘는지(마스터 곡선:
   THI 와 50:50 이 되려면 DQ 16배·TBZ 8배, 삼각 닫힘 0.04 dex), 어떻게 다루는지
-  (구간 안 = 학습 역변환, 구간 밖 = 가드 → 희석).
+  (구간 안 = 학습 역변환, 구간 밖 = 희석 — 등몰 계열이 근거).
+- \* 반복 하한은 08-19 값. 08-12 문서의 9.6 % 와 정의가 달라 통일이 필요하다.
 - 직관을 뒤집는 문장: **혼합물은 진할수록 읽기 어렵다. 필요한 조작은 농축이 아니라 희석이다**
   (같은 1:1:1 조성이 333 → 10 µM 로 내려오면 0/0/100 → 33/21/46).
+
+### 구간을 3–90 µM 로 넓힐 수 있나, 고농도까지 복원하는 모델이 있나 (11-10) — 둘 다 아니다
+
+- **33 과 100 µM/성분 사이에는 측정 조건이 없다.** 등몰 계열은 3·6·10·12·24·33·100·333 이고
+  그 밖의 고농도 맵은 이원 50–500 µM, 삼원 3/33/333 µM 조합뿐이다. "90" 을 받칠 점이 없다.
+- 등몰 맵을 학습에서 뺀 채 읽으면(PLS 8, 맵당 24픽셀, DQ/TBZ/THI %, 괄호는 1:1:1 에서의 ½Σ|Δ|):
+
+  | 등몰 µM/성분 | NNLS | PLS (64격자+고농도로 학습) | PLS (64격자만 학습) |
+  |---|---|---|---|
+  | 10 | 31/23/46 (12.5) | 38/22/40 (11.6) | 37/25/38 (8.4) |
+  | 12 (격자 CV) | 14/37/49 (19.5) | 28/38/34 (4.9) | – |
+  | 24 (격자 CV) | 6/40/54 (27.7) | 25/42/34 (8.6) | – |
+  | **33** | 9/48/43 (24.0) | **31/40/30 (6.2)** | **29/36/34 (4.1)** |
+  | **100** | 1/0/99 (65.6) | 23/17/60 (27.1) | 36/11/53 (22.5) |
+  | 333 | 1/0/99 | 18/19/63 (29.4) | 38/9/52 (24.0) |
+
+  33 µM 은 격자 밖인데도 격자 안과 같은 수준으로 읽히고, 100 µM 에서 무너진다(THI 53–60 %).
+- 학습기를 바꿔도 고농도는 안 읽힌다. 15개 모델(PLS·CLR-PLS·Ridge·KRR·kNN·GBM·NNLS 특징 결합·
+  구간 분리 오라클·고농도 가중 등), 조건 held-out 5-fold ×10: 64격자 12–17 %p, **고농도 맵은
+  전부 25–30 %p**, 주성분이 60 % 를 넘는 고농도 맵에서 주성분을 맞히는 비율이 70–79 %.
+  포화에서 사라진 정보는 학습기로 못 되살린다.
+- 격자 안에서는 총농도가 올라가도 나빠지지 않는다 — PLS 10.4 (총 9–20 µM) · 14.8 (21–35) ·
+  12.6 (36–50) · 11.9 (51–72) %p. 구간 안 전체가 같은 품질이라는 근거.
+- **쓸 수 있는 말**: "3–24 µM per component (64-condition grid); an equimolar 33 µM mixture
+  outside the grid is still read (within 4–6 %p), and 100 µM is not." 구간을 넓혀 쓰고 싶으면
+  "3–33 µM per component (total 9–100 µM)" 까지 — 단 33 은 등몰 맵 한 장이다.
+  "3–90", "고농도까지 복원" 은 쓰지 않는다.
+- 스크립트·수치: `results/window_highconc_2026-11-10/` (`eq_eval.txt` · `zoo.txt`, 실행한 그대로의
+  `build_all.py` · `eq_eval.py` · `zoo.py`. 입력 번들 npz 는 커서 넣지 않았다 — `build_all.py` 로 다시 만든다).
 
 ## nM 에 대한 입장 — 쫓지 않고, 필요 없다는 근거를 댄다
 
@@ -63,40 +99,176 @@ DQ   감자·곡류  0.02–0.1 ppm (US)               0.1–0.5       = 0.55–
 |---|---|---|
 | 재료 | 쓰고 그리는 CNF@Au SERS 잉크 | Fig 1–2 (기존 재료·단일성분 그림) |
 | 통찰 | 표면은 경쟁 흡착체다 — 판독 구간의 위 경계를 재고 DFT 로 설명 | **Fig 3 a–e** |
-| 기능 | 구간 안 복원 + 구간 밖 거부(희석) — 글씨 맵: 신호 87% THI → 36/30/34 | Fig 3f · **Fig 4** |
+| 기능 | 구간 안 2단 복원(조성 → 농도) — 글씨 맵(게이트 통과 803 픽셀): NNLS DQ 0 · TBZ 0 · THI 100 → PLS 모델 DQ 41 · TBZ 23 · THI 36 | Fig 3f · **Fig 4** |
 
-벤치마크(NNLS·PLS·RF·CNN)는 SI. 본문에서는 "선형 판독은 구간 안에서 대등하다(PLS p=0.46),
-학습의 이점은 범용성"까지만.
+방법 비교(Fig 4b)는 PLS 모델의 held-out 기록으로 다시 그렸다(아래 "Fig 4 재생성"). RF·Ridge 등 나머지는 SI.
+
+### 학습기 재평가 (11-10, 한 프로토콜) — 조성 단계는 PLS 가 MLP 이상
+
+`scripts/learner_reeval_run.py` → `results/learner_reeval_2026-11-10/` (`summary.txt`).
+89맵 번들(맵당 24픽셀, 1,290점, 3출력), 반복 그룹 5-fold, 모든 학습기 같은 fold, MLP 는 seed 3개.
+지표는 조성 ½Σ|Δ| %p (평균 ± 반복간 SD).
+
+| 학습기 | 64격자 (조건 held-out ×20) | 64격자 (비율 held-out ×10) | 64격자만 학습 (×10) | 고농도 삼원 4맵 | 선언 총량 2배 이내 |
+|---|---|---|---|---|---|
+| NNLS | 15.8 | 15.8 | 15.8 | 48.6 | 84 % |
+| **PLS(8)** | **13.1 ± 0.4** | **12.9 ± 0.3** | **12.1 ± 0.4** | **25.7** | **89 %** |
+| Ridge | 13.7 | 13.7 | 13.4 | 24.0 | – |
+| RF | 13.8 | 13.8 | 13.7 | 26.8 | 89 % |
+| MLP (seed 1개) | 15.5 ± 0.8 | 15.3 ± 0.8 | 16.3 ± 0.8 | 32.8 | 86 % |
+| MLP 3-seed 평균 | 13.9 ± 1.0 | 13.6 ± 0.6 | 14.6 ± 0.7 | 32.1 | 88 % |
+| PLS + MLP 평균 | 13.0 | 12.8 | 13.0 | 28.7 | 89 % |
+
+- MLP(seed 1개) − PLS = **+2.3 %p [+1.4, +3.2]** (맵 부트스트랩), 20회 반복 중 MLP 가 이긴 횟수 **0**.
+  64격자만으로 학습하면 +4.2 [+3.1, +5.2]. MLP 는 seed 만 바꿔도 0.9 %p 흔들린다(PLS 의 fold 간 0.4).
+- MLP 를 3개 평균하면 PLS 와 구별되지 않는다(+0.8 [−0.1, +1.7]) — 그래도 낫지는 않다.
+  PLS 와 섞어도 이득 없음(−0.1 [−0.6, +0.4]). 350 epoch 로 늘려도 같다.
+- NNLS → PLS 는 64격자 −2.7 %p [−4.3, −0.9], 고농도 삼원 −23 %p. "측정 혼합물로 학습한 모델이
+  신호 분해보다 낫다"는 주장은 유지되고, 그 주장에 신경망은 필요 없다.
+- 구간 안 모델은 구간 안 데이터만으로 학습하는 쪽이 낫다(PLS 13.1 → 12.1, 잠재변수 5개면 11.6).
+- 기록 정리: 08-28 표의 "독립 test 20맵"은 경로상 학습 맵과 같은 폴더(`260814_mixture_final`)의
+  고정 분할이다 — 독립 배치가 아니다. Fig 4b 원천(`22_parity_uM_knowntotal_FINAL.csv`,
+  MLP 10.8 vs PLS 15.4, 정확도 0.79 vs 0.72)은 생성 스크립트가 없고 이 프로토콜로 재현되지 않는다
+  (여기선 정확도 NNLS 0.71 · PLS 0.75 · MLP 0.72).
+- 경쟁흡착 복원은 PLS 도 MLP 와 같은 모양으로 한다(held-out 예측, 20회 평균). 구간 안 등몰:
+  12 µM NNLS 15/41/44 → PLS 28/40/32 (MLP 28/38/34), 24 µM NNLS 7/41/51 → PLS 26/41/33 (MLP 20/46/34).
+  64격자 평균 편향 NNLS DQ −3.8 · THI +2.6 %p → PLS −0.3 · −0.6. 포화(등몰 333)는 둘 다 부분 복원
+  (NNLS 2/3/95 → PLS 33/12/56, MLP 38/8/53). 두 학습기 모두 예측이 중앙으로 눌린다(기울기 0.5–0.6).
+- 한계: 이 벤치마크는 배포 모델(4출력, blank·순수 꼭짓점 포함, 전체 픽셀)과 같은 학습이 아니다.
+  같은 학습으로 만든 PLS 모델은 아래.
+
+### 논문용 모델 — 배포 파이프라인 그대로, 조성 단계만 PLS (11-10, 브랜치 `paper/pls-composition`)
+
+- `scripts/train_paper_pls.py`. 배포 모델(260831 FINAL)과 같은 학습 82맵 + 순수·blank 13맵(95맵
+  9498스펙트럼) · 같은 시험 20맵 · 같은 전처리 · 배포 모델 내장 검량. 바뀐 것은 `method="pls"`(잠재변수 8) 하나.
+  모델: `1. results/261110_Model_PLS_paper/pls_composition_261110.dlm`. 배포 MLP 파일은 그대로 있다.
+- 같은 분할 한 번의 기록(우열 근거는 위 반복 CV 이고, 이 표는 "바꿔도 수치가 유지된다"는 확인):
+
+  | | 조성, 조건 held-out 64격자 (n=52) | 조성, 시험 64격자 (n=12) | µM 2배 이내 (DQ · TBZ · THI) | 3배 이내 | 총량 선언 시 2배 이내 |
+  |---|---|---|---|---|---|
+  | PLS (논문용) | 12.6 %p | 10.9 %p | 80.8 % (75 · 77 · 90) | 94.2 % | 91.0 % (시험 97 %) |
+  | MLP (배포, 저장 기록) | 15.7 %p | 10.1 %p | 78.2 % (73 · 79 · 83) | 91.7 % | 85.9 % (시험 100 %) |
+
+  격자 밖은 둘 다 20–26 %p. µM held-out 은 두 모델 모두 조성 머리를 fold 마다 다시 맞추지 않은 값이다(파이프라인 관례).
+- 등몰 맵 held-out(DQ/TBZ/THI): 12 µM 27/39/33 · 24 µM 24/43/33 · **33 µM 28/43/29 (9.6 %p, 시험 맵)** ·
+  100 µM 22/13/65 · 333 µM 29/17/54. 배포 MLP 는 33 µM 21/54/25, 100 µM 1/0/99.
+- 고친 것 두 가지. ① `Pure/LEAF-1~3` 은 배포 모델 학습(08-31) 뒤 09-04 에 들어온 배경이라 뺐다
+  (넣으면 98맵 9708스펙트럼으로 학습 집합이 달라진다 — 넣을지는 결정 사항, 스크립트의 `SKIP_REF` 한 줄).
+  ② `dl_model.train_model` 은 조성 머리가 PLS/RF 일 때 농도 단계를 NNLS 비율로 학습시키고 적용 때는
+  PLS 비율을 넣고 있었다(학습·적용 입력 불일치, µM 2배 이내 68.6 %). 학습도 PLS 비율로 맞췄다 → 80.8 %.
+- 아직 안 한 것: 존재 판정·적용영역(kNN) 보조 파일은 이 모델용으로 만들지 않았다. 잎(Fig 5)은 이 모델로
+  다시 뽑지 않았다. Fig 4 는 아래에서 다시 뽑았다.
+
+### Fig 4 재생성 — PLS 모델 기준 (11-10)
+
+`scripts/fig4_paper_data.py`(원천) → `scripts/fig4_paper_figs.py`(패널) → `results/fig4_paper_pls_2026-11-10/`
+(`fig4b_ternary` · `fig4c_lettering` · `eq_series` 각 png/pdf/svg, `heldout_maps.csv`, `summary.txt`).
+옛 Fig 4b 원천 CSV 는 쓰지 않는다. PLS 값은 전부 모델에 저장된 held-out 기록(조건 held-out 52 + 시험 12 = 64 조건).
+
+- **4b (64 조건, Ĉ = 판독 비율 × 선언 총량)**
+
+  | | 조성 오차 | 정확도 [95 % CI] | ≤1.25× · ≤1.5× · ≤2× · >2× | 2배 이내 | 평균 판독 DQ/TBZ/THI |
+  |---|---|---|---|---|---|
+  | NNLS — SI (파이프라인, 배경 BLK · INK · LEAF 전부; `fig4b_ternary_nnls`) | 22.4 %p | 0.60 [0.57, 0.63] | 3 · 15 · 27 · 19 | 45/64 | 19 / 33 / 48 |
+  | **PLS 모델** | **12.3 %p** | **0.77 [0.74, 0.79]** | 27 · 24 · 11 · 2 | 62/64 | 33 / 35 / 32 |
+  | NNLS — SI (순수 3성분 + 잉크 blank BLK 하나) | 16.7 %p | 0.70 [0.67, 0.73] | 12 · 26 · 25 · 1 | 63/64 | 29 / 39 / 33 |
+  | NNLS — 참고 (배경 템플릿 없음, 모델 내장 3성분) | 16.7 %p | 0.70 [0.68, 0.73] | 14 · 23 · 26 · 1 | 63/64 | 28 / 39 / 34 |
+
+  **NNLS 를 말할 때의 정의(11-10, 사용자) = 파이프라인 NNLS** (CSV 열 `NNLS`; 앱이 보여 주고 픽셀 게이트가
+  쓰는 것과 같은 계산 — 순수 3성분 + 배경 템플릿 BLK · INK · LEAF). 다만 **본문 4b 의 왼쪽은 그 뒤 밴드 세기 판으로
+  바뀌었다(아래 항목)** — NNLS 삼각도는 `fig4b_ternary_nnls`(SI), `eq_series` 의 NNLS 패널이
+  이 정의이고, BLK 하나만 넣은 판은 `fig4b_ternary_nnls_blk`(SI, 열 `NNLSb`). 같은 날 "blank 없음" → "3성분 + BLK"
+  → 파이프라인 순으로 바뀌었고 이것이 마지막이다.
+  **주의 — 이 기준선의 차이는 대부분 배경 템플릿 구성에서 나온다.** BLK 하나만 넣으면 배경이 없을 때와 같고
+  (16.7 %p · 63/64, 편향 DQ −4.8 · TBZ +5.2 · THI −0.4 %p), 22.4 %p · 45/64 로 나빠지는 것은 INK 템플릿 때문이다
+  (DQ·TBZ 템플릿과 cos 0.78, THI 와 0.19 → DQ·TBZ 신호를 배경으로 가져간다, 편향 DQ −14.1 · THI +14.2 %p).
+  그러니 방법란에 NNLS 의 템플릿 구성(순수 3 + BLK · INK · LEAF)을 그대로 적고, BLK 판 수치(16.7 %p · 63/64)를
+  SI 에 같이 둔다. "2배 이내 45 → 62" 는 이 정의에서만 성립하므로 본문 문장으로 쓰려면 정의를 붙여 쓴다.
+  정의와 무관하게 성립하는 차이는 조성 오차(22.4 또는 16.7 → 12.3 %p), ≤1.25× 조건(3 또는 12 → 27),
+  농도에 따른 DQ 편향(BLK 판에서도 DQ 3 µM +12 → 24 µM −21 %p, PLS +9 → −11)이다.
+  격자 밖 38맵 조성 오차는 NNLS 29.4(BLK 판 28.5) · PLS 22.7 %p.
+- **4b 본문 = 밴드 세기 | PLS 모델 (11-10 사용자 결정, `fig4b_ternary`)** — 비교 대상은 NNLS 가 아니라 "신호 세기만
+  보면" 이다. NNLS 삼각도는 SI 로 내린다(`fig4b_ternary_nnls` = 파이프라인, `fig4b_ternary_nnls_blk` = BLK 판).
+  `eq_series` 의 왼쪽 패널은 아직 NNLS(파이프라인) 그대로다.
+  통상적인 SERS 정량 그대로: 특성 밴드(DQ 1570 · TBZ 1270 · THI 1367 cm⁻¹, ±10 cm⁻¹ 최댓값, ALS 기준선 제거)의
+  높이를 단일성분 희석 계열(260727, 0.1–1000 µM)로 만든 검량선에 넣어 µM 을 읽고 비율로 바꿨다. 같은 64 조건 ·
+  같은 게이트 통과 픽셀 · 같은 지표(판독 비율 × 선언 총량).
+
+  | 검량선 | 조성 오차 | 정확도 [95 % CI] | ≤1.25× · ≤1.5× · ≤2× · >2× | 2배 이내 |
+  |---|---|---|---|---|
+  | **직선 0.1–10 µM (Fig 3a 의 working range) — 그림** | **29.1 %p** | 0.49 [0.44, 0.55] | 5 · 8 · 21 · 30 | **34/64** |
+  | 직선 0.1–50 µM | 36.6 %p | 0.41 [0.36, 0.45] | 0 · 6 · 17 · 41 | 23/64 |
+  | 검량 곡선 전체를 보간(식 가정 없음) | 35.6 %p | 0.43 [0.39, 0.48] | 4 · 3 · 16 · 41 | 23/64 |
+  | (상한) 혼합물 64 조건 자체에 맞춘 직선 | 33.1 %p | 0.47 | 4 · 13 · 11 · 36 | 28/64 |
+  | NNLS (파이프라인, SI) | 22.4 %p | 0.60 | 3 · 15 · 27 · 19 | 45/64 |
+  | PLS 모델 | 12.3 %p | 0.77 | 27 · 24 · 11 · 2 | 62/64 |
+
+  어느 검량선을 써도 29–37 %p · 2배 이내 23–34/64 이고, 혼합물 자체에 맞춘 직선(가장 유리한 경우)도 33 %p 다 —
+  **검량선을 잘못 골라서가 아니라 혼합물에서는 밴드 높이가 자기 농도를 따라가지 않아서다.** 64 조건에서 밴드 높이와
+  자기 농도의 r² 는 DQ 0.08 · TBZ 0.63 · THI 0.57. 자기 농도 3/6/12/24 µM 에서 밴드 높이 중앙값은 DQ 3837 · 3535 ·
+  2517 · 5515(농도와 무관 — 1570 cm⁻¹ 에 잉크 자체의 밴드가 깔려 있다, 단일성분 0.1 µM 에서 이미 2400), TBZ 562 ·
+  648 · 1103 · 2423(단일성분 검량선보다 낮게 읽힘, Ĉ/C 중앙값 0.14), THI 1397 · 3591 · 5703 · 6351(12 µM 위에서 눕는다).
+  192 성분 중 42 개가 0 µM 로 읽힌다. 평균 편향 DQ −0.9 · TBZ −12.2 · THI +13.0 %p, 조건별로 PLS 가 더 나은 것이 57/64.
+  등몰: 3 µM 64/0/36 · 6 µM 57/18/25 · 10 µM 37/0/63 · 12 µM 28/42/30 · 24 µM 21/41/37 · 33 µM 35/41/24 ·
+  100 µM 과 333 µM 은 0/0/100. 격자 밖 38맵 35.7 %p.
+  **쓰는 법**: 비교 사다리는 "밴드 세기 + 검량선 29.1 %p → NNLS(스펙트럼 전체로 신호를 나눔) 22.4 %p → PLS 모델
+  12.3 %p". 한계: 검량 계열(07-27)과 혼합물(08-14)은 다른 조제이고 검량점이 농도당 스펙트럼 1개(r² 0.85–0.92)다 —
+  그래서 혼합물 자체에 맞춘 상한을 같이 적는다. 본문 문장은 "2배 이내 34 → 62 / 64, 조성 오차 29.1 → 12.3 %p".
+- **4c (글씨맵 260812, 다른 배치, 12 µM each)**: 60×40 = 2400 픽셀 중 NNLS 게이트(0.15) 통과 803.
+  통과 픽셀 평균 DQ/TBZ/THI — **NNLS(본문 정의 = 파이프라인) 0/0/100**(803 픽셀 전부 THI 최대; BLK 하나만 넣으면 8/4/88,
+  배경 없음 9/24/67), **PLS 41/23/36**(배포 MLP 37/23/39). 밴드 세기는 THI 만
+  글씨에서 보인다(중앙값 1024 counts, TBZ·DQ 는
+  배경과 같은 ~300). 픽셀 µM(PLS 농도 단계) 중앙값은 DQ 18 · TBZ 8 · **THI 36**(참 12) — THI 는 3배 높게 읽혀
+  2배 이내 픽셀이 27 %뿐이다(DQ 95 % · TBZ 98 %). 글씨맵에서 쓸 수 있는 주장은 조성까지다.
+  앞서 적었던 "맵 평균 40/31/30, 겉보기 22/11/11 µM" 은 글씨 밖 배경 픽셀까지 평균한 값이라 버린다.
+- **등몰 held-out(`eq_series`)** NNLS(본문 정의 = 파이프라인) → PLS: 3 µM 53/6/41 → 43/27/30 · 6 µM 23/31/46 → 37/40/24 ·
+  10 µM 24/20/56 → 42/20/39 · 12 µM 3/44/53 → 27/39/33 · 24 µM 3/45/52 → 24/43/33 · 33 µM 7/53/40 → 28/43/29 ·
+  100 µM 0/0/100 → 22/13/65 · 333 µM 3/3/94 → 29/17/54, 0/0/100 → 23/18/59. (BLK 판 NNLS 는 12 µM 14/46/40 ·
+  24 µM 6/45/49 · 33 µM 8/53/39 — 고농도에서는 두 정의가 같다.) 33 과 100 사이에 측정이 없고
+  33 근처는 이 등몰 맵 한 장뿐이다.
 
 ## 초록 뼈대 (영문)
 
-> Surface-enhanced Raman sensors are benchmarked by how little of one analyte they detect,
-> yet real residues are mixtures, and a SERS surface is a finite set of sites for which
-> analytes compete. Here, a writable cellulose-nanofibre/gold (CNF@Au) ink is used to show
-> that mixture readout is bounded from above rather than from below: sensitivity is retained
-> in mixtures, but once the surface saturates (between 33 and 100 µM per component) site
-> competition hands the signal to the strongest adsorber, and an equimolar ternary solution
-> reads as a single compound. Binary
-> and ternary responses of thiram, diquat and thiabendazole collapse onto one curve displaced
-> by about one decade, in the order predicted by DFT adsorption energies. A physics-pretrained
-> network inverts this response within the readable window (composition error 13%, close to
-> the droplet repeatability floor) and flags saturated samples for dilution, recovering a
-> 1:1:1 solution from a hand-written pattern whose raw signal is 87% thiram.
+> **AFM 판 (11-10 개정)** — 순서를 재료 → 표면 물리 → 기능 → 시연으로 바꿨다(약 200단어).
+> 잉크 이름은 그림 범례의 "ACF ink" 로 맞춤. [ ] 는 해당 패널이 들어갈 때만.
+
+> Surface-enhanced Raman scattering (SERS) substrates are optimized for the detection limit
+> of a single analyte, yet residues on real surfaces are mixtures, and a plasmonic surface
+> offers a finite number of sites for which analytes compete. Here, a writable SERS ink is
+> reported in which gold nanocorals are formed on TEMPO-oxidized cellulose nanofibres. The
+> ink is shear-thinning (viscosity falls 40-fold between 1 and 100 s⁻¹), so it can be
+> hand-written onto arbitrary surfaces and mapped pixel by pixel[, and the dried film peels
+> off together with the residue]. With thiram, thiabendazole and diquat, mixture readout on
+> this surface is shown to be limited from above rather than from below: sensitivity is
+> retained in mixtures, but once the surface saturates (between 33 and 100 µM per component)
+> the strongest adsorber takes the signal and an equimolar ternary solution reads as thiram
+> alone. Binary and ternary responses collapse onto a single curve displaced by about one
+> decade, in the order given by density functional theory adsorption energies. Within the
+> readable window (3–24 µM), a two-stage model trained on measured mixtures (DUET-Net)
+> recovers solution composition to within 13 percentage points and then apparent
+> concentration, resolves all three components in a written pattern whose raw signal reads
+> as thiram alone, and reads sprayed leaves in situ.
+
+- "13 percentage points" 는 PLS 에서 유지된다(12.1–13.1 %p 재평가, 논문용 모델 12.6 %p). 조성 단계가
+  PLS 라 "network" 를 "model" 로 고쳤다(11-10). 본문·Fig 4 의 "network" 도 같이 고칠 것.
+- "formed on" 은 Fig 1 의 합성 서술(환원제·성장 방식)에 맞춰 동사를 고를 것.
 
 ## 제목 후보
 
-1. Reading Pesticide Mixtures with a Writable SERS Ink: Site Competition Sets the Window, Learning Reads Within It
-2. Competitive Adsorption Bounds, and Physics-Informed Learning Recovers, Mixture Composition on a Writable Plasmonic Ink
+1. A Writable Gold Nanocoral–Nanocellulose SERS Ink for Reading Pesticide Mixtures under Competitive Adsorption  ← 추천
+2. Writable Plasmonic Nanocellulose Ink for Mixture-Resolved SERS: Site Competition Sets the Readable Window
+3. Reading Pesticide Mixtures with a Writable SERS Ink: Site Competition Sets the Window, Learning Reads Within It (구판)
 
 ## 예상 질문과 답
 
 - **"LOD 가 µM 인데 문헌은 nM 이다"** → 맵 중앙값·블랭크 맵간 σ 기준의 값이다. TBZ·THI 의
   허용 기준은 ppm(수십 µM)대라 규제 수준 시료는 구간 위 끝에 온다. 기여는 위 경계다.
   DQ 의 저농도 한계는 물성으로 인정한다.
-- **"구간 밖은 못 읽지 않느냐"** → 그렇다, 그래서 가드가 거부하고 희석을 지시한다.
-  희석으로 회수된다는 근거가 등몰 계열이다.
-- **"왜 선형 분해로 안 끝내나"** → 구간 안에서는 대등하다고 먼저 인정. 학습은 표면→용액
-  역변환과 픽셀 적용·불확도를 한 망에 묶고, 어려운 조건일수록 격차가 커진다.
+- **"구간 밖은 못 읽지 않느냐"** → 그렇다. 희석하면 회수된다는 근거가 등몰 계열이다.
+  모델 쪽 장치는 "학습 영역 밖 맵은 µM 을 보고하지 않는다(적용영역 검사)"까지만 말한다.
+- **"왜 선형 분해로 안 끝내나"** → 순수 스펙트럼 분해(NNLS)는 표면 점유를 읽고, 측정 혼합물로
+  학습한 모델은 용액 조성을 읽는다(64격자 15.8 → 13.1 %p, 고농도 삼원 48.6 → 25.7 %p).
+  학습기 종류는 부차적이다 — 선형 PLS 로 충분하고 MLP 가 더 낫지 않다(위 재평가).
 - **"DFT 에너지와 곡선의 정량 대응은"** → 순서·부호만. eV ↔ dex 환산 없음.
 
 ## 쓰면 안 되는 것 (프레이밍 한정 추가분)
@@ -104,12 +276,38 @@ DQ   감자·곡류  0.02–0.1 ppm (US)               0.1–0.5       = 0.55–
 - nM · ultrasensitive · trace-level — 어디에도.
 - "LOD 는 혼합물에서 무의미" — 위 철회 참고.
 - "quantitative" — 준정량(semi-quantitative).
-- 가드를 구현된 기능처럼 — **아직 미구현**(순수 THI 코사인 문턱 규칙). 본문에 넣으려면 구현 필요.
+- "physics-pretrained / physics-informed" — 최종 모델은 사전학습이 없다. 물리·DFT 는 설명이다.
+- "포화 시료를 거부한다" — 적용영역 검사는 µM 에만 걸리고, 조성은 포화 맵에도 출력된다
+  (등몰 100 µM 에서 49/18/33). 쓸 수 있는 말은 "학습 영역 밖이면 µM 무응답"까지.
+  **실측(11-10, 배포 라이브러리 `*.knn.json` LOO 재현)**: ≥100 µM 맵 36장 중 무응답 0장.
+  라이브러리를 3–24 µM 로 제한해도 문턱 3.0 에서 25/36, 1.5 에서 5/36 이 통과한다 —
+  포화 맵은 맵 특징만으로는 구간 안 맵과 구별되지 않는다. 무응답 상자(Fig 3f)는
+  "다른 배치·분포"에만 해당하고, 위 경계는 운용 규칙(희석)으로만 쓴다.
 
-## 미결 (사용자 판단)
+## 사용자 결정 (11-10)
 
-- CNF@Au 잉크가 이 논문에서 처음 보고되는가 — AFM 적합성의 최대 변수. 선행 보고가 있으면
-  재료 비중을 낮추고 "통찰 + 기능"으로 무게를 옮긴다.
+- 잉크 신규성: 선행이 있을 수 있어도 주장한다.
+- Fig 2c(캡션 MG ↔ 그림 MBA 불일치): 다시 측정한다.
+- 박리(peel) 패널: 넣는 쪽. 문구는 "removable / residue-free sampling" — "non-destructive" 는
+  데이터 없이 쓰지 않는다(잎에 막을 굳혀 떼는 것은 표피 왁스 제거의 표준법). 보완: 박리 후 잎에
+  잉크 2137 cm⁻¹ 밴드·Au 잔류 없음 / 박리 전후 신호 유지 / 건조·굽힘 중엔 붙어 있음.
+- "단일 배치(single batch)" 표현은 쓰지 않는다.
+- 명칭 통일은 나중에. 한계 문단은 학습기 확정 뒤에.
+- Fig 3f: `scripts/fig3f_network.py` — `draw(ax, "mlp")` / `draw(ax, "pls")` 두 판.
+
+## 미결
+
+- 조성 단계 PLS 전환 — 11-10 브랜치 `paper/pls-composition` 에서 진행(위 "논문용 모델"). 모델·Fig 3f·Fig 4 는 바꿨고,
+  남은 것은 잎(Fig 5) 재생성, 보조 파일(존재 판정·kNN), LEAF 배경을 학습에 넣을지.
+- (최종 결정 11-10) Fig 4b 의 NNLS 기준선 = 파이프라인 NNLS(배경 BLK · INK · LEAF, 22.4 %p). BLK 하나만 넣은 판(16.7 %p)은 SI.
+  INK 템플릿이 무엇을 잰 것인지 확인해 방법란에 적을 것 — 심사에서 "왜 DQ·TBZ 를 닮은 배경을 넣었나"가 나올 수 있다.
+  본문의 다른 곳에 남은 "NNLS THI 100 %" · "2배 이내" 식 문장은 이 정의에 맞춰 고칠 것.
+- 글씨맵 THI 픽셀 농도가 3배 높게 읽힌다(36 vs 12 µM) — 글씨맵으로 농도 주장은 하지 않는다.
+- (해결 11-10) 맨 위 구간 표의 "총량 선언 시 91.7 %" 는 뺐다 — 91.7 % 는 배포 모델 저장 기록의 3배 이내 값이었고,
+  총량 전제 자체를 쓰지 않기로 했다. 이 문서 아래쪽 표들의 "선언 총량 2배 이내" 열은 기록으로만 남긴다.
+- 농도 단계는 신경망을 유지한다(반복 CV 2배 이내 신경망 81.3 · Ridge 70.5 · PLS 69.3 %, 20/20) —
+  `results/conc_head_2026-11-10/`. 구간 안에서 검량 역산은 전부 9 µM 하한에 잘려 상수다.
+- 이원은 추가로 재지 않는다. 기존 고농도 이원 27맵에서 없는 성분은 NNLS 0.1 %, PLS 2.5–14.9 %(중앙)로 읽힌다.
 
 관련: `FIG3_LOGIC_2026-11-09.md` · `DFT_BINARY_RESPONSE_2026-11-09.md` ·
 `FINDINGS_2026-08-12.md` · `CLAIM_nnls_vs_learned_2026-08-12.md`
