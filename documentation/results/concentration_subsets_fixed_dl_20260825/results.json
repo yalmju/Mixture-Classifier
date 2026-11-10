@@ -1,0 +1,120 @@
+{
+  "ternary_inrange_67": {
+    "n_conditions": 67,
+    "condition_5fold": {
+      "single_calibration": {
+        "n": 201,
+        "median_recovery_pct": 105.30012961508596,
+        "mean_recovery_pct": 137.4912561971486,
+        "q1_pct": 55.35985752296041,
+        "q3_pct": 195.68552596804093,
+        "within_2x_pct": 55.223880597014926,
+        "within_1_5x_pct": 32.83582089552239,
+        "within_1_25x_pct": 23.383084577114428,
+        "mae_uM": 7.565253859414075,
+        "rmse_log2": 1.2476945317645827,
+        "pearson_r": 0.3576582094612526
+      },
+      "label_supervised_DL05": {
+        "n": 201,
+        "median_recovery_pct": 98.15485677772273,
+        "mean_recovery_pct": 104.54753982713993,
+        "q1_pct": 74.68197908283241,
+        "q3_pct": 124.97535586603561,
+        "within_2x_pct": 90.04975124378109,
+        "within_1_5x_pct": 71.14427860696517,
+        "within_1_25x_pct": 45.27363184079602,
+        "mae_uM": 4.105515795814376,
+        "rmse_log2": 0.6708032136418718,
+        "pearson_r": 0.6476241322714034
+      }
+    },
+    "ratio_grouped_5fold": {
+      "single_calibration": {
+        "n": 201,
+        "median_recovery_pct": 105.30012961508596,
+        "mean_recovery_pct": 137.4912561971486,
+        "q1_pct": 55.35985752296041,
+        "q3_pct": 195.68552596804093,
+        "within_2x_pct": 55.223880597014926,
+        "within_1_5x_pct": 32.83582089552239,
+        "within_1_25x_pct": 23.383084577114428,
+        "mae_uM": 7.565253859414075,
+        "rmse_log2": 1.2476945317645827,
+        "pearson_r": 0.3576582094612526
+      },
+      "label_supervised_DL05": {
+        "n": 201,
+        "median_recovery_pct": 96.7003415988982,
+        "mean_recovery_pct": 105.63242312204453,
+        "q1_pct": 76.94138508783934,
+        "q3_pct": 125.89077236982389,
+        "within_2x_pct": 91.04477611940298,
+        "within_1_5x_pct": 73.6318407960199,
+        "within_1_25x_pct": 46.766169154228855,
+        "mae_uM": 4.172133758065079,
+        "rmse_log2": 0.6945218114056583,
+        "pearson_r": 0.5655386871384549
+      }
+    }
+  },
+  "binary_21": {
+    "n_conditions": 21,
+    "condition_5fold": {
+      "single_calibration": {
+        "n": 42,
+        "median_recovery_pct": 7.619328783653198,
+        "mean_recovery_pct": 15.42494240823166,
+        "q1_pct": 4.707831444950326,
+        "q3_pct": 19.117646406869,
+        "within_2x_pct": 7.142857142857142,
+        "within_1_5x_pct": 2.380952380952381,
+        "within_1_25x_pct": 0.0,
+        "mae_uM": 199.74050696586636,
+        "rmse_log2": 4.0930312893826235,
+        "pearson_r": 0.3318778909402651
+      },
+      "label_supervised_DL05": {
+        "n": 42,
+        "median_recovery_pct": 85.25509111781133,
+        "mean_recovery_pct": 135.9229433441273,
+        "q1_pct": 45.5503070342281,
+        "q3_pct": 127.73683603795216,
+        "within_2x_pct": 54.761904761904766,
+        "within_1_5x_pct": 40.476190476190474,
+        "within_1_25x_pct": 26.190476190476193,
+        "mae_uM": 152.6562425891222,
+        "rmse_log2": 1.4286946971168089,
+        "pearson_r": 0.21020610984455315
+      }
+    },
+    "ratio_grouped_5fold": {
+      "single_calibration": {
+        "n": 42,
+        "median_recovery_pct": 7.619328783653198,
+        "mean_recovery_pct": 15.42494240823166,
+        "q1_pct": 4.707831444950326,
+        "q3_pct": 19.117646406869,
+        "within_2x_pct": 7.142857142857142,
+        "within_1_5x_pct": 2.380952380952381,
+        "within_1_25x_pct": 0.0,
+        "mae_uM": 199.74050696586636,
+        "rmse_log2": 4.0930312893826235,
+        "pearson_r": 0.3318778909402651
+      },
+      "label_supervised_DL05": {
+        "n": 42,
+        "median_recovery_pct": 92.83784344932194,
+        "mean_recovery_pct": 137.82746550104517,
+        "q1_pct": 37.219134880554016,
+        "q3_pct": 141.23821729570116,
+        "within_2x_pct": 57.14285714285714,
+        "within_1_5x_pct": 40.476190476190474,
+        "within_1_25x_pct": 21.428571428571427,
+        "mae_uM": 164.92381322751393,
+        "rmse_log2": 1.7316101046678891,
+        "pearson_r": 0.14132012197834865
+      }
+    }
+  }
+}

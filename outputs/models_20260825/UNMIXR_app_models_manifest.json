@@ -1,0 +1,33 @@
+{
+  "bundle": "S:\\Google Drive\\내 드라이브\\github\\Mixture Classifier\\documentation\\results\\composition_all_no100\\v2_search\\bundle_89maps_24px.npz",
+  "epochs_mlp": 120,
+  "seed_mlp": 170,
+  "pls_components": 8,
+  "models": [
+    {
+      "file": "S:\\Google Drive\\내 드라이브\\github\\Mixture Classifier\\outputs\\models_20260825\\UNMIXR_MLP_89maps_no100x_20260825.dlm",
+      "method": "mlp",
+      "shape": [
+        12,
+        3
+      ],
+      "row_sum_min": 0.9999998807907104,
+      "row_sum_max": 1.0000001192092896,
+      "sha256": "4610bbc6222350ead02ce82d5907fe07743ae168c051c5e452f63197f9006078",
+      "bytes": 2185331
+    },
+    {
+      "file": "S:\\Google Drive\\내 드라이브\\github\\Mixture Classifier\\outputs\\models_20260825\\UNMIXR_PLS8_89maps_no100x_20260825.dlm",
+      "method": "pls",
+      "shape": [
+        12,
+        3
+      ],
+      "row_sum_min": 0.9999999999989997,
+      "row_sum_max": 0.9999999999990268,
+      "sha256": "026a66a80572c44ebbeffe9e7895cdaf69a84834337fe4b6d68abf909312a082",
+      "bytes": 803169
+    }
+  ],
+  "note": "Composition-only DLM files. Concentration correction is intentionally not embedded."
+}

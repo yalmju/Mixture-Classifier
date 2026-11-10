@@ -1,0 +1,15 @@
+﻿key,value
+model,hybrid_blank_sips_full_data.dlm
+epochs,120
+seed,0
+method,MLP
+physics_pretraining,True
+isotherm,Sips for DQ; Langmuir for TBZ/THI
+NNLS_screen,True
+include_blank,True
+pixels_per_map,20
+low_conditions,65
+low_maps,80
+high_maps,0
+evaluation_note,full-data explanatory fit; predictive performance must use held-out results
+calibration,S:\Google Drive\내 드라이브\ACF_PEST_DB\STD\260727_Spec\calibration_spectra.csv

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from unmix import unmix_map
+from dataset import parse_mixture_label
 
 
 @dataclass
@@ -48,63 +49,6 @@ def parse_amount(s):
     val = float(m.group(1)); unit = m.group(2)
     scale = {"mm": 1e-3, "um": 1e-6, "nm": 1e-9, "pm": 1e-12, "m": 1.0}
     return (val * scale[unit], True) if unit else (val, False)
-
-
-def _decode_amount(s):
-    """A filename amount code → value. Leading-zero codes are decimals: '1'→1, '01'→0.1,
-    '001'→0.01; plain integers keep their value ('3'→3, '10'→10)."""
-    return int(s) / 10 ** (len(s) - 1) if s.startswith("0") and len(s) > 1 else float(int(s))
-
-
-def _match_ref(tok, ref_names):
-    """Map a filename letter-token to a reference substance: exact match, else a unique
-    prefix (so 'TH' → 'THI'). None if ambiguous / no match."""
-    for r in ref_names:
-        if tok == r.lower():
-            return r
-    cand = [r for r in ref_names if len(tok) >= 2 and r.lower().startswith(tok)]
-    return cand[0] if len(cand) == 1 else None
-
-
-def parse_mixture_label(basename, ref_names, base=None):
-    """Read a true ratio from a filename by scanning <letters><digits> tokens and
-    pairing each recognised substance with the number that follows it, e.g.
-    'TBZ1DQ3' → {TBZ:1, DQ:3}, 'THI001' → {THI:0.01}, 'DQ1TH3' → {DQ:1, THI:3}. Also
-    accepts the older 'A_B_1to3' form. Returns None if nothing recognised.
-
-    The ``base`` dict (fixed components held constant across a series, e.g.
-    {TBZ:1, DQ:1}) is merged in ONLY to complete a filename that names a single varied
-    substance — 'THI01' → {TBZ:1, DQ:1, THI:0.1}. A filename that already names two or
-    more substances is treated as self-complete and the base is NOT injected, so a
-    binary like 'DQ1TH3' stays {DQ:1, THI:3} instead of silently gaining a phantom
-    TBZ:1 (which would corrupt its true ratio, response factors and recovery)."""
-    low = basename.lower()
-    named = {}                        # substances THIS filename names on its own
-    matched = False
-    # older explicit 'DQ_TBZ_1to3' style first (compounds then a NtoM ratio group)
-    present = [n for n in ref_names if n.lower() in low]
-    m = re.search(r"(\d+(?:\s*(?:to|[_\-x:])\s*\d+)+)", low)
-    if len(present) >= 2 and m:
-        order = sorted(present, key=lambda n: low.find(n.lower()))
-        nums = [_decode_amount(x) for x in re.findall(r"\d+", m.group(1))]
-        if len(nums) == len(order):
-            return {c: v for c, v in zip(order, nums)}   # ≥2 named → self-complete
-    # token style: pair each substance with the number immediately after it
-    toks = re.findall(r"[a-z]+|\d+", low)
-    i = 0
-    while i < len(toks):
-        if toks[i].isalpha():
-            c = _match_ref(toks[i], ref_names)
-            if c and i + 1 < len(toks) and toks[i + 1].isdigit():
-                named[c] = _decode_amount(toks[i + 1]); matched = True; i += 2; continue
-        i += 1
-    if not matched:
-        return None
-    # merge the fixed-components base only to complete a single-substance filename;
-    # a file naming ≥2 substances stands on its own (no phantom-component injection)
-    if base and len(named) < 2:
-        out = dict(base); out.update(named); return out
-    return named
 
 
 def simplify_ratio(ratio):

@@ -1,0 +1,7 @@
+﻿level,substance,estimate_pct,ci95_lo,ci95_hi,spread,n,method
+ink-map composition,DQ,37.4,36.6,38.1,,896 px,pixel bootstrap B=5000
+ink-map composition,TBZ,24.8,24.0,25.7,,896 px,pixel bootstrap B=5000
+ink-map composition,THI,37.8,36.8,38.7,,896 px,pixel bootstrap B=5000
+held-out recovery,DQ,102.8,87.8,118.9,IQR 70-137,82 cond,condition bootstrap of median
+held-out recovery,TBZ,103.1,89.8,116.2,IQR 72-145,83 cond,condition bootstrap of median
+held-out recovery,THI,99.2,92.1,110.8,IQR 78-128,84 cond,condition bootstrap of median

@@ -32,14 +32,20 @@ from dataset import discover_dataset, ratio_map_path, load_mixtures, is_blank
 # list with nothing explaining why. Resolve per machine instead, keeping that path
 # working on the Windows box where it does exist.
 _LEGACY_WIN_DEFAULT = r"S:\Google Drive\내 드라이브\github\Pest_Discriminator"
+# The working dataset (pure references + samples.csv + mixtures.json). The legacy
+# repo folder above holds no maps at all, so starting there made every tab fail
+# with "no reference classes" until the user re-picked this folder in Samples.
+_PEST_DB_PURE = r"S:\Google Drive\내 드라이브\ACF_PEST_DB\Pure"
 
 
 def _default_data_dir():
-    """Folder the app opens pointed at: $UNMIXR_DATA, else the legacy Windows
-    path when it really exists, else the directory the app lives in."""
+    """Folder the app opens pointed at: $UNMIXR_DATA, else the curated Pure
+    dataset when it exists, else the legacy Windows path, else the app dir."""
     env = os.environ.get("UNMIXR_DATA")
     if env and os.path.isdir(env):
         return env
+    if os.path.isdir(os.path.join(_PEST_DB_PURE)):
+        return _PEST_DB_PURE
     if os.path.isdir(_LEGACY_WIN_DEFAULT):
         return _LEGACY_WIN_DEFAULT
     return os.path.dirname(os.path.abspath(__file__))

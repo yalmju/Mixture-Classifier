@@ -74,7 +74,13 @@ def build(md_path: Path, out_pdf: Path):
     tmp_html = out_pdf.with_suffix(".html")
     tmp_html.write_text(doc, encoding="utf-8")
 
-    chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    # 두 머신에서 다 돈다: macOS 는 표준 앱 경로, Windows 는 Chrome → Edge 순서로 찾는다.
+    _candidates = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    ]
+    chrome = next((c for c in _candidates if Path(c).exists()), _candidates[0])
     subprocess.run(
         [chrome, "--headless", "--disable-gpu", "--no-pdf-header-footer",
          "--run-all-compositor-stages-before-draw", "--virtual-time-budget=10000",

@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QFileDialog, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QLineEdit, QCheckBox, QProgressBar, QSpinBox,
-    QComboBox,
+    QComboBox, QTabWidget, QSizePolicy,
 )
 
 from matplotlib.patches import FancyArrowPatch
@@ -97,7 +97,15 @@ class ValidatePage(QWidget):
         head.addWidget(h1); head.addWidget(sub)
         root.addLayout(head)
 
-        ctl = QHBoxLayout(); ctl.setSpacing(8)
+        content = QHBoxLayout(); content.setSpacing(14)
+        left_body = QWidget(); left = QVBoxLayout(left_body)
+        left.setContentsMargins(0, 0, 6, 0); left.setSpacing(8)
+        left_body.setFixedWidth(320)
+        content.addWidget(left_body)
+        right_body = QWidget(); right = QVBoxLayout(right_body)
+        right.setContentsMargins(0, 0, 0, 0); right.setSpacing(10)
+        content.addWidget(right_body, 1)
+        root.addLayout(content, 1)
         self.ref_lbl = QLabel(self._short(self.data_dir)); self.ref_lbl.setObjectName("field")
         add_b = QPushButton("Add mixtures…"); add_b.setObjectName("ghost")
         add_b.setToolTip("load one or more known-ratio mixture maps")
@@ -124,11 +132,15 @@ class ValidatePage(QWidget):
         self.cancel_btn = QPushButton("Cancel"); self.cancel_btn.setObjectName("ghost")
         self.cancel_btn.setToolTip("stop the running Validate / DL job")
         self.cancel_btn.clicked.connect(self._cancel); self.cancel_btn.setVisible(False)
-        ctl.addWidget(self.ref_lbl); ctl.addStretch(1)
-        ctl.addWidget(cal_b); ctl.addWidget(self.cal_lbl); ctl.addWidget(self.dl_chk)
-        ctl.addWidget(add_b); ctl.addWidget(self.explain_btn)
-        ctl.addWidget(clr_b); ctl.addWidget(exp_b); ctl.addWidget(self.cancel_btn); ctl.addWidget(self.btn)
-        root.addLayout(ctl)
+        left.addWidget(self.ref_lbl)
+        left.addWidget(cal_b); left.addWidget(self.cal_lbl)
+        left.addWidget(self.dl_chk)
+        left.addWidget(add_b); left.addWidget(self.explain_btn)
+        util = QHBoxLayout(); util.setSpacing(6)
+        util.addWidget(clr_b); util.addWidget(exp_b)
+        left.addLayout(util)
+        left.addWidget(self.cancel_btn); left.addWidget(self.btn)
+
 
         # collapsible input detail (fixed components · VIP · mixture table) — collapse it
         # (auto-collapses after a run) to give the result plots the full window height
@@ -136,13 +148,13 @@ class ValidatePage(QWidget):
         self.tgl.setCheckable(True); self.tgl.setChecked(True)
         self.tgl.setStyleSheet("text-align:left; padding:4px 8px;")
         self.tgl.toggled.connect(self._toggle_inputs)
-        root.addWidget(self.tgl)
+        left.addWidget(self.tgl)
 
         self.inbox = QWidget(); ibl = QVBoxLayout(self.inbox)
         ibl.setContentsMargins(0, 0, 0, 0); ibl.setSpacing(12)
 
         # fixed-component base ratio — auto-added to files that don't name them
-        brow = QHBoxLayout(); brow.setSpacing(8)
+        brow = QVBoxLayout(); brow.setSpacing(5)
         bl = QLabel("fixed components:"); bl.setObjectName("field")
         self.base_txt = QLineEdit()
         self.base_txt.setPlaceholderText("e.g. TBZ:1, DQ:1  — added to files that only "
@@ -152,12 +164,12 @@ class ValidatePage(QWidget):
         repar_b = QPushButton("Re-parse names"); repar_b.setObjectName("ghost")
         repar_b.setToolTip("re-read every filename's true ratio using the fixed-components base")
         repar_b.clicked.connect(self._reparse)
-        brow.addWidget(bl); brow.addWidget(self.base_txt, 1); brow.addWidget(repar_b)
+        brow.addWidget(bl); brow.addWidget(self.base_txt); brow.addWidget(repar_b)
         ibl.addLayout(brow)
 
         # VIP-band NNLS — decompose the composition on each compound's discriminative
         # marker band(s) only, instead of the whole spectrum (less mixture cross-talk)
-        vrow = QHBoxLayout(); vrow.setSpacing(8)
+        vrow = QVBoxLayout(); vrow.setSpacing(5)
         self.vip_chk = QCheckBox("VIP-band NNLS"); self.vip_chk.setObjectName("field")
         self.vip_chk.setToolTip("fit each mixture's composition only on the compounds' "
                                 "VIP marker bands (least cross-talk) rather than the full "
@@ -171,7 +183,7 @@ class ValidatePage(QWidget):
         vip_b.setToolTip("recommend each compound's least-cross-talk discriminative band "
                          "from the references")
         vip_b.clicked.connect(self._auto_vip)
-        vrow.addWidget(self.vip_chk); vrow.addWidget(self.vip_txt, 1); vrow.addWidget(vip_b)
+        vrow.addWidget(self.vip_chk); vrow.addWidget(self.vip_txt); vrow.addWidget(vip_b)
         ibl.addLayout(vrow)
 
         # No DL training knobs here on purpose: Recovery APPLIES the model trained
@@ -187,7 +199,7 @@ class ValidatePage(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
         self.table.setMaximumHeight(170)
         ibl.addWidget(self.table)
-        root.addWidget(self.inbox)
+        left.addWidget(self.inbox)
         self._toggle_inputs(True)                          # set the toggle label
 
         # progress: a busy bar (shown only while working) + the live status text
@@ -197,14 +209,15 @@ class ValidatePage(QWidget):
         self.progbar.setFixedHeight(6); self.progbar.setMaximumWidth(180)
         self.progbar.setVisible(False)
         prow.addWidget(self.progbar); prow.addWidget(self.status, 1)
-        root.addLayout(prow)
+        left.addLayout(prow)
+        left.addStretch(1)
 
         kpis = QHBoxLayout(); kpis.setSpacing(12)
         self.k_mix = Kpi("mixtures"); self.k_sub = Kpi("substances")
         self.k_max = Kpi("max response ×"); self.k_err = Kpi("mean error → corrected")
         for k in (self.k_mix, self.k_sub, self.k_max, self.k_err):
             kpis.addWidget(k)
-        root.addLayout(kpis)
+        right.addLayout(kpis)
 
         body = QVBoxLayout(); body.setSpacing(12)
         self.c_parity = Canvas(); self.c_resp = Canvas(); self.c_corr = Canvas()
@@ -242,10 +255,34 @@ class ValidatePage(QWidget):
         body.addWidget(ecard)
 
         bodyw = QWidget(); bodyw.setLayout(body)
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(bodyw)
-        scroll.setStyleSheet("QScrollArea{background:transparent;}")
-        root.addWidget(scroll, 1)
+        # Re-home the already-built cards into three in-place result views.
+        views = QTabWidget()
+        views.setSizePolicy(QSizePolicy.Policy.Ignored,
+                            QSizePolicy.Policy.Expanding)
+        ratio_w = QWidget(); ratio_lay = QVBoxLayout(ratio_w)
+        ratio_lay.setContentsMargins(0, 8, 0, 0); ratio_lay.setSpacing(8)
+        ratio_lay.addWidget(prow_w, 1); ratio_lay.addWidget(rcard, 1)
+        comp_w = QWidget(); comp_lay = QVBoxLayout(comp_w)
+        comp_lay.setContentsMargins(0, 8, 0, 0); comp_lay.setSpacing(8)
+        comp_lay.addWidget(crow_w, 1); comp_lay.addWidget(dcard, 1)
+        explain_w = QWidget(); explain_lay = QVBoxLayout(explain_w)
+        explain_lay.setContentsMargins(0, 8, 0, 0)
+        explain_lay.addWidget(ecard, 1)
+        for cv in (self.c_parity, self.c_corr, self.c_resp, self.c_tri,
+                   self.c_rec, self.c_rel, self.c_explain):
+            cv.setMinimumWidth(0); cv.setMinimumHeight(150)
+            cv.setSizePolicy(QSizePolicy.Policy.Ignored,
+                             QSizePolicy.Policy.Expanding)
+        views.addTab(ratio_w, "Ratios & response")
+        views.addTab(comp_w, "Composition & drift")
+        views.addTab(explain_w, "Model explanation")
+        for card_title in views.findChildren(QLabel):
+            if card_title.objectName() == "cardTitle":
+                card_title.setWordWrap(True)
+                card_title.setMinimumWidth(0)
+                card_title.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                         QSizePolicy.Policy.Preferred)
+        right.addWidget(views, 1)
         for cv, m in [(self.c_parity, "Add mixtures, then Validate"),
                       (self.c_corr, "Corrected ratio appears here"),
                       (self.c_resp, "Response factors appear here"),
@@ -259,7 +296,7 @@ class ValidatePage(QWidget):
         self.readout = QLabel(""); self.readout.setObjectName("sub")
         self.readout.setWordWrap(True); self.readout.setTextFormat(Qt.TextFormat.RichText)
         self.readout.setStyleSheet(f"font-size:15px; color:{INK};")
-        root.addWidget(self.readout)
+        right.addWidget(self.readout)
         self._on_model_bus()          # reflect whether a model exists NOW, not only later
 
     # ---- helpers ----
@@ -659,6 +696,29 @@ class ValidatePage(QWidget):
                 txt += ("<br><b style='color:%s'>approx. concentration (DL, semi-quantitative)</b>: "
                         "median within ~%.1f× of true, %.0f%% within order-of-magnitude "
                         "— screening level (not precise µM)." % (BLUE, fac, 100 * wo))
+        if dres and any(r.get("presence") for r in dres):
+            nd_n = sum(1 for r in dres for p in (r.get("presence") or {}).values()
+                       if p.get("state") == "ND")
+            ind_n = sum(1 for r in dres for p in (r.get("presence") or {}).values()
+                        if p.get("state") == "Indeterminate")
+            if nd_n or ind_n:
+                txt += ("<br><span style='color:%s'>presence gate: %d readout(s) ND — "
+                        "reported as composition 0 · &lt;LOD (raw values kept in the "
+                        "export) · %d indeterminate (p 0.2–0.8, unconfirmed)</span>"
+                        % (FAINT, nd_n, ind_n))
+        if dres:
+            risk_n = sum(1 for r in dres if r.get("in_sample_risk"))
+            if risk_n:
+                txt += ("<br><b style='color:%s'>⚠ %d map(s) share a TRAINING map's "
+                        "filename but missed the held-out cache (copied folder / other "
+                        "machine?) — these numbers may be IN-SAMPLE. Load them from the "
+                        "original training folder to get held-out values.</b>"
+                        % ("#b3421a", risk_n))
+            snd_n = sum(1 for r in dres for f in (r.get("surface_nd") or {}).values() if f)
+            if snd_n:
+                txt += ("<br><span style='color:%s'>⚠ %d readout(s) lack NNLS surface "
+                        "support (frac &lt; 4%%) — report those µM as &lt;LOD "
+                        "(values kept in the export).</span>" % (FAINT, snd_n))
         self.readout.setText(txt)
 
     @staticmethod
@@ -818,7 +878,7 @@ class ValidatePage(QWidget):
                   ("3-component mixtures", [k for k in range(len(recs)) if ncomp[k] >= 3])]
         groups = [g for g in groups if g[1]] or [("mixtures", list(range(len(recs))))]
         tallest = max(len(idx) for _t, idx in groups)
-        self.c_rel.setMinimumHeight(max(300, tallest * 19 + 130))
+        self.c_rel.setMinimumHeight(150)
         fig = self.c_rel.fig; fig.clear()
         axes = fig.subplots(1, len(groups), squeeze=False)[0]
         gap = np.array([composition_distance(r["nominal"], r["mean"]) for r in recs])
@@ -940,16 +1000,18 @@ class ValidatePage(QWidget):
             for r in self._cres:
                 true_u = r.get("uM_true") or {}
                 pred_u = r.get("uM_pred") or {}
+                nd_u = r.get("surface_nd") or {}
                 for s, tv in true_u.items():
                     pv = pred_u.get(s)
                     if tv and pv is not None and tv > 0 and pv > 0:
                         ae = abs(float(np.log10(pv / tv)))
                         detail.append([r.get("name", ""), s, f"{tv:.6g}",
-                                       f"{pv:.6g}", f"{ae:.6f}"])
+                                       f"{pv:.6g}", f"{ae:.6f}",
+                                       "ND" if nd_u.get(s) else ""])
             if detail:
                 write_csv(os.path.join(d, "concentration_log_errors.csv"),
                           ["map", "substance", "true_uM", "pred_uM",
-                           "abs_log10_error"], detail)
+                           "abs_log10_error", "surface_nd"], detail)
                 summary = []
                 for s in subs:
                     e = np.array([float(row[4]) for row in detail if row[1] == s])
@@ -962,6 +1024,24 @@ class ValidatePage(QWidget):
                           ["substance", "n_maps", "median_abs_log10_error",
                            "rmse_log10", "fraction_within_2x",
                            "fraction_within_10x"], summary)
+            pres_rows = []
+            for r in self._cres:
+                for s, p in (r.get("presence") or {}).items():
+                    nd = (r.get("uM_nd") or {}).get(s, False)
+                    snd = (r.get("surface_nd") or {}).get(s, False)
+                    sf = (r.get("surface_frac") or {}).get(s, "")
+                    raw_u = (r.get("uM_raw") or r.get("uM_pred") or {}).get(s, "")
+                    pres_rows.append([r.get("name", ""), s,
+                                      f"{p.get('prob', float('nan')):.4f}",
+                                      p.get("state", ""), "1" if nd else "0",
+                                      "1" if snd else "0",
+                                      f"{sf:.4f}" if sf != "" else "",
+                                      f"{raw_u:.6g}" if raw_u != "" else ""])
+            if pres_rows:
+                write_csv(os.path.join(d, "presence_states.csv"),
+                          ["map", "substance", "presence_prob", "state",
+                           "uM_gated_ND", "surface_nd", "surface_frac",
+                           "uM_raw"], pres_rows)
         figs = [("validate_parity", self.c_parity),
                 ("validate_corrected", self.c_corr),
                 ("validate_response", self.c_resp)]
@@ -1086,6 +1166,8 @@ class ValidatePage(QWidget):
                 "(→ validate_parity, validate_corrected).",
                 "- `composition_view.csv` — true & measured composition, per-substance recovery %, and "
                 "drift per mixture (→ drift_triangle, relative_drift, recovery).",
+                "- `presence_states.csv` — per-substance presence gate (prob · Detected/Indeterminate/ND); "
+                "ND readouts are reported as composition 0 · <LOD, raw µM kept in the uM_raw column.",
                 "Each PNG is a rendering of one of these tables — re-plot from the CSV in any tool."],
         }
         figures = [(fn, fig_docs[fn]) for fn in fig_names if fn in fig_docs]

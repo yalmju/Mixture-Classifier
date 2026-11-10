@@ -1,0 +1,141 @@
+{
+  "protocol": {
+    "ratio_head": "pls_n_components_8",
+    "split": "absolute-condition-grouped-5-fold (seed 701, 원 실행과 동일)",
+    "residual": "동일 neural residual (hidden 128/32)"
+  },
+  "summary": {
+    "pure_calibration": {
+      "all_no100": {
+        "n_maps": 89,
+        "n_present_components": 246,
+        "mean_recovery_pct": 53.37655771523312,
+        "median_recovery_pct": 30.03003003003003,
+        "mae_uM": 51.638349817281025,
+        "rmse_log10": 0.9444632811136893,
+        "within_1_5x_pct": 14.634146341463413,
+        "within_2x_pct": 25.609756097560975,
+        "euclidean_mean_uM": 110.06757338141882,
+        "euclidean_median_uM": 21.432705878589662,
+        "components": {
+          "DQ": {
+            "n": 82,
+            "mean_recovery_pct": 41.21964599144699,
+            "median_recovery_pct": 26.004611737127938,
+            "mae_uM": 55.04605578205707
+          },
+          "TBZ": {
+            "n": 82,
+            "mean_recovery_pct": 20.325696918251783,
+            "median_recovery_pct": 16.66189482270584,
+            "mae_uM": 55.804682379997146
+          },
+          "THI": {
+            "n": 82,
+            "mean_recovery_pct": 98.58433023600058,
+            "median_recovery_pct": 69.1620059929142,
+            "mae_uM": 44.06431128978887
+          }
+        }
+      },
+      "low_grid64": {
+        "n_maps": 64,
+        "n_present_components": 192,
+        "mean_recovery_pct": 62.5894353837669,
+        "median_recovery_pct": 36.70116808632879,
+        "mae_uM": 8.679329199553196,
+        "rmse_log10": 0.5923889545430673,
+        "within_1_5x_pct": 17.1875,
+        "within_2x_pct": 30.208333333333332,
+        "euclidean_mean_uM": 18.843634668802295,
+        "euclidean_median_uM": 15.12542957517425,
+        "components": {
+          "DQ": {
+            "n": 64,
+            "mean_recovery_pct": 50.276261902535,
+            "median_recovery_pct": 32.62693943482243,
+            "mae_uM": 8.236912056869548
+          },
+          "TBZ": {
+            "n": 64,
+            "mean_recovery_pct": 25.209203379743588,
+            "median_recovery_pct": 20.577714802970107,
+            "mae_uM": 8.679897485484457
+          },
+          "THI": {
+            "n": 64,
+            "mean_recovery_pct": 112.28284086902212,
+            "median_recovery_pct": 81.91584497575128,
+            "mae_uM": 9.121178056305586
+          }
+        }
+      }
+    },
+    "neural_residual": {
+      "all_no100": {
+        "n_maps": 89,
+        "n_present_components": 246,
+        "mean_recovery_pct": 106.15680979171785,
+        "median_recovery_pct": 93.18700507663986,
+        "mae_uM": 36.15826875966433,
+        "rmse_log10": 0.36476658256864775,
+        "within_1_5x_pct": 51.21951219512195,
+        "within_2x_pct": 74.79674796747967,
+        "euclidean_mean_uM": 78.57440758148374,
+        "euclidean_median_uM": 11.304910013535565,
+        "components": {
+          "DQ": {
+            "n": 82,
+            "mean_recovery_pct": 99.0826478760734,
+            "median_recovery_pct": 84.79838343899209,
+            "mae_uM": 38.572705957131944
+          },
+          "TBZ": {
+            "n": 82,
+            "mean_recovery_pct": 110.07374705005938,
+            "median_recovery_pct": 94.84884799269673,
+            "mae_uM": 44.08275106568958
+          },
+          "THI": {
+            "n": 82,
+            "mean_recovery_pct": 109.31403444902074,
+            "median_recovery_pct": 95.82369912974502,
+            "mae_uM": 25.819349256171503
+          }
+        }
+      },
+      "low_grid64": {
+        "n_maps": 64,
+        "n_present_components": 192,
+        "mean_recovery_pct": 115.21948729865179,
+        "median_recovery_pct": 99.53237226638925,
+        "mae_uM": 4.5557824666652635,
+        "rmse_log10": 0.22980617218188912,
+        "within_1_5x_pct": 57.8125,
+        "within_2x_pct": 84.375,
+        "euclidean_mean_uM": 9.70167830741154,
+        "euclidean_median_uM": 7.733977640333535,
+        "components": {
+          "DQ": {
+            "n": 64,
+            "mean_recovery_pct": 110.26085960294681,
+            "median_recovery_pct": 93.53017224028682,
+            "mae_uM": 4.248946827236492
+          },
+          "TBZ": {
+            "n": 64,
+            "mean_recovery_pct": 119.71959562846833,
+            "median_recovery_pct": 102.78646926064604,
+            "mae_uM": 5.641029961572231
+          },
+          "THI": {
+            "n": 64,
+            "mean_recovery_pct": 115.67800666454023,
+            "median_recovery_pct": 101.01546115304009,
+            "mae_uM": 3.7773706111870675
+          }
+        }
+      }
+    }
+  }
+}

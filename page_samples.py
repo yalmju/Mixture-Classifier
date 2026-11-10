@@ -75,6 +75,34 @@ class SamplingPage(QWidget):
         prep.addStretch(1)
         root.addLayout(prep)
 
+        # Pixel sampling is preprocessing, not a model hyperparameter. Keep the
+        # decision here so every compared method receives the exact same spectra.
+        sampling = QHBoxLayout(); sampling.setSpacing(10)
+        sl = QLabel("map sampling:"); sl.setObjectName("field")
+        sampling.addWidget(sl)
+        self.cmb_sampling = QComboBox(); self.cmb_sampling.setObjectName("field")
+        self.cmb_sampling.addItem("representative spectra", "representative")
+        self.cmb_sampling.addItem("legacy intensity order", "legacy")
+        self.cmb_sampling.setToolTip(
+            "Within each map, group spectra by shape + log intensity and keep actual "
+            "representative spectra. Labels and train/test groups are unchanged.")
+        sampling.addWidget(self.cmb_sampling)
+        self.sp_sample_px = QSpinBox(); self.sp_sample_px.setRange(16, 400)
+        self.sp_sample_px.setValue(100); self.sp_sample_px.setSingleStep(10)
+        self.sp_sample_px.setPrefix("representatives/map ")
+        self.sp_sample_px.setToolTip(
+            "Maximum fixed representative spectra retained from each map. "
+            "100 is the default; Model and benchmark reuse this value.")
+        sampling.addWidget(self.sp_sample_px)
+        self.sp_sampling_seed = QSpinBox(); self.sp_sampling_seed.setRange(0, 999999)
+        self.sp_sampling_seed.setValue(0); self.sp_sampling_seed.setPrefix("seed ")
+        self.sp_sampling_seed.setToolTip(
+            "Reproducible map-level sampling seed. The file path is folded into it, "
+            "so the same map gets the same representatives in every fold.")
+        sampling.addWidget(self.sp_sampling_seed)
+        sampling.addStretch(1)
+        root.addLayout(sampling)
+
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             ["File", "# px", "Class (substance)", "Batch", "Role (train/test/exclude)"])
@@ -186,7 +214,10 @@ class SamplingPage(QWidget):
         trim = (lo, hi) if (hi > lo and (lo > 0 or hi < 4000)) else None
         return {"baseline": self.chk_base.isChecked(),
                 "deriv": self.cmb_deriv.currentData(),
-                "norm": self.cmb_norm.currentData(), "trim": trim}
+                "norm": self.cmb_norm.currentData(), "trim": trim,
+                "pixel_sampling": self.cmb_sampling.currentData(),
+                "sample_pixels": self.sp_sample_px.value(),
+                "sampling_seed": self.sp_sampling_seed.value()}
 
     # ---- known-ratio mixtures (Step 1 prepares them; Model / Recovery share them) ----
     def _mix_ref_names(self):
@@ -436,6 +467,10 @@ class SamplingPage(QWidget):
         self.cmb_norm.setCurrentIndex(max(0, self.cmb_norm.findData(cfg["norm"])))
         self.sp_lo.setValue(cfg["trim"][0] if cfg["trim"] else 0)
         self.sp_hi.setValue(cfg["trim"][1] if cfg["trim"] else 4000)
+        self.cmb_sampling.setCurrentIndex(
+            max(0, self.cmb_sampling.findData(cfg["pixel_sampling"])))
+        self.sp_sample_px.setValue(cfg["sample_pixels"])
+        self.sp_sampling_seed.setValue(cfg["sampling_seed"])
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(
@@ -529,7 +564,12 @@ class SamplingPage(QWidget):
         try:
             save_manifest(self.data_dir, rows)
             save_preprocess(self.data_dir, self._gather_prep())
-            self.status.setText(f"saved samples.csv + preprocess.json ({len(rows)} maps)")
+            cfg = self._gather_prep()
+            mode = (f"representative {cfg['sample_pixels']}/map"
+                    if cfg["pixel_sampling"] == "representative"
+                    else f"legacy {cfg['sample_pixels']}/map")
+            self.status.setText(
+                f"saved samples.csv + preprocess.json ({len(rows)} maps · {mode})")
             self.status.setStyleSheet(f"color:{TEAL};")
         except Exception as exc:
             self.status.setText("save failed"); self.status.setStyleSheet(f"color:{RED};")

@@ -1,0 +1,50 @@
+{
+  "nnls_vs_mlp": {
+    "median_difference_pp": 2.7409778583866853,
+    "mean_difference_pp": 2.6019308009436126,
+    "wilcoxon_p": 0.02456489127555341,
+    "n": 89
+  },
+  "pls_vs_mlp": {
+    "median_difference_pp": -1.3251828487942134,
+    "mean_difference_pp": -2.2263928763903005,
+    "wilcoxon_p": 0.00491154549997929,
+    "n": 89
+  },
+  "rf_vs_mlp": {
+    "median_difference_pp": -0.17447910030631775,
+    "mean_difference_pp": -0.42227480770212183,
+    "wilcoxon_p": 0.480342549658587,
+    "n": 89
+  },
+  "cnn_vs_mlp": {
+    "median_difference_pp": 2.066841213187825,
+    "mean_difference_pp": 3.385939881004885,
+    "wilcoxon_p": 0.02160320115579827,
+    "n": 89
+  },
+  "rf_auc_minus_mlp": {
+    "difference": 0.035147392290249435,
+    "bootstrap_ci95": [
+      -0.02947845804988658,
+      0.09863945578231281
+    ],
+    "bootstrap_two_sided_p": 0.3312,
+    "n_binary_maps": 21
+  },
+  "lowgrid_calibration_vs_neural": {
+    "n_maps": 64,
+    "mae_reduction_pct": 43.13722654267244,
+    "mae_reduction_ci95_pct": [
+      33.32503724738765,
+      51.75958878812483
+    ],
+    "mae_wilcoxon_p": 2.0727055502587415e-09,
+    "euclidean_reduction_pct": 45.1987848356978,
+    "euclidean_reduction_ci95_pct": [
+      34.60268033900244,
+      54.25746502205024
+    ],
+    "euclidean_wilcoxon_p": 2.442534917073767e-09
+  }
+}

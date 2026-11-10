@@ -1,0 +1,119 @@
+{
+  "protocol": {
+    "conditions": 92,
+    "split": "absolute-condition-grouped 5-fold",
+    "teacher": "train-fold-only PLSR8",
+    "inference": "MLP only"
+  },
+  "experiments": [
+    {
+      "name": "TH_distill_0.3",
+      "config": {
+        "name": "TH_distill_0.3",
+        "distill": 0.3
+      },
+      "metrics": {
+        "all": {
+          "n": 92,
+          "mae_pp": 14.410094039817686,
+          "median_recovery_pct": 98.01362454891205,
+          "within80_120_pct": 26.27450980392157,
+          "within1_5x_pct": 50.588235294117645,
+          "within2x_pct": 73.72549019607844,
+          "known_total_mae_fraction": 0.1455449288648482
+        },
+        "binary": {
+          "n": 21,
+          "mae_pp": 19.506980561490455,
+          "median_recovery_pct": 91.52943094571431,
+          "within80_120_pct": 30.952380952380953,
+          "within1_5x_pct": 40.476190476190474,
+          "within2x_pct": 64.28571428571429,
+          "known_total_mae_fraction": 0.22932131105663003
+        },
+        "ternary": {
+          "n": 71,
+          "mae_pp": 12.902564223548277,
+          "median_recovery_pct": 101.2617364525795,
+          "within80_120_pct": 25.352112676056336,
+          "within1_5x_pct": 52.58215962441315,
+          "within2x_pct": 75.5868544600939,
+          "known_total_mae_fraction": 0.12902564223548277
+        }
+      }
+    },
+    {
+      "name": "TH_distill_0.5",
+      "config": {
+        "name": "TH_distill_0.5",
+        "distill": 0.5
+      },
+      "metrics": {
+        "all": {
+          "n": 92,
+          "mae_pp": 13.173998119641803,
+          "median_recovery_pct": 104.36623767018318,
+          "within80_120_pct": 34.11764705882353,
+          "within1_5x_pct": 59.6078431372549,
+          "within2x_pct": 78.43137254901961,
+          "known_total_mae_fraction": 0.13430900607689605
+        },
+        "binary": {
+          "n": 21,
+          "mae_pp": 19.006187130449486,
+          "median_recovery_pct": 88.42408657073975,
+          "within80_120_pct": 26.190476190476193,
+          "within1_5x_pct": 47.61904761904761,
+          "within2x_pct": 61.904761904761905,
+          "known_total_mae_fraction": 0.2348204674185784
+        },
+        "ternary": {
+          "n": 71,
+          "mae_pp": 11.448984468557837,
+          "median_recovery_pct": 105.18214851617813,
+          "within80_120_pct": 35.68075117370892,
+          "within1_5x_pct": 61.97183098591549,
+          "within2x_pct": 81.69014084507043,
+          "known_total_mae_fraction": 0.11448984468557837
+        }
+      }
+    },
+    {
+      "name": "TH_distill_1",
+      "config": {
+        "name": "TH_distill_1",
+        "distill": 1.0
+      },
+      "metrics": {
+        "all": {
+          "n": 92,
+          "mae_pp": 13.210020549170867,
+          "median_recovery_pct": 101.91789865493774,
+          "within80_120_pct": 32.549019607843135,
+          "within1_5x_pct": 58.03921568627452,
+          "within2x_pct": 77.25490196078432,
+          "known_total_mae_fraction": 0.13265535375770396
+        },
+        "binary": {
+          "n": 21,
+          "mae_pp": 19.325947802861265,
+          "median_recovery_pct": 83.31706394751866,
+          "within80_120_pct": 16.666666666666664,
+          "within1_5x_pct": 35.714285714285715,
+          "within2x_pct": 61.904761904761905,
+          "known_total_mae_fraction": 0.22720965734060747
+        },
+        "ternary": {
+          "n": 71,
+          "mae_pp": 11.4010843192061,
+          "median_recovery_pct": 102.8681993484497,
+          "within80_120_pct": 35.68075117370892,
+          "within1_5x_pct": 62.441314553990615,
+          "within2x_pct": 80.28169014084507,
+          "known_total_mae_fraction": 0.114010843192061
+        }
+      }
+    }
+  ],
+  "elapsed_s": 275.24216079711914
+}

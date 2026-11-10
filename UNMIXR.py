@@ -28,12 +28,13 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QStackedWidget, QColorDialog,
 )
 
-from ui_common import (APP_NAME, VERSION, ICON_PATH, QSS, INK, COLOR_BUS,
+from ui_common import (APP_NAME, VERSION, ICON_PATH, QSS, INK, MUTE, RED, COLOR_BUS,
                        set_substance_colors, substance_colors, substance_color,
                        stop_worker, type_in_spinboxes)
 from dataset import discover_dataset, load_colors, save_colors
 from page_samples import SamplingPage
 from page_model import ModelPage
+from page_compose import BUILD_TAG, _LOADED_SOURCE_HASHES, _SOURCE_FILES, _source_hash
 from page_quantify import QuantifyPage
 from page_validate import ValidatePage
 from page_real import RealDataPage
@@ -94,8 +95,15 @@ class MainWindow(QMainWindow):
         self._sub_index = {}
 
         bl.addStretch(1)
+        version_box = QVBoxLayout(); version_box.setContentsMargins(0, 0, 0, 0)
+        version_box.setSpacing(0)
         self.status = QLabel(f"{APP_NAME} v{VERSION}"); self.status.setObjectName("status")
-        bl.addWidget(self.status)
+        self.status.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.build_status = QLabel(); self.build_status.setObjectName("sub")
+        self.build_status.setAlignment(Qt.AlignmentFlag.AlignRight)
+        version_box.addWidget(self.status); version_box.addWidget(self.build_status)
+        bl.addLayout(version_box)
+        self._refresh_build_status()
         outer.addWidget(bar)
 
         # stacked content
@@ -113,20 +121,38 @@ class MainWindow(QMainWindow):
         for page in self.pages.values():          # type numbers instead of clicking arrows
             type_in_spinboxes(page)
 
-        self.select("samples")
+        # Day-to-day use is map analysis; open there. The other tabs are for
+        # (re)training campaigns and stay one click away.
+        self.select("real")
 
     def select(self, key):
+        self._refresh_build_status()
         for k, b in self._nav_btns.items():
             b.setChecked(k == key)
         # the dataset folder is chosen once in Samples; downstream tabs adopt it
         folder = getattr(self.pages["samples"], "data_dir", None)
         page = self.pages[key]
         if folder and hasattr(page, "set_data_dir"):
-            page.set_data_dir(folder)
+            # A page's adoption hook must never block navigation: an exception here
+            # used to leave the previous tab on screen with no visible cause.
+            try:
+                page.set_data_dir(folder)
+            except Exception as exc:
+                print(f"set_data_dir({key}):", exc, file=sys.stderr)
         if folder != self._color_folder:                  # refresh swatches on new data
             self._color_folder = folder
             self._refresh_colors()
         self.stack.setCurrentWidget(page)
+
+    def _refresh_build_status(self):
+        current = {name: _source_hash(path) for name, path in _SOURCE_FILES.items()}
+        stale = current != _LOADED_SOURCE_HASHES
+        self.build_status.setText("RESTART REQUIRED" if stale else BUILD_TAG)
+        self.build_status.setStyleSheet(
+            f"color:{RED if stale else MUTE}; font-size:9px;")
+        details = [f"loaded {name}: {_LOADED_SOURCE_HASHES[name]}\n"
+                   f"disk   {name}: {current[name]}" for name in _SOURCE_FILES]
+        self.build_status.setToolTip("\n\n".join(details))
 
     # ---- top-bar per-substance colour picker -----------------------------
     def _refresh_colors(self):

@@ -13,7 +13,7 @@ from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QSpinBox, QComboBox, QCheckBox, QFileDialog, QProgressBar, QScrollArea,
-    QFrame, QStackedWidget,
+    QFrame, QStackedWidget, QTabWidget, QSizePolicy,
 )
 
 from ui_common import *
@@ -147,11 +147,15 @@ class ModelPage(QWidget):
             kpis.addWidget(k)
         cbody.addLayout(kpis)
 
-        # plot grid: 2x2 + a full-width discriminative-band row
-        grid = QGridLayout(); grid.setSpacing(12)
+        # Results use two in-place views instead of one long report page. Switching
+        # views is not scrolling: every selected view fits the normal app window.
         self.c_curve = Canvas(); self.c_cm = Canvas()
         self.c_pca = Canvas(); self.c_bar = Canvas(); self.c_bands = Canvas()
         self.c_box = Canvas(); self.c_marker = Canvas()
+
+        results = QTabWidget()
+        overview_w = QWidget(); overview = QGridLayout(overview_w)
+        overview.setContentsMargins(0, 8, 0, 0); overview.setSpacing(8)
         for (cv, title, r, c) in [
             (self.c_curve, "Learning curve", 0, 0),
             (self.c_cm, "Confusion matrix (held-out test)", 0, 1),
@@ -160,28 +164,31 @@ class ModelPage(QWidget):
         ]:
             card, lay = _card(title)
             lay.addWidget(cv)
-            grid.addWidget(card, r, c)
+            overview.addWidget(card, r, c)
+        overview.setColumnStretch(0, 1); overview.setColumnStretch(1, 1)
+        overview.setRowStretch(0, 1); overview.setRowStretch(1, 1)
+
+        bands_w = QWidget(); bands = QGridLayout(bands_w)
+        bands.setContentsMargins(0, 8, 0, 0); bands.setSpacing(8)
         bcard, blay = _card("Discriminative bands — ANOVA F per wavenumber "
                             "(or PLS-DA VIP when that backend is used)")
-        blay.addWidget(self.c_bands); grid.addWidget(bcard, 2, 0, 1, 2)
+        blay.addWidget(self.c_bands); bands.addWidget(bcard, 0, 0)
         xcard, xlay = _card("Top bands — intensity by class (box plot: which "
                             "substance is high at each discriminative peak)")
-        xlay.addWidget(self.c_box); grid.addWidget(xcard, 3, 0, 1, 2)
+        xlay.addWidget(self.c_box); bands.addWidget(xcard, 0, 1)
         mcard, mlay = _card("Marker bands per substance — each substance's mean "
                             "spectrum with the 3 peaks where it stands out most")
-        mlay.addWidget(self.c_marker); grid.addWidget(mcard, 4, 0, 1, 2)
-        grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
-        # give each plot a readable minimum height and let the page scroll, so the
-        # panels are never squashed flat when the window is short
-        for cv in (self.c_curve, self.c_cm, self.c_pca, self.c_bar):
-            cv.setMinimumHeight(340)
-        self.c_bands.setMinimumHeight(300); self.c_box.setMinimumHeight(300)
-        self.c_marker.setMinimumHeight(320)
-        gridw = QWidget(); gridw.setLayout(grid)
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame); scroll.setWidget(gridw)
-        scroll.setStyleSheet("QScrollArea{background:transparent;}")
-        cbody.addWidget(scroll, 1)
+        mlay.addWidget(self.c_marker); bands.addWidget(mcard, 0, 2)
+        for col in range(3):
+            bands.setColumnStretch(col, 1)
+        for cv in (self.c_curve, self.c_cm, self.c_pca, self.c_bar,
+                   self.c_bands, self.c_box, self.c_marker):
+            cv.setMinimumWidth(0); cv.setMinimumHeight(160)
+            cv.setSizePolicy(QSizePolicy.Policy.Ignored,
+                             QSizePolicy.Policy.Expanding)
+        results.addTab(overview_w, "Performance")
+        results.addTab(bands_w, "Spectral evidence")
+        cbody.addWidget(results, 1)
 
         # stack the two modes; composition is the default (Step 2 of the workflow)
         self._mstack = QStackedWidget()

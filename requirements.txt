@@ -4,6 +4,7 @@ scipy
 scikit-learn        # also pulls in joblib (model save / load)
 matplotlib
 PyQt6               # native GUI + embedded matplotlib
+openpyxl             # compact .xlsx concentration/Mean/std calibration curves
 
 # OPTIONAL — only for the "ResNet1D (torch)" model backend. Not required to run the
 # app; install separately if you want that backend:

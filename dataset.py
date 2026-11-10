@@ -26,10 +26,64 @@ import re
 
 # INK is the SERS-ink/substrate signal, not a pesticide.
 # Treat it as background for the hit gate, composition denominator, and UI.
-BLANK_ALIASES = {"blk", "blank", "background", "bg", "none", "ink"}
+BLANK_ALIASES = {"blk", "blank", "background", "bg", "none", "ink", "leaf"}
 _SUFFIX = "_corrected"
 # CSVs that live beside the maps but are NOT maps — never treat them as references
 _NON_MAP = {"samples.csv", "mixtures.csv"}
+
+
+def _decode_amount(s):
+    """A filename amount code -> value: 01 means 0.1, while 10 means 10."""
+    return int(s) / 10 ** (len(s) - 1) if s.startswith("0") and len(s) > 1 \
+        else float(int(s))
+
+
+def _match_ref(tok, ref_names):
+    """Match a filename token exactly, or by an unambiguous >=2-char prefix."""
+    for ref in ref_names:
+        if tok == ref.lower():
+            return ref
+    candidates = [ref for ref in ref_names
+                  if len(tok) >= 2 and ref.lower().startswith(tok)]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def parse_mixture_label(basename, ref_names, base=None):
+    """Read substance amounts from a filename such as ``DQ12-TB3-TH6``.
+
+    These numbers are measurement metadata, not a UI convenience. Keeping the
+    parser in the dataset layer lets every consumer (Samples, Model, Validate and
+    command-line analyses) recover absolute labels even when an older
+    ``mixtures.json`` omitted its redundant ``conc`` field.
+    """
+    low = str(basename).lower()
+    named = {}
+    matched = False
+    present = [name for name in ref_names if name.lower() in low]
+    match = re.search(r"(\d+(?:\s*(?:to|[_\-x:])\s*\d+)+)", low)
+    if len(present) >= 2 and match:
+        order = sorted(present, key=lambda name: low.find(name.lower()))
+        nums = [_decode_amount(x) for x in re.findall(r"\d+", match.group(1))]
+        if len(nums) == len(order):
+            return {name: value for name, value in zip(order, nums)}
+    tokens = re.findall(r"[a-z]+|\d+", low)
+    i = 0
+    while i < len(tokens):
+        if tokens[i].isalpha():
+            name = _match_ref(tokens[i], ref_names)
+            if name and i + 1 < len(tokens) and tokens[i + 1].isdigit():
+                named[name] = _decode_amount(tokens[i + 1])
+                matched = True
+                i += 2
+                continue
+        i += 1
+    if not matched:
+        return None
+    if base and len(named) < 2:
+        out = dict(base)
+        out.update(named)
+        return out
+    return named
 # a batch marker = a trailing number with a clear separator or in ()/[]:
 #   THI_2 · THI 2 · THI-2 · THI_(2) · THI (2) · THI(2) · THI[2]
 # (a bare trailing number like 'PCB77' is NOT treated as a batch — keep as-is)
@@ -147,7 +201,9 @@ def save_manifest(data_dir, rows):
 
 
 _PREPROCESS = "preprocess.json"
-_PREPROCESS_DEFAULT = {"baseline": True, "deriv": 0, "norm": "l2", "trim": None}
+_PREPROCESS_DEFAULT = {"baseline": True, "deriv": 0, "norm": "l2", "trim": None,
+                       "pixel_sampling": "representative", "sample_pixels": 100,
+                       "sampling_seed": 0}
 
 
 def load_preprocess(data_dir):
@@ -165,6 +221,10 @@ def load_preprocess(data_dir):
     cfg["baseline"] = bool(cfg.get("baseline", True))
     cfg["deriv"] = int(cfg.get("deriv", 0) or 0)
     cfg["norm"] = cfg.get("norm") or "l2"
+    mode = str(cfg.get("pixel_sampling") or "representative").lower()
+    cfg["pixel_sampling"] = mode if mode in ("representative", "legacy") else "representative"
+    cfg["sample_pixels"] = max(1, min(400, int(cfg.get("sample_pixels", 100) or 100)))
+    cfg["sampling_seed"] = max(0, int(cfg.get("sampling_seed", 0) or 0))
     return cfg
 
 
@@ -217,7 +277,27 @@ def rebase_path(p, data_dir):
     return p
 
 
-def load_mixture_list(data_dir, role=None):
+def filename_mixture_truth(path, ref_names):
+    """Return filename-encoded nominal amounts and concentrations in M.
+
+    Benchmark/training labels come from the measured map filename. A stale
+    ``mixtures.json`` value must never silently replace that primary record.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    if stem.lower().endswith(_SUFFIX):
+        stem = stem[:-len(_SUFFIX)]
+    names = [base_and_batch(str(n))[0] for n in ref_names
+             if not is_blank(base_and_batch(str(n))[0])]
+    names = list(dict.fromkeys(names))
+    amounts_uM = parse_mixture_label(stem, names)
+    if not amounts_uM or sum(float(v) for v in amounts_uM.values()) <= 0:
+        raise ValueError(
+            f"cannot read the benchmark truth from filename: {os.path.basename(path)}")
+    amounts_uM = {n: float(amounts_uM.get(n, 0.0)) for n in names}
+    return amounts_uM, {n: v * 1e-6 for n, v in amounts_uM.items() if v > 0}
+
+
+def load_mixture_list(data_dir, role=None, filename_truth=False):
     """Read <data_dir>/mixtures.json → list of (path, ratio_dict[, conc_dict in M]).
     The known-ratio mixtures are prepared once in Samples (Step 1); Model/Recovery read
     them from here so the mixture list is shared, not re-entered per tab.
@@ -234,11 +314,26 @@ def load_mixture_list(data_dir, role=None):
     for m in raw:
         path = rebase_path(m.get("path"), data_dir)   # other-machine drive letters
         ratio = {str(k): float(v) for k, v in (m.get("ratio") or {}).items()}
-        if not path or not ratio:
+        if not path or (not ratio and not filename_truth):
             continue
         if role and (m.get("role") or "train") != role:
             continue
-        conc = m.get("conc")
+        if filename_truth:
+            # In the Model tab JSON is only the file/role manifest. Its historic
+            # ratio/conc fields are not permitted to act as the answer sheet.
+            refs = [base_and_batch(n)[0] for n, _p in discover_references(data_dir)]
+            ratio, conc = filename_mixture_truth(path, refs or list(ratio))
+        else:
+            conc = m.get("conc")
+        if not conc:
+            # Filenames such as DQ12-TB3-TH6 deliberately carry the absolute µM
+            # labels. Never let a missing/accidentally-cleared JSON field turn a
+            # concentration experiment back into ratio-only training.
+            stem = os.path.splitext(os.path.basename(path))[0]
+            amounts_uM = parse_mixture_label(stem, list(ratio))
+            if amounts_uM:
+                conc = {name: float(value) * 1e-6
+                        for name, value in amounts_uM.items() if float(value) > 0}
         if conc:
             out.append((path, ratio, {str(k): float(v) for k, v in conc.items()}))
         else:
@@ -278,7 +373,12 @@ def save_preprocess(data_dir, cfg):
     out = {"baseline": bool(cfg.get("baseline", True)),
            "deriv": int(cfg.get("deriv", 0) or 0),
            "norm": cfg.get("norm") or "l2",
-           "trim": [trim[0], trim[1]] if trim else None}
+           "trim": [trim[0], trim[1]] if trim else None,
+           "pixel_sampling": (str(cfg.get("pixel_sampling") or "representative")
+                              if str(cfg.get("pixel_sampling") or "representative")
+                              in ("representative", "legacy") else "representative"),
+           "sample_pixels": max(1, min(400, int(cfg.get("sample_pixels", 100) or 100))),
+           "sampling_seed": max(0, int(cfg.get("sampling_seed", 0) or 0))}
     p = os.path.join(data_dir, _PREPROCESS)
     with open(p, "w") as f:
         json.dump(out, f, indent=2)

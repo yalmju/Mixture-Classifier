@@ -35,6 +35,7 @@ class UnmixResult:
     spectra: np.ndarray          # (n_pix, n_feat) baseline-removed measured spectra
     templates: np.ndarray        # (K, n_feat) unit templates used for the fit
     A: np.ndarray                # (n_pix, K) abundance (chosen method)
+    A_evidence: np.ndarray       # (n_pix, K) full-spectrum NNLS/MCR spectral evidence
     ratio_nb: np.ndarray         # (n_pix, Knb) composition among non-bg (rows sum 1)
     hit: np.ndarray              # (n_pix,) True where a substance (not bg) dominates
     reliab: np.ndarray           # (n_pix,) reconstruction R²
@@ -75,6 +76,22 @@ def _baseline_removed(cube, baseline):
 def _l2(X):
     n = np.linalg.norm(X, axis=1, keepdims=True)
     return X / np.where(n > 0, n, 1.0)
+
+
+def _auto_hit_from_abundance(A, bg_mask):
+    """Automatic gate using summed analyte vs summed background evidence.
+
+    BLK and INK are two nuisance references. Comparing only the single largest
+    reference can therefore let one analyte beat each background reference
+    separately even when background explains more of the spectrum in total.
+    """
+    A = np.clip(np.asarray(A, float), 0.0, None)
+    bg = np.asarray(bg_mask, bool)
+    if A.ndim != 2 or A.shape[1] != bg.size:
+        raise ValueError("abundance/background shapes do not match")
+    if not bg.any():
+        return np.ones(A.shape[0], dtype=bool)
+    return A[:, ~bg].sum(axis=1) > A[:, bg].sum(axis=1)
 
 
 def _mcr_als(X, S0, n_iter=6, progress=None):
@@ -218,6 +235,7 @@ def _vip_fit_mask(wn, peak_map, window, min_pts):
 def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
               min_frac=0.05, hit_mode="threshold", calib_path=None,
               peak_map=None, peak_window=10.0, dl_model=None, bg_map=None,
+              calib_bands=None,
               progress=None) -> UnmixResult:
     """Unmix ``test_path`` against the substances in ``data_dir`` (background
     included) by ``method`` ('nnls' or 'mcr'). ``hit_mode`` decides which pixels
@@ -355,9 +373,9 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     if bg_score is not None:
         hit = bg_score < bg_thr
         hit_rule = f"measured background map (match < {bg_thr:.2f})"
-    elif hit_mode == "auto":                          # strongest least-squares component
-        hit = ~bg_mask[A_ls.argmax(axis=1)]
-        hit_rule = "strongest reference component is a substance (NNLS, auto)"
+    elif hit_mode == "auto":                          # grouped least-squares evidence
+        hit = _auto_hit_from_abundance(A_ls, bg_mask)
+        hit_rule = "summed analyte signal > summed BLK/INK background (NNLS, auto)"
     else:                                             # substance share above threshold
         hit = ls_frac[:, nonbg].sum(axis=1) >= min_frac
         hit_rule = f"NNLS substance share ≥ {min_frac:.2f}"
@@ -377,7 +395,8 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         from dl_model import apply_uM_pixels
         if progress:
             progress("composition model — per-pixel concentration")
-        um, unames, um_meta = apply_uM_pixels(dl_model, wn, spectra, return_meta=True)
+        um, unames, um_meta = apply_uM_pixels(dl_model, wn, spectra, return_meta=True,
+                                              hit=hit)
         if um is not None:
             conc = np.zeros((len(spectra), len(nonbg)))
             conc_ood = np.zeros((len(spectra), len(nonbg)), dtype=bool)
@@ -448,8 +467,13 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
     if calib_path and nonbg:
         nb_names = [names[i] for i in nonbg]
         pures = ref_templates[nonbg]                       # calibrate against the references
-        conc, pp_theta, calib_r2, calib_slope, conc_ood, conc_ranges = _quantify_map(
-            calib_path, nb_names, pures, spectra, wn, trim, baseline, hit, progress)
+        if os.path.splitext(calib_path)[1].lower() in (".xlsx", ".xlsm"):
+            conc, pp_theta, calib_r2, calib_slope, conc_ood, conc_ranges = \
+                _quantify_summary_map(calib_path, nb_names, pures, spectra, wn,
+                                      hit, ratio_nb, calib_bands, progress)
+        else:
+            conc, pp_theta, calib_r2, calib_slope, conc_ood, conc_ranges = _quantify_map(
+                calib_path, nb_names, pures, spectra, wn, trim, baseline, hit, progress)
         conc_avg = conc[hit].mean(axis=0) if hit.any() else conc.mean(axis=0)
         calibrated = True
 
@@ -476,10 +500,10 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         conc_ci_high = np.nanpercentile(boot, 97.5, axis=0)
         conc_se = np.nanstd(boot, axis=0, ddof=1)
 
-    return UnmixResult(
+    res = UnmixResult(
         comps=names, bg_mask=bg_mask, nonbg=nonbg, method=method, wn=wn,
         coords=coord, spectra=spectra.astype(np.float32), templates=templates,
-        A=A, ratio_nb=ratio_nb, hit=hit, reliab=reliab, n_pixels=len(X),
+        A=A, A_evidence=A_ls, ratio_nb=ratio_nb, hit=hit, reliab=reliab, n_pixels=len(X),
         hit_frac=hit_frac, mean_ratio=mean_ratio, dominant=dominant,
         mean_r2=float(reliab.mean()), calibrated=calibrated, conc=conc,
         conc_avg=conc_avg, conc_median=conc_median, conc_p10=conc_p10, conc_p90=conc_p90,
@@ -488,6 +512,14 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         pp_theta=pp_theta, calib_r2=calib_r2,
         calib_slope=calib_slope, conc_ood=conc_ood, conc_ranges=conc_ranges,
         sat_frac=sat_frac, bg_score=bg_score, bg_thr=bg_thr, hit_rule=hit_rule)
+    # µM 헤드의 배치 불일치 판정(밴드 신호가 검량 곡선의 신호창 밖) — 표시층이
+    # "raw µM은 외삽" 경고를 띄울 근거로 결과에 실어 보낸다.
+    try:
+        res.conc_batch_mismatch = bool(um_meta.get("batch_mismatch"))
+        res.conc_feature_z = um_meta.get("feature_z")
+    except Exception:
+        pass
+    return res
 
 
 def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
@@ -545,6 +577,62 @@ def _quantify_map(calib_path, nb_names, pures, spectra, wn, trim, baseline, hit,
     ood[~hit] = False
     return conc, theta, r2, np.asarray(calib.gA) * np.asarray(calib.K), ood, ranges
 
+
+def _quantify_summary_map(calib_path, nb_names, pures, spectra, wn, hit,
+                          ratio_nb, calib_bands=None, progress=None):
+    """Invert marker curves to total concentration while preserving model ratio."""
+    from summary_calibration import load_summary_calibration
+
+    curves, corrections = load_summary_calibration(calib_path)
+    by_name = {c.name: c for c in curves}
+    missing = [n for n in nb_names if n not in by_name]
+    if missing:
+        raise ValueError(f"summary calibration is missing {missing}")
+    if progress:
+        note = f" ({'; '.join(corrections)})" if corrections else ""
+        progress("summary calibration — marker curves" + note)
+
+    bands = dict(calib_bands or {})
+    defaults = vip_bands(wn, pures, nb_names, k=1)
+    for name in nb_names:
+        if name not in bands:
+            vals = defaults.get(name) or []
+            if not vals:
+                vals = [float(wn[int(np.argmax(pures[nb_names.index(name)]))])]
+            bands[name] = float(vals[0])
+
+    responses = np.zeros((len(spectra), len(nb_names)), float)
+    apparent = np.zeros_like(responses)
+    r2 = np.zeros(len(nb_names)); slopes = np.zeros(len(nb_names))
+    ranges = np.zeros((len(nb_names), 2), float)
+    axis = np.asarray(wn, float)
+    for j, name in enumerate(nb_names):
+        curve = by_name[name]
+        mask = np.abs(axis - float(bands[name])) <= 8.0
+        if not mask.any():
+            mask[int(np.argmin(np.abs(axis-float(bands[name]))))] = True
+        responses[:, j] = np.asarray(spectra, float)[:, mask].mean(axis=1)
+        apparent[:, j] = curve.invert(responses[:, j])
+        pred = curve.predict(curve.concentration_M)
+        sst = float(np.sum((curve.mean-curve.mean.mean())**2))
+        r2[j] = 1.0-float(np.sum((curve.mean-pred)**2))/sst if sst > 0 else 0.0
+        slopes[j] = curve.plateau * curve.K
+        ranges[j] = [curve.concentration_M.min(), curve.concentration_M.max()]
+
+    ratio = np.asarray(ratio_nb, float)
+    candidates = np.divide(apparent, ratio, out=np.full_like(apparent, np.nan),
+                           where=ratio >= 0.05)
+    candidates[(candidates <= 0) | ~np.isfinite(candidates)] = np.nan
+    total = np.zeros(len(candidates), float)
+    usable = np.isfinite(candidates).any(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        total[usable] = np.exp(np.nanmedian(np.log(candidates[usable]), axis=1))
+    total = np.where(np.isfinite(total), total, 0.0)
+    conc = ratio * total[:, None]
+    conc[~np.asarray(hit, bool)] = 0.0
+    ood = ((conc < ranges[:, 0][None, :]) | (conc > ranges[:, 1][None, :])) & (conc > 0)
+    theta = np.zeros(len(spectra), float)
+    return conc, theta, r2, slopes, ood, ranges
 
 if __name__ == "__main__":
     import sys

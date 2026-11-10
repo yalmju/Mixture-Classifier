@@ -1,0 +1,13 @@
+﻿substance,method,n,median_recovery_pct,mae_uM,rmse_uM,rmse_log10,within_2x_pct
+DQ,pure_calibration,64,33.5,8.197,10.643,0.648,29.7
+DQ,residual,64,86.4,4.623,6.477,0.264,76.6
+DQ,residual_cap,64,86.4,4.623,6.477,0.264,76.6
+DQ,known_total,64,105.7,3.036,4.393,0.182,89.1
+TBZ,pure_calibration,64,20.6,8.682,10.915,0.706,6.2
+TBZ,residual,64,109.8,6.226,8.843,0.317,65.6
+TBZ,residual_cap,64,109.8,6.008,8.217,0.313,67.2
+TBZ,known_total,64,100.8,3.297,4.458,0.197,89.1
+THI,pure_calibration,64,84.1,9.540,19.384,0.366,51.6
+THI,residual,64,113.6,4.173,6.960,0.191,92.2
+THI,residual_cap,64,113.6,3.812,5.987,0.187,93.8
+THI,known_total,64,113.4,3.017,4.188,0.161,93.8
