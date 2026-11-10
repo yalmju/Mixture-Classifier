@@ -1,10 +1,12 @@
-"""Figure 3 최종 초안 — 검량선 → 등온선 → 시뮬레이션(간극) → 알고리즘.
+"""Figure 3 최종 초안 — 검량선 → 마스터 곡선 → 등몰 → DFT → 알고리즘.
 
-  a  농도별 검량선: 단독 희석계열 B(C) + 적합 등온선 (포화 휨 = working range 한계)
+  a  농도별 검량선: 단독 희석계열 + 직선 적합 (고농도 처짐 = working range 한계)
   b  혼합 실측(비율 축): 마스터 곡선 — 색 = 성분, 빈 ○ 이원 / 채운 ◆ 삼원
   c  혼합 실측(농도 축): 등몰 1:1:1 — 포화 절벽
-  d  시뮬 vs 실측: 단독 물리 예측의 간극 (THI/DQ 일치 · THI/TBZ 부호 반전)
-  e  알고리즘: NNLS 게이트 → 물리 사전학습 + 혼합 학습 역변환 → 조성·µM / 포화 가드
+  d/e  DFT 그림 삽입 (흡착 배향 · 에너지 다이어그램). 시뮬-실측 간극은 SI.
+  f  알고리즘 = 최종 배포 DUET-Net (260831_Model_FINAL): NNLS 게이트 → 조성망 →
+     농도망(검량 + 잔차) → 조성 · 겉보기 µM. 그림은 fig3f_network.draw (신경망 그림체).
+     물리 사전학습은 쓰지 않는다 (2026-08-19 결정).
 
   초안이다 — 최종 외형은 Origin/일러스트. 수치는 전부 확정 문서값과 같은 경로.
 
@@ -66,7 +68,6 @@ def x_eff(conc, i):
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch
 plt.rcParams.update({"font.family": "sans-serif",
                      "font.sans-serif": ["Helvetica", "Arial", "DejaVu Sans"],
                      "font.size": 7.5, "axes.linewidth": 0.6,
@@ -147,38 +148,11 @@ for cell, png, letter, title in (
     ax.set_axis_off()
     ax.set_title(title, fontsize=8)
 
-# ── f: 알고리즘 ────────────────────────────────────────────────────────────
+# ── f: 알고리즘 (fig3f_network.draw — 논문 브랜치는 조성 단계 PLS 판) ────────
+import fig3f_network
 ax = _ax(gs[1, 2], "f")
-ax.set_axis_off()
-
-
-def box(x, y, w, h, text, fc="0.96"):
-    ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.015",
-                                fc=fc, ec="0.4", lw=0.7,
-                                transform=ax.transAxes))
-    ax.text(x + w / 2, y + h / 2, text, transform=ax.transAxes, ha="center",
-            va="center", fontsize=6.6, linespacing=1.3)
-
-
-def arrow(x1, y1, x2, y2):
-    ax.annotate("", (x2, y2), (x1, y1), xycoords=ax.transAxes,
-                arrowprops=dict(arrowstyle="->", color="0.35", lw=0.8))
-
-
-box(0.05, 0.80, 0.42, 0.14, "SERS map")
-box(0.05, 0.54, 0.62, 0.16, "NNLS pixel gate\n→ surface (signal) composition")
-box(0.05, 0.22, 0.62, 0.22,
-    "duet net inversion\nprior: physics simulation (a)\ntrained on measured mixtures (b, c)")
-box(0.05, 0.00, 0.52, 0.12,
-    "detection + solution composition (%)\n+ apparent µM (semi-quant.)", fc="#eef5ee")
-box(0.60, 0.80, 0.37, 0.14, "saturated?\n(c)", fc="#fdf2f2")
-box(0.60, 0.54, 0.37, 0.14, "dilute &\nre-measure", fc="#fdf2f2")
-arrow(0.26, 0.80, 0.26, 0.71)
-arrow(0.26, 0.54, 0.26, 0.45)
-arrow(0.26, 0.22, 0.26, 0.13)
-arrow(0.60, 0.86, 0.47, 0.86)
-arrow(0.78, 0.80, 0.78, 0.69)
-ax.set_title("Algorithm: learn the inversion,\nrefuse the saturated regime", fontsize=8)
+fig3f_network.draw(ax, "pls")
+ax.set_title("Algorithm (DUET-Net): composition,\nthen concentration", fontsize=8)
 
 out = f"{HERE}/fig3_final.png"
 fig.savefig(out, dpi=180, bbox_inches="tight")
