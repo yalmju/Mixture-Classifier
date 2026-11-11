@@ -19,14 +19,20 @@
 | 3 | 표면이 포화되면 가장 센 흡착종이 신호를 가져간다 | 등몰 100 · 333 µM 에서 신호 판독 0/0/100(THI), 33 µM 은 아직 읽힘 | Fig 3c |
 | 4 | 이원·삼원 응답이 한 곡선으로 겹치고 순서는 DFT 와 같다 | THI 와 50:50 이 되려면 DQ 16배 · TBZ 8배, 삼각 닫힘 0.04 dex, 흡착 순서 THI > DQ > TBZ | Fig 3b · d |
 | 5 | 밴드 세기만으로는 혼합물 조성을 못 읽는다 | 64 조건 조성 오차 29.1 %p (밴드 높이와 자기 농도의 r² DQ 0.08 · TBZ 0.63 · THI 0.57) | Fig 4b 왼쪽 |
-| 6 | 측정 혼합물로 학습한 모델은 용액 조성을 읽는다 | 64 조건(전부 held-out) **12.3 %p**, 평균 편향 DQ −0.5 · TBZ +1.6 · THI −1.1 %p | Fig 4b 오른쪽 |
-| 7 | 이어서 성분별 겉보기 농도를 읽는다 | 64 조건(전부 held-out) 2배 이내 **95.8 %** (DQ 92 · TBZ 97 · THI 98), 중앙 배수 **1.27×** — 대조: 상수 8.4 µM 50.0 %. 세 성분이 모두 2배 이내인 조건 57/64 (대조 8/64). 분해능은 2배이고 판독은 가운데로 눌린다(판독 대 참 기울기 0.80; 참 3 µM → 중앙 3.8, 24 µM → 19.7 µM) | Fig 4 (패널 미정) |
+| 6 | 측정 혼합물로 학습한 모델은 용액 조성을 읽는다 | 64 조건(전부 held-out) **12.3 %p**, 평균 편향 DQ −0.4 · TBZ +1.5 · THI −1.1 %p | Fig 4b 오른쪽 |
+| 7 | 이어서 성분별 겉보기 농도를 읽는다 | 64 조건(전부 held-out) 2배 이내 **95.8 %** (DQ 92 · TBZ 97 · THI 98), 중앙 배수 **1.26×** — 대조: 상수 8.4 µM 50.0 %. 세 성분이 모두 2배 이내인 조건 57/64 (대조 8/64). 분해능은 2배이고 판독은 가운데로 눌린다(판독 대 참 기울기 0.80; 참 3 µM → 중앙 3.8, 24 µM → 19.7 µM) | Fig 4 (패널 미정) |
 | 8 | 신호가 THI 하나로 보이는 글씨에서 세 성분을 모두 푼다 | 게이트 통과 803 픽셀: 신호 분해 0/0/100 → 모델 41/23/36 (참 33/33/33) | Fig 4c |
 | 9 | 읽을 수 있는 구간은 위에서 끝난다(방법의 한계로 적는다) | 따로 조제한 등몰 1:1:1 의 모델 판독: 333 µM 29/17/54 · 33 µM 28/43/29 · 10 µM 42/20/39 | Fig 3c · SI `eq_series` |
 | 10 | 잎 위에서 그대로 읽는다 | (이 모델로 아직 다시 뽑지 않음) | Fig 5 |
 
 비교 사다리(같은 64 조건 · 같은 픽셀): **밴드 세기 + 검량선 29.1 → NNLS 22.4(SI) → PLS 모델 12.3 %p.**
 NNLS 는 SI 로 내리고 템플릿 구성(순수 3 + 배경 BLK · INK · LEAF)을 방법란에 적는다. BLK 하나만 넣은 판은 16.7 %p.
+
+**채점 방식(11-11 다시 함).** Fig 4 의 PLS 수치는 맵 파일 하나하나를 파이프라인 그대로(자르기 → 게이트 → ALS → 조성 → 농도)
+읽은 값이다. 맞춤에 쓰인 맵은 그 맵의 조건을 빼고 다시 맞춘 가중치로, 시험 맵은 저장 모델로 읽는다. 게이트는 64 조건 맵의
+픽셀 6353/6400(99.3 %)을 통과시키고(가장 낮은 맵 DQ6-TB3-TH3 64/100), 게이트 없이 채점했던 기록과 차이는 조성 12.30 → 12.27 %p,
+맵별 최대 2.7 %p, 농도 2배 이내는 184/192 로 같다. 모델 파일과 그 안의 평가 기록(게이트 없음)은 그대로다.
+패널용 표: `fig4_composition_64.csv`(조성, Fig 4b) · `fig4_concentration_64.csv`(농도) · `lettering_pixels.csv`(Fig 4c).
 
 ## 3. 판독 절차 — 방법란 서술
 
@@ -97,15 +103,15 @@ NNLS 는 SI 로 내리고 템플릿 구성(순수 3 + 배경 BLK · INK · LEAF)
 | 맵 | n | 조성 오차 |
 |---|---|---|
 | 64격자 전체 | 64 | 12.3 %p |
-| 격자 안, 합계 9–20 µM | 11 | 9.8 |
+| 격자 안, 합계 9–20 µM | 11 | 9.6 |
 | 격자 안, 합계 21–36 µM | 28 | 13.1 |
 | 격자 안, 합계 37–54 µM | 21 | 12.7 |
 | 격자 안, 합계 55–72 µM | 4 | 11.7 |
-| 격자 밖 전체 | 38 | 22.7 |
-| 삼원, 최대 성분 ≤ 33 µM (등몰 10 · 33) | 2 | 13.5 · 9.6 |
+| 격자 밖 전체 | 38 | 23.2 |
+| 삼원, 최대 성분 ≤ 33 µM (등몰 10 · 33) | 2 | 13.4 · 9.6 |
 | 삼원, 등몰 100 µM | 1 | 32.0 |
-| 삼원, 최대 성분 > 100 µM | 8 | 27.8 |
-| 이원, 최대 성분 > 100 µM | 27 | 21.8 |
+| 삼원, 최대 성분 > 100 µM | 8 | 28.4 |
+| 이원, 최대 성분 > 100 µM | 27 | 22.2 |
 
 구간 안에서는 합계가 늘어도 나빠지지 않고, 구간 밖에서 22–32 %p 로 무너진다. 33 과 100 µM 사이에는 측정이 없다.
 
@@ -164,15 +170,16 @@ NNLS · 밴드 세기는 표면 신호의 몫을 그대로 읽는 것이라 뿌�
 | 밴드 세기 3 만 (나누지 않음) | 73.1 % | 48.1 % | 1.53× | 5.0 µM |
 | 대조: 상수 8.4 µM | 48.7 % | 48.7 % | 2.79× | 6.8 µM |
 
-- **64 조건 전체**(52 조건 빼기 + 시험 12맵은 저장 모델 적용): 2배 이내 **95.8 %** (184/192) · 1.5배 이내 76.6 % ·
-  중앙 1.27× · RMSE 0.153 dex — 대조 상수 50.0 % · 2.11×.
-  성분별 2배 · 1.5배 이내: DQ 92.2 · 67.2 | TBZ 96.9 · 78.1 | THI 98.4 · 84.4 %.
+- **64 조건 전체**(52 조건 빼기 + 시험 12맵은 저장 모델 적용, 맵 파일을 게이트 포함 파이프라인으로 읽음 —
+  `fig4_concentration_64.csv`): 2배 이내 **95.8 %** (184/192) · 1.5배 이내 77.1 % ·
+  중앙 1.26× · RMSE 0.153 dex — 대조 상수 50.0 % · 2.11×.
+  성분별 2배 · 1.5배 이내: DQ 92.2 · 68.8 | TBZ 96.9 · 78.1 | THI 98.4 · 84.4 %.
   **세 성분이 모두 2배 이내인 조건 57/64** (대조 8/64). 가장 많은 성분을 맞힌 조건 41/42.
 - **참 농도 수준별**(64 조건, 세 성분 합쳐서), 2배 이내 / 판독 중앙값 (10–90 %):
-  3 µM 93.8 % / 3.8 (3.2–5.5) · 6 µM 93.8 % / 5.7 (3.9–8.0) · 12 µM 100 % / 11.1 (7.4–15.8) · 24 µM 95.8 % / 19.7 (12.7–32.5) µM.
+  3 µM 93.8 % / 3.8 (3.2–5.5) · 6 µM 93.8 % / 5.7 (3.9–8.0) · 12 µM 100 % / 11.1 (7.4–15.6) · 24 µM 95.8 % / 19.7 (12.7–32.5) µM.
   성분별 판독 중앙값(참 3 · 6 · 12 · 24): DQ 3.7 · 4.7 · 11.8 · 17.6 | TBZ 4.0 · 6.0 · 10.0 · 25.3 | THI 3.5 · 6.1 · 12.2 · 19.9 µM.
   성분별 2배 이내: DQ 94 · 81 · 100 · 94 | TBZ 88 · 100 · 100 · 100 | THI 100 · 100 · 100 · 94 %. **가장 약한 곳은 DQ 6 µM (81 %).**
-  등몰: 3/3/3 → 4.3 / 5.4 / 3.8 · 6/6/6 → 4.0 / 6.3 / 3.2 · 12/12/12 → 9.8 / 12.5 / 9.5 · 24/24/24 → 20.2 / 25.3 / 18.8 µM.
+  등몰: 3/3/3 → 4.3 / 5.4 / 3.8 · 6/6/6 → 4.0 / 6.3 / 3.3 · 12/12/12 → 9.8 / 12.5 / 9.5 · 24/24/24 → 20.2 / 25.3 / 18.8 µM.
 - **반복 CV** (64 조건 · 조건 묶음 5-fold × 20회, 학습과 같은 전처리), 2배 이내 / 1.5배 이내 / 중앙 / RMSE:
   **500–2000 cm⁻¹ ÷ 2137 PLS 8 (채택) 95.5 ± 1.0 %** / 76.8 % / 1.27× / 0.155 dex · 500–2500 cm⁻¹ ÷ 2137 PLS 8 94.3 ± 1.2 % /
   73.9 % / 1.28× / 0.161 dex · 세 밴드 ÷ 2137 + 조성 92.2 ± 1.0 % / 71.0 % / 1.27× / 0.166 dex · 대조 상수 50.0 %.
@@ -249,7 +256,7 @@ NNLS · 밴드 세기는 표면 신호의 몫을 그대로 읽는 것이라 뿌�
 - Concentration: "A second stage obtains the apparent concentration of each component by partial least-squares
   regression on the fingerprint region (500–2000 cm⁻¹) of the map-averaged spectrum divided by the 2137 cm⁻¹
   band of the ink in the same map, fitted on mixtures within 3–24 µM per component; 96 % of held-out components
-  fall within a factor of two of the applied value (median 1.27-fold), against 50 % for a constant guess, and
+  fall within a factor of two of the applied value (median 1.26-fold), against 50 % for a constant guess, and
   all three components do so in 57 of 64 conditions (constant guess, 8 of 64)."
 - Concentration, limit: "The reading resolves about a factor of two and is compressed towards the middle of the
   fitted range (log–log slope against the applied value, 0.75–0.83): components applied at 3 µM are read at a
@@ -290,7 +297,7 @@ NNLS · 밴드 세기는 표면 신호의 몫을 그대로 읽는 것이라 뿌�
 
 | 내용 | 위치 |
 |---|---|
-| **알고리즘 한 파일 정리(11-11)** | `scripts/paper_algorithm.py` — 전처리 · 게이트 · 조성 PLS · 농도 PLS · 맞춤 · 판독을 numpy/scipy/scikit-learn 만으로 다시 적은 것(`dl_model.py` 등 기존 코드는 그대로). 검증 `scripts/paper_algorithm_check.py` → `results/paper_algorithm_2026-11-11/check.txt`: 다시 맞춘 가중치 = 저장 모델(차이 0), 시험 20 맵 판독 = 기존 적용 경로, 게이트 803 픽셀 일치, 12.3 %p · 95.8 % 재현. 글씨맵도 같은 코드로 읽으면 Fig 4c 자료와 일치(41.2 / 23.1 / 35.7 %, 차이 5e-12) |
+| **알고리즘 한 파일 정리(11-11)** | `scripts/paper_algorithm.py` — 전처리 · 게이트 · 조성 PLS · 농도 PLS · 맞춤 · 판독을 numpy/scipy/scikit-learn 만으로 다시 적은 것(`dl_model.py` 등 기존 코드는 그대로). 검증 `scripts/paper_algorithm_check.py` → `results/paper_algorithm_2026-11-11/check.txt`: 다시 맞춘 가중치 = 저장 모델(차이 0), 시험 20 맵 판독 = 기존 적용 경로, 게이트 803 픽셀 일치, 모델에 저장된 평가 기록(게이트 없이 학습 픽셀로 채점) 12.3 %p · 95.8 % 재현 — Fig 4 수치는 같은 코드로 맵 파일을 게이트까지 거쳐 읽은 값(12.3 %p · 95.8 %). 글씨맵도 같은 코드로 읽으면 Fig 4c 자료와 일치(41.2 / 23.1 / 35.7 %, 차이 5e-12) |
 | 논문용 모델 학습 | `scripts/train_paper_pls.py` → `results/paper_pls_2026-11-10/` |
 | 농도 단계(PLS 회귀) | `dl_model.py` (`_spectrum_context` · `_fit_spectrum_pls` · `_apply_band_linear`, `train_model(conc_head="spectrum_pls_ink", conc_spectrum_range_cm=(500, 2000))` — `train_paper_pls.py` 의 기본값. 범위는 모델의 `uM["spectrum_range_cm"]` 에 적힌다) |
 | 적용 전처리 | `dl_model.py` (`trained_on_als` · `model_input`), `unmix.py` 의 dlpx 경로 |
@@ -299,5 +306,5 @@ NNLS · 밴드 세기는 표면 신호의 몫을 그대로 읽는 것이라 뿌�
 | 학습기 재평가(조성) | `scripts/learner_reeval_run.py` · `learner_reeval_analyze.py` → `results/learner_reeval_2026-11-10/` |
 | 고농도 · 구간 확장 검토 | `results/window_highconc_2026-11-10/` |
 | 농도 단계 비교 · 입력 빼 보기 · 이원 표 | `results/conc_head_2026-11-10/` (`replace_preview` · `input_ablation` · 실행한 그대로의 스크립트) |
-| Fig 4 | `scripts/fig4_paper_data.py` → `fig4_paper_figs.py` → `results/fig4_paper_pls_2026-11-10/` |
+| Fig 4 | `scripts/fig4_paper_data.py` → `fig4_paper_figs.py` → `results/fig4_paper_pls_2026-11-10/` — 패널용 표 `fig4_composition_64.csv` · `fig4_concentration_64.csv` · `lettering_pixels.csv`, 전체 원자료 `heldout_maps.csv`(102 맵) · `band_calibration.csv`, 수치 `summary.txt` |
 | Fig 3 · 3f | `scripts/fig3_final.py` · `fig3f_network.py` |

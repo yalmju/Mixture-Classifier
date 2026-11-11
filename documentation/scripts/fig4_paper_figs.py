@@ -7,7 +7,11 @@
                      fig4b_ternary_nnls_blk (순수 3성분 + 잉크 blank BLK 하나, 열 NNLSb)
   fig4c_lettering    글씨맵 — (i) 밴드 세기  (ii) 모델 조성 (NNLS 게이트 0.15 통과 픽셀만)
   eq_series          등몰 혼합물 held-out 판독 (3–333 µM/성분) — 33 은 읽히고 100 은 안 읽힌다
+  fig4_composition_64.csv    64 조건의 뿌린 조성 · 밴드 세기 판독 · PLS 판독 · 조성 오차 · 막대의 fold 구간
+  fig4_concentration_64.csv  64 조건의 뿌린 µM · PLS 겉보기 µM · 배수 오차
   summary.txt        그림에 들어간 수치 전부
+
+PLS 판독은 맵 파일을 판독 절차 그대로(전처리 → 게이트 → 조성 → 농도) 읽은 held-out 값이다(fig4_paper_data.py).
 
 정의(10-09 Fig 4b 와 동일): Ĉ = 판독 비율 × 선언 총량, 정확도 = 성분 평균 min(Ĉ/C, C/Ĉ), fold = 1/정확도.
 실행:  python documentation/scripts/fig4_paper_figs.py
@@ -58,6 +62,9 @@ def load():
     for m in ("NNLS", "NNLSb", "NNLSm", "PLS", "MLP"):
         d[m] = g([f"{k}_{m}" for k in COMP])
     d["band_h"] = g([f"{k}_band" for k in COMP])
+    d["UM"] = np.array([[float(r[f"{k}_PLS_uM"]) if r[f"{k}_PLS_uM"] != "" else np.nan for k in COMP] for r in rows])
+    d["gate"] = np.array([int(r["gate_px"]) for r in rows])
+    d["npx"] = np.array([int(r["n_px"]) for r in rows])
     return d
 
 
@@ -206,6 +213,75 @@ def fig_b(d, nn=MAIN_NNLS, name="fig4b_ternary", lab0="NNLS"):
     say(f"[b] (참고·그림 제외) 배포 MLP 저장 기록: fold 구간 {c.tolist()} · 2배 이내 {int(c[:3].sum())}/64 · 정확도 {acc.mean():.3f}")
 
 
+# ------------------------------------------------------------------ 농도 단계 + 64 조건 표
+def conc(d):
+    """64 조건의 겉보기 µM 대 뿌린 µM. 대조 = 농도 맞춤에 쓴 맵들의 기하평균 농도 하나를 모든 성분에 적는 것."""
+    g = d["grid"]
+    T, C, test = d["T"][g], d["UM"][g], d["split"][g] == "test"
+    fitted = (d["split"] == "loo") & np.isfinite(d["UM"]).all(1)
+    const = 10 ** np.log10(d["T"][fitted]).mean()
+    fold = np.maximum(C / T, T / C)
+    fc = np.maximum(const / T, T / const)
+    say(f"[conc] 64 조건 2배 이내 {100 * (fold <= 2).mean():.1f} % ({int((fold <= 2).sum())}/{fold.size}) · "
+        f"1.5배 이내 {100 * (fold <= 1.5).mean():.1f} % · 중앙 {np.median(fold):.2f}× · "
+        f"RMSE {np.sqrt(np.mean(np.log10(C / T) ** 2)):.3f} dex")
+    say("[conc] 성분별 2배 이내 " + " · ".join(f"{s} {100 * (fold[:, j] <= 2).mean():.1f} %" for j, s in enumerate(COMP))
+        + f" · 세 성분 모두 {int((fold <= 2).all(1).sum())}/{len(fold)}")
+    say(f"[conc] 대조(상수 {const:.1f} µM, 맞춤 {int(fitted.sum())} 맵) 2배 이내 {100 * (fc <= 2).mean():.1f} % · "
+        f"세 성분 모두 {int((fc <= 2).all(1).sum())}/{len(fc)}")
+    say(f"[conc] 시험 격자 {int(test.sum())} 맵: 2배 이내 {100 * (fold[test] <= 2).mean():.1f} % · "
+        f"1.5배 이내 {100 * (fold[test] <= 1.5).mean():.1f} % · 중앙 {np.median(fold[test]):.2f}× "
+        f"(대조 {100 * (fc[test] <= 2).mean():.1f} %)")
+    say("[conc] 성분별 1.5배 이내 " + " · ".join(f"{s} {100 * (fold[:, j] <= 1.5).mean():.1f} %" for j, s in enumerate(COMP))
+        + f" · 대조 중앙 {np.median(fc):.2f}×")
+    top = np.array([(t == t.max()).sum() == 1 for t in T])
+    say(f"[conc] 가장 많은 성분을 맞힌 조건 {int((C[top].argmax(1) == T[top].argmax(1)).sum())}/{int(top.sum())}")
+    lv = (3.0, 6.0, 12.0, 24.0)
+    slope = lambda t, c: np.polyfit(np.log10(t).ravel(), np.log10(c).ravel(), 1)[0]  # noqa: E731
+    say(f"[conc] log 판독 대 log 뿌린 농도 기울기 {slope(T, C):.2f} · 성분별 "
+        + " · ".join(f"{s} {slope(T[:, j], C[:, j]):.2f}" for j, s in enumerate(COMP)))
+    say("[conc] 뿌린 농도 수준별(세 성분 합쳐서) 2배 이내 / 판독 중앙 (10–90 %): "
+        + " · ".join(f"{v:g} µM {100 * (fold[T == v] <= 2).mean():.1f} % / {np.median(C[T == v]):.1f} "
+                     f"({np.percentile(C[T == v], 10):.1f}–{np.percentile(C[T == v], 90):.1f})" for v in lv))
+    say("[conc] 성분별 판독 중앙(3 · 6 · 12 · 24): "
+        + " | ".join(f"{s} " + " · ".join(f"{np.median(C[T[:, j] == v, j]):.1f}" for v in lv) for j, s in enumerate(COMP)))
+    say("[conc] 성분별 수준별 2배 이내 %: "
+        + " | ".join(f"{s} " + " · ".join(f"{100 * (fold[T[:, j] == v, j] <= 2).mean():.0f}" for v in lv)
+                     for j, s in enumerate(COMP)))
+    say("[conc] 등몰: " + " · ".join(f"{v:g}/{v:g}/{v:g} → " + " / ".join(f"{x:.1f}" for x in C[(T == v).all(1)][0]) for v in lv))
+    return fold
+
+
+def tables(d, fold_um):
+    """그림을 직접 그릴 때 쓰는 64 조건 표 두 개."""
+    g = d["grid"]
+    T = d["T"][g]
+    Tn = T / T.sum(1, keepdims=True)
+    name, split = np.array(d["name"])[g], d["split"][g]
+    kind = {"loo": "left out of the fit", "test": "test"}
+    folds = {m: fold_of(d[m][g], T)[0] for m in ("BAND", "PLS")}
+    with open(os.path.join(OUT, "fig4_composition_64.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["condition", "held_out_as"] + [f"{k}_applied_uM" for k in COMP] + [f"{k}_applied_share" for k in COMP]
+                   + [f"{k}_band_share" for k in COMP] + [f"{k}_PLS_share" for k in COMP]
+                   + ["band_error_pp", "PLS_error_pp", "band_fold", "PLS_fold", "band_fold_bin", "PLS_fold_bin",
+                      "gate_px", "n_px"])
+        for i in range(len(T)):
+            e = [50 * np.abs(d[m][g][i] - Tn[i]).sum() for m in ("BAND", "PLS")]
+            fo = [folds[m][i] for m in ("BAND", "PLS")]
+            w.writerow([name[i], kind[split[i]], *T[i].astype(int), *np.round(Tn[i], 4), *np.round(d["BAND"][g][i], 4),
+                        *np.round(d["PLS"][g][i], 4), *np.round(e, 2), *np.round(fo, 3),
+                        *[BANDL[int(np.searchsorted([1.25, 1.5, 2.0], v, side="left"))] for v in fo],
+                        d["gate"][g][i], d["npx"][g][i]])
+    with open(os.path.join(OUT, "fig4_concentration_64.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["condition", "held_out_as"] + [f"{k}_applied_uM" for k in COMP] + [f"{k}_PLS_uM" for k in COMP]
+                   + [f"{k}_fold" for k in COMP] + ["all_within_2x"])
+        for i in range(len(T)):
+            w.writerow([name[i], kind[split[i]], *T[i].astype(int), *np.round(d["UM"][g][i], 2), *np.round(fold_um[i], 3),
+                        int((fold_um[i] <= 2).all())])
+
+
 # ------------------------------------------------------------------ (c) lettering map
 def grid_image(coords, values, fill=np.nan):
     xs, ys = np.unique(np.round(coords[:, 0], 3)), np.unique(np.round(coords[:, 1], 3))
@@ -323,6 +399,15 @@ def main():
             f"격자 밖 {int((~g).sum())}맵 조성 오차 {50 * np.abs(d[m][~g] - Tn[~g]).sum(1).mean():.1f} %p")
     say(f"held-out 맵 {len(d['name'])} · 64격자 {int(d['grid'].sum())} (loo {int((d['grid'] & (d['split'] == 'loo')).sum())}"
         f" + test {int((d['grid'] & (d['split'] == 'test')).sum())})")
+    gp = d["gate"] / d["npx"]
+    eg = 50 * np.abs(d["PLS"] - d["T"] / d["T"].sum(1, keepdims=True)).sum(1)[d["grid"]]
+    sg = d["split"][d["grid"]]
+    say(f"[gate] 게이트 통과 픽셀: 64격자 {int(d['gate'][d['grid']].sum())}/{int(d['npx'][d['grid']].sum())}"
+        f" ({100 * gp[d['grid']].mean():.1f} %, 가장 낮은 맵 {100 * gp[d['grid']].min():.0f} %) · "
+        f"격자 밖 {100 * gp[~d['grid']].mean():.1f} % (가장 낮은 맵 {100 * gp[~d['grid']].min():.0f} %)")
+    say(f"[PLS] 64 조건 조성 오차 {eg.mean():.1f} %p · 맞춤에서 뺀 {int((sg == 'loo').sum())} 조건 {eg[sg == 'loo'].mean():.1f} %p · "
+        f"시험 {int((sg == 'test').sum())} 조건 {eg[sg == 'test'].mean():.1f} %p")
+    tables(d, conc(d))
     fig_b(d, "BAND", "fig4b_ternary", "Band intensity")        # 본문: 신호 세기 + 단일성분 검량선 | PLS
     fig_b(d, MAIN_NNLS, "fig4b_ternary_nnls")                  # SI: 파이프라인 NNLS | PLS
     fig_b(d, "NNLSb", "fig4b_ternary_nnls_blk")                # SI: 순수 3성분 + BLK | PLS

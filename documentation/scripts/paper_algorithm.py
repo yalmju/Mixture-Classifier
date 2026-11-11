@@ -330,11 +330,16 @@ def read_map(wn, cube, model, templates=None):
 
     ``templates`` are the class-mean spectra of the gate (see `class_templates`);
     without them the gate is skipped and every pixel is read."""
-    names = model["analytes"]
     ax, X = prepare(wn, cube)
-    shares = pixel_shares(model["composition"], X)
-    hit = (gate(wn, cube, templates, names) if templates is not None
+    hit = (gate(wn, cube, templates, model["analytes"]) if templates is not None
            else np.ones(len(X), bool))
+    return read_pixels(ax, X, hit, model)
+
+
+def read_pixels(ax, X, hit, model):
+    """The prepared pixels of one map and their gate → composition and apparent µM."""
+    names = model["analytes"]
+    shares = pixel_shares(model["composition"], X)
     if not hit.any():
         return {"composition": None, "uM": None, "pixel_shares": shares, "gate": hit}
     comp = map_composition(shares[hit], len(names))

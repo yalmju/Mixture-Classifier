@@ -1,18 +1,24 @@
 # -*- coding: utf-8 -*-
 """Fig 4 원천 데이터 — 논문용 PLS 모델(paper/pls-composition) 기준으로 다시 뽑는다.
 
-  1) heldout_maps.csv — 측정 혼합물 맵 전부(학습 82 + 시험 20)의 **held-out** 조성 판독.
-     PLS·MLP 는 모델에 저장된 기록(조건 held-out `loo_eval` + 시험 `test_eval`)이고 다시 적용하지 않는다
-     (적용하면 자기 답을 외운다). NNLS 는 같은 맵을 세 가지로 푼 것(본문 기준선은 잉크 blank BLK 하나만 넣은 NNLSb) — 파이프라인 NNLS(`unmix_map`, 게이트 0.15)와
+  1) heldout_maps.csv — 측정 혼합물 맵 전부(학습 82 + 시험 20)의 **held-out** 판독.
+     PLS 는 맵 파일을 판독 절차 그대로 읽은 값이다(`paper_algorithm`: 전처리 → 게이트 → 조성 → 농도).
+     학습 맵은 그 맵의 조성(같은 비율 전부)을 빼고 다시 맞춘 조성 가중치와 그 조건을 빼고 다시 맞춘 농도 가중치로,
+     시험 맵은 저장 모델로 읽는다. `{DQ,TBZ,THI}_PLS` = 조성, `{DQ,TBZ,THI}_PLS_uM` = 겉보기 µM(세 성분이 모두
+     3–24 µM 인 맵만), `gate_px` = 게이트 통과 픽셀 수. 모델 파일은 읽기만 한다.
+     MLP 는 배포 모델에 저장된 기록(`loo_eval` + `test_eval`, 참고용)이다.
+     NNLS 는 같은 맵을 세 가지로 푼 것(본문 기준선은 잉크 blank BLK 하나만 넣은 NNLSb) — 파이프라인 NNLS(`unmix_map`, 게이트 0.15)와
      모델 내장 템플릿 NNLS(`surface_detection`, 열 이름 NNLSm).
      `{DQ,TBZ,THI}_band` = 게이트 통과 픽셀 평균 스펙트럼의 특성 밴드 높이(ALS 기준선 제거 뒤 ±10 cm⁻¹ 최댓값, counts),
      `band_calibration.csv` = 단일성분 희석 계열의 같은 밴드 높이 — "신호 세기 + 단일성분 검량선" 판독의 재료.
      옛 Fig 4b 원천(22_parity_uM_knowntotal_FINAL.csv)은 생성 스크립트가 없어 재현되지 않아 쓰지 않는다.
      `--letter-only` 를 주면 1) 을 건너뛴다(102맵 NNLS 가 몇 분 걸린다).
-  2) lettering_pixels.npz — 글씨맵(260812, 다른 배치, 12 µM each 1:1:1)의 픽셀 단위 결과:
-     NNLS 게이트·NNLS 표면 비율·밴드 세기·PLS/MLP 픽셀 조성·PLS 픽셀 µM.
+  2) lettering_pixels.npz · lettering_pixels.csv — 260812 맵(다른 배치, 12 µM each 1:1:1)의 픽셀 단위 결과:
+     NNLS 게이트·NNLS 표면 비율·밴드 세기·PLS/MLP 픽셀 조성·PLS 픽셀 µM (csv 에는 좌표 · 게이트 · 밴드 세기 ·
+     PLS 픽셀 조성 · 파이프라인 NNLS 비율).
 
-실행:  python -u documentation/scripts/fig4_paper_data.py
+실행:  python -u documentation/scripts/fig4_paper_data.py [--table=학습 표를 넣어 둘 .npz]
+       (학습 표 = 95 맵 전처리. 몇 분 걸려서, 경로를 주면 한 번 만든 것을 다시 쓴다)
 """
 from __future__ import annotations
 
@@ -27,10 +33,12 @@ from scipy.optimize import nnls
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import paths  # noqa: E402
+import paper_algorithm as A  # noqa: E402
+from paper_algorithm_check import load_table, samples  # noqa: E402
 
 sys.path.insert(0, paths.REPO)
 import dl_model  # noqa: E402
-from dataset import load_preprocess  # noqa: E402
+from dataset import discover_dataset, load_preprocess  # noqa: E402
 from io_utils import load_calibration_csv  # noqa: E402
 from real_data import load_map  # noqa: E402
 from sers_mixture import desaturate  # noqa: E402
@@ -66,6 +74,55 @@ def heldout(model):
                 continue                                   # 순수 꼭짓점·blank 는 혼합물이 아니다
             v = np.clip(np.asarray(pr, float)[cols], 0, None)
             out[n] = (v / v.sum(), tag)
+    return out
+
+
+def gated_reads(table_cache=None):
+    """측정 혼합물 맵 전부의 held-out 판독 — 맵 파일을 판독 절차 그대로 읽는다(전처리 → 게이트 → 조성 → 농도).
+
+    학습 맵: 조성 가중치는 그 맵과 같은 비율의 맵을 모두 빼고, 농도 가중치는 그 조건을 빼고 다시 맞춘다
+    (맞춤 자료와 방식은 저장 모델과 같다). 시험 맵: 저장 모델. 농도는 세 성분이 모두 3–24 µM 인 맵만 적는다.
+    파일명 → {"share": 조성 (3,), "uM": 겉보기 µM (3,) 또는 None, "gate": 통과 픽셀 수, "n": 픽셀 수, "split"}"""
+    fit_maps, test_maps = samples()
+    table = load_table(fit_maps, table_cache)
+    saved = A.load_model(PLS)
+    cols = [saved["analytes"].index(s) for s in COMP]
+    templates = A.class_templates({c: [p for _b, p, _r in maps] for c, maps in discover_dataset(paths.PURE)})
+    rows, window = A.map_rows(table), A.in_window(table["uM"])
+    cond = np.array([",".join(f"{v:g}" for v in t) for t in table["uM"]], object)
+    group_px = table["group"][table["map"]]
+    w_comp, w_conc = {}, {}
+
+    def without(i):
+        """맵 i 의 조성 · 조건 없이 맞춘 가중치."""
+        g = table["group"][i]
+        if g not in w_comp:
+            keep = group_px != g
+            w_comp[g] = A.fit_composition(table["X"][keep], table["Y"][keep])
+        conc = saved["concentration"]                       # 구간 밖 맵은 농도 맞춤에 들어간 적이 없다
+        if window[i]:
+            if cond[i] not in w_conc:
+                keep = window & (cond != cond[i])
+                w_conc[cond[i]] = A.fit_concentration(table["wn"], rows[keep], table["uM"][keep])
+            conc = w_conc[cond[i]]
+        return dict(saved, composition=w_comp[g], concentration=conc)
+
+    jobs = [(p, i) for i, (p, label) in enumerate(fit_maps) if isinstance(label, dict)] + [(p, None) for p, _ in test_maps]
+    out = {}
+    for k, (path, i) in enumerate(jobs):
+        wn, cube = A.load_map(path)
+        ax, X = A.prepare(wn, cube)
+        hit = A.gate(wn, cube, templates, saved["analytes"])
+        r = A.read_pixels(ax, X, hit, saved if i is None else without(i))
+        if r["composition"] is None:
+            raise SystemExit(f"게이트를 통과한 픽셀이 없다: {base(path)}")
+        um = np.array([r["uM"][s] for s in saved["analytes"]])[cols]
+        out[base(path)] = {"share": np.array([r["composition"][s] for s in saved["analytes"]])[cols],
+                           "uM": um if A.in_window(true_uM(base(path))[None])[0] else None,
+                           "gate": int(hit.sum()), "n": int(len(hit)), "split": "test" if i is None else "loo"}
+        if k % 10 == 0:
+            print(f"[판독 {k + 1}/{len(jobs)}] {base(path)}  게이트 {int(hit.sum())}/{len(hit)}"
+                  f"  조성 {np.round(out[base(path)]['share'] * 100).astype(int)}", flush=True)
     return out
 
 
@@ -129,22 +186,27 @@ def main():
     pls, mlp = dl_model.load_model(PLS), dl_model.load_model(MLP)
     cfg = load_preprocess(paths.PURE)
     baseline = bool(pls.get("baseline", cfg["baseline"]))
-    hp, hm = heldout(pls), heldout(mlp)
-    assert set(hp) == set(hm), "두 모델의 held-out 맵 목록이 다르다"
-
     if "--letter-only" not in sys.argv:
-        heldout_table(pls, cfg, baseline, hp, hm)
+        hp, hm = heldout(pls), heldout(mlp)
+        assert set(hp) == set(hm), "두 모델의 held-out 맵 목록이 다르다"
+        cache = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--table=")), None)
+        heldout_table(pls, cfg, baseline, hp, hm, gated_reads(cache))
     lettering(pls, mlp, cfg, baseline)
 
 
-def heldout_table(pls, cfg, baseline, hp, hm):
+def heldout_table(pls, cfg, baseline, hp, hm, gr):
+    """hp = 저장 모델의 기록(게이트 없이 맞춤용 픽셀로 채점한 것 — 맵 목록과 비교에만 쓴다), gr = `gated_reads`."""
+    assert set(hp) == set(gr) and all(hp[n][1] == gr[n]["split"] for n in hp), "맵 목록이 저장 기록과 다르다"
     bands, hw = band_calibration(pls, cfg)
     rows = []
     for i, n in enumerate(sorted(hp, key=lambda s: (tuple(true_uM(s)), s))):
         t = true_uM(n)
         nn, nb, nm, bh, nhit, npx = nnls_map(os.path.join(MIXDIR, n), cfg, baseline, pls, bands, hw)
-        rows.append([n[:-4], hp[n][1], int(set(t) <= GRID), *t, *np.round(nn, 4), *np.round(nb, 4), *np.round(nm, 4),
-                     *np.round(hp[n][0], 4), *np.round(hm[n][0], 4), *np.round(bh, 1), nhit, npx])
+        g = gr[n]
+        assert npx == g["n"], n
+        um = [""] * 3 if g["uM"] is None else list(np.round(g["uM"], 3))
+        rows.append([n[:-4], g["split"], int(set(t) <= GRID), *t, *np.round(nn, 4), *np.round(nb, 4), *np.round(nm, 4),
+                     *np.round(g["share"], 4), *np.round(hm[n][0], 4), *np.round(bh, 1), *um, g["gate"], nhit, npx])
         if i % 10 == 0:
             print(f"[{i + 1}/{len(hp)}] {n}  NNLS {np.round(nn * 100).astype(int)}  NNLSb {np.round(nb * 100).astype(int)}  NNLSm {np.round(nm * 100).astype(int)}"
                   f"  hit {nhit}/{npx}", flush=True)
@@ -152,9 +214,20 @@ def heldout_table(pls, cfg, baseline, hp, hm):
         w = csv.writer(f)
         w.writerow(["condition", "split", "grid64"] + [f"{k}_true_uM" for k in COMP]
                    + [f"{k}_{m}" for m in ("NNLS", "NNLSb", "NNLSm", "PLS", "MLP") for k in COMP]
-                   + [f"{k}_band" for k in COMP] + ["nnls_hit_px", "n_px"])
+                   + [f"{k}_band" for k in COMP] + [f"{k}_PLS_uM" for k in COMP] + ["gate_px", "nnls_hit_px", "n_px"])
         w.writerows(rows)
     print("grid64:", sum(r[2] for r in rows), "· 전체", len(rows), flush=True)
+    # 저장 기록(게이트 없음)과의 차이
+    names = sorted(hp)
+    grid = np.array([set(true_uM(n)) <= GRID for n in names])
+    T = np.array([true_uM(n) / true_uM(n).sum() for n in names])
+    new, old = np.array([gr[n]["share"] for n in names]), np.array([hp[n][0] for n in names])
+    passed = np.array([gr[n]["gate"] for n in names]) / np.array([gr[n]["n"] for n in names])
+    err = lambda S: 50 * np.abs(S - T).sum(1)  # noqa: E731
+    print(f"게이트 통과 픽셀: 64 격자 {100 * passed[grid].mean():.1f} % (가장 낮은 맵 {100 * passed[grid].min():.0f} %)"
+          f" · 격자 밖 {100 * passed[~grid].mean():.1f} % (가장 낮은 맵 {100 * passed[~grid].min():.0f} %)", flush=True)
+    print(f"64 격자 조성 오차: 게이트 판독 {err(new)[grid].mean():.2f} %p · 저장 기록 {err(old)[grid].mean():.2f} %p"
+          f" · 맵별 조성 차이 최대 {100 * np.abs(new - old)[grid].max():.1f} %p", flush=True)
 
 
 def lettering(pls, mlp, cfg, baseline):
@@ -194,6 +267,11 @@ def lettering(pls, mlp, cfg, baseline):
              nnls=nn, nnls_b=nb, nnls_m=nm, band=band, pls=px["PLS"], mlp=px["MLP"], pls_blank=px["PLS_blank"],
              mlp_blank=px["MLP_blank"], pls_map=px["PLS_map"], mlp_map=px["MLP_map"],
              uM_pls=um, comp=np.array(COMP), bands_cm=np.array([bands[s] for s in COMP]))
+    with open(os.path.join(OUT, "lettering_pixels.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["x", "y", "gate"] + [f"{k}_band" for k in COMP] + [f"{k}_PLS" for k in COMP] + [f"{k}_NNLS" for k in COMP])
+        for c, h, b, p, a in zip(np.asarray(r.coords, float), hit, band, px["PLS"], nn):
+            w.writerow([*np.round(c[:2], 3), int(h), *np.round(b, 1), *np.round(p, 4), *np.round(a, 4)])
     print(f"글씨맵: hit {hit.sum()}/{len(hit)} px", flush=True)
     print("  PLS 맵 판독 DQ/TBZ/THI", np.round(px["PLS_map"] * 100, 1), "· MLP", np.round(px["MLP_map"] * 100, 1), flush=True)
     for tag, v in (("NNLS", nn), ("NNLSb", nb), ("NNLSm", nm), ("PLS", px["PLS"]), ("MLP", px["MLP"])):

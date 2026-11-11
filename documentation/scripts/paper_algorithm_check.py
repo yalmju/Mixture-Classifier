@@ -64,6 +64,21 @@ def samples():
     return train + pure + blank, test
 
 
+def load_table(fit_maps, cache=None):
+    """학습 표(95 맵 전처리). ``cache`` 경로를 주면 한 번 만든 것을 다시 쓴다."""
+    if cache and os.path.isfile(cache):
+        table = dict(np.load(cache, allow_pickle=True))
+        table["paths"] = list(table["paths"]); table["analytes"] = list(table["analytes"])
+    else:
+        table = A.training_table(fit_maps, progress=lambda s: print("  ", s, flush=True))
+        if cache:
+            np.savez(cache, **{k: np.asarray(v, object) if k in ("paths", "group") else np.asarray(v)
+                               for k, v in table.items()})
+    if table["paths"] != [p for p, _ in fit_maps]:
+        raise SystemExit("저장해 둔 학습 표가 지금 맵 목록과 다르다 — 지우고 다시 만들 것")
+    return table
+
+
 def grid_uM(path):
     m = _NAME.match(base(path))
     c = tuple(float(m.group(i)) for i in (1, 2, 3)) if m else None
@@ -75,16 +90,7 @@ def main():
     fit_maps, test_maps = samples()
     say(f"학습 {len(fit_maps)} 맵 · 시험 {len(test_maps)} 맵")
 
-    if cache and os.path.isfile(cache):
-        table = dict(np.load(cache, allow_pickle=True))
-        table["paths"] = list(table["paths"]); table["analytes"] = list(table["analytes"])
-    else:
-        table = A.training_table(fit_maps, progress=lambda s: print("  ", s, flush=True))
-        if cache:
-            np.savez(cache, **{k: np.asarray(v, object) if k in ("paths", "group") else np.asarray(v)
-                               for k, v in table.items()})
-    if table["paths"] != [p for p, _ in fit_maps]:
-        raise SystemExit("저장해 둔 학습 표가 지금 맵 목록과 다르다 — 지우고 다시 만들 것")
+    table = load_table(fit_maps, cache)
     say(f"학습 표: {len(table['paths'])} 맵 · {len(table['X'])} 스펙트럼 · {table['X'].shape[1]} 점")
 
     saved = A.load_model(MODEL)
