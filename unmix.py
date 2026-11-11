@@ -330,9 +330,12 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         # reconstructing from them would misread nearly every pixel as low-R².
         if progress:
             progress("composition model — per-pixel prediction")
-        from dl_model import apply_model_pixels
+        from dl_model import apply_model_pixels, model_input
         A_ls = A.copy()
-        Pk = apply_model_pixels(dl_model, wn, spectra)              # (n_px, n_subs)
+        # the model reads spectra prepared as its training spectra were (baseline removed
+        # when training removed it), not necessarily the display spectra above
+        wn_in, spectra_in = model_input(dl_model, wn, cube_u, corrected=False)
+        Pk = apply_model_pixels(dl_model, wn_in, spectra_in)        # (n_px, n_subs)
         sub_names = dl_model.get("subs", [])
         blank = dl_model.get("blank")
         if blank and blank in sub_names:
@@ -395,7 +398,7 @@ def unmix_map(data_dir, test_path, method="nnls", baseline=True, trim=None,
         from dl_model import apply_uM_pixels
         if progress:
             progress("composition model — per-pixel concentration")
-        um, unames, um_meta = apply_uM_pixels(dl_model, wn, spectra, return_meta=True,
+        um, unames, um_meta = apply_uM_pixels(dl_model, wn_in, spectra_in, return_meta=True,
                                               hit=hit)
         if um is not None:
             conc = np.zeros((len(spectra), len(nonbg)))

@@ -1,7 +1,15 @@
 """논문용 모델 — 배포 모델(260831 FINAL)과 같은 데이터·전처리·분할, 조성 단계만 PLS.
 
   배포 모델은 앱 Composition 탭에서 학습됐다(`page_compose._opts`). 여기서는 같은 인자를
-  코드로 적어 `method="pls"` 한 가지만 바꾼다. 농도 단계(검량 + 잔차망)는 그대로다.
+  코드로 적어 조성 단계를 `method="pls"` 로, 농도 단계를 PLS 회귀(`conc_head="spectrum_pls_ink"`)로 바꾼다.
+
+    농도    log10 C = PLS 회귀(잠재변수 8)[ ln(1 + 맵 평균 스펙트럼) − ln(1 + I_ink) ]
+            맵 평균 스펙트럼의 지문 영역(500–2000 cm⁻¹)을 잉크 2137 cm⁻¹ 밴드 세기 I_ink(내부 기준)로 나눈 것이 입력.
+            잉크 밴드 자체와 그 위 빈 구간(2000–2500 cm⁻¹)은 회귀에 넣지 않는다(2026-11-11 결정,
+            근거: documentation/results/conc_improve_2026-11-11/ — 500–2500 판은 _spec2500.dlm 으로 백업).
+            조성 단계의 몫은 입력으로 쓰지 않는다.
+            3–24 µM 격자 맵(52)만으로 맞춘다. 격자 밖 맵(50–500 µM)은 맞춤에 넣지 않는다
+            (근거: documentation/results/conc_head_2026-11-10/ — specpls_cv.txt 가 마지막 비교)
 
     학습 82맵 + 순수·blank 13맵 / 시험 20맵  (Pure/mixtures.json 의 role, 라벨은 파일명)
     전처리  Pure/preprocess.json  (baseline 끔 · 500–2500 cm⁻¹ · 맵당 대표 100픽셀)
@@ -13,7 +21,10 @@
 
   배포 MLP 모델 파일은 건드리지 않는다. 새 모델은 별도 폴더에 저장한다.
 
-  실행:  ../../.venv/bin/python3 -u train_paper_pls.py
+  실행:  ../../.venv/bin/python3 -u train_paper_pls.py [spectrum_pls_ink | band_linear_ink | band_linear]
+         인자 없으면 spectrum_pls_ink = 논문 모델(pls_composition_261110.dlm 을 다시 쓴다, 2026-11-11 확정).
+         band_linear_ink(세 밴드 ÷ 2137 + 몫, 11-10 식) → _bandink, band_linear(잉크 밴드로 나누지 않은 식) → _bandonly
+         꼬리표가 붙은 별도 파일로 저장하고 기록도 summary_*.txt 로 따로 남긴다.
 """
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
@@ -35,11 +46,15 @@ PURE = paths.PURE
 FINAL = f"{paths.DATA}/Ratio/260814_mixture_final"
 DEPLOYED = f"{paths.RESULTS}/260831_Model_FINAL/mlp_composition_260831_final.dlm"
 OUT_DIR = f"{paths.RESULTS}/261110_Model_PLS_paper"
-OUT = f"{OUT_DIR}/pls_composition_261110.dlm"
+CONC_HEAD = sys.argv[1] if len(sys.argv) > 1 else "spectrum_pls_ink"
+_TAG = {"spectrum_pls_ink": "", "band_linear_ink": "_bandink", "band_linear": "_bandonly"}[CONC_HEAD]
+OUT = f"{OUT_DIR}/pls_composition_261110{_TAG}.dlm"
 CALIB = f"{OUT_DIR}/calibration_spectra_260821.csv"
 LOG_DIR = f"{paths.REPO}/documentation/results/paper_pls_2026-11-10"
 N_COMPONENTS = 8
 GRID = {3, 6, 12, 24}
+CONC_RANGE_UM = (3, 24)                   # 농도 회귀를 맞추는 범위 = 읽을 수 있는 창
+CONC_SPECTRUM_CM = (500, 2000)            # 농도 회귀가 보는 스펙트럼 범위 (PLS 회귀일 때만)
 _NAME = re.compile(r"DQ(\d+)-TB(\d+)-THI?(\d+)")
 
 
@@ -81,8 +96,17 @@ def report(tag, m, lines):
     if ev:
         f, g = um_within2(ev)
         fg = f[g]
-        lines.append(f"{tag:5s} 농도 조건 held-out 64격자: 2배 이내 {100 * np.nanmean(fg <= 2):.1f} %"
-                     f" · 3배 이내 {100 * np.nanmean(fg <= 3):.1f} % · 중앙 배수 {np.nanmedian(fg):.2f}×")
+        t = np.asarray(ev["true_uM"], float)[g]
+        const = float(np.exp(np.log(t).mean()))              # 대조: 격자 기하평균 하나로 찍기
+        fc = np.maximum(const / t, t / const)
+        lines.append(f"{tag:5s} 농도 조건 held-out 64격자({g.sum()}맵): 2배 이내 {100 * np.nanmean(fg <= 2):.1f} %"
+                     f" · 1.5배 이내 {100 * np.nanmean(fg <= 1.5):.1f} % · 중앙 배수 {np.nanmedian(fg):.2f}×"
+                     f"  | 대조(상수 {const:.1f} µM) 2배 이내 {100 * np.mean(fc <= 2):.1f} %")
+        u = m["uM"]
+        if u.get("kind") == "band_linear_uM_v1":
+            lines.append(f"      농도 회귀 계수 (맞춤 {u['n_maps']}맵, {u['fit_range_uM']} µM) — " + " · ".join(u["feature_names"]))
+            for j, s_ in enumerate(u["subs"]):
+                lines.append(f"        log10 C_{s_:3s} = " + "  ".join(f"{v:+.3f}" for v in np.asarray(u["coef"])[:, j]))
 
 
 def _here(it):
@@ -117,13 +141,15 @@ def main():
         pixel_sampling=cfg.get("pixel_sampling", "representative"),
         sampling_seed=int(cfg.get("sampling_seed", 0)),
         include_blank=True, nnls_screen=False, equal_volume_mix=False,
-        loo=True, test_items=test, progress=lambda s: print("  ", s, flush=True))
+        loo=True, test_items=test, conc_head=CONC_HEAD, conc_fit_range_uM=CONC_RANGE_UM,
+        conc_spectrum_range_cm=CONC_SPECTRUM_CM if CONC_HEAD == "spectrum_pls_ink" else None,
+        progress=lambda s: print("  ", s, flush=True))
 
     if (m["n_maps"], m["n_train"]) != (dep["n_maps"], dep["n_train"]):
         raise SystemExit(f"학습 집합이 배포 모델과 다르다: {m['n_maps']}맵 {m['n_train']}스펙트럼"
                          f" ≠ {dep['n_maps']}맵 {dep['n_train']}스펙트럼")
     dl_model.save_model(m, OUT)
-    lines =[f"논문용 PLS 조성 모델 — 잠재변수 {N_COMPONENTS}개, 학습 {m['n_maps']}맵 {m['n_train']}스펙트럼",
+    lines =[f"논문용 PLS 조성 모델 — 잠재변수 {N_COMPONENTS}개, 학습 {m['n_maps']}맵 {m['n_train']}스펙트럼 · 농도 단계 {CONC_HEAD}",
              f"저장: {OUT}", ""]
     report("PLS", m, lines)
     lines.append("")
@@ -131,9 +157,9 @@ def main():
     lines.append("  (MLP 줄은 배포 모델에 저장된 기록. 둘 다 분할 한 번의 결과라 우열 근거는 아니다 —"
                  " 우열은 learner_reeval_2026-11-10 의 반복 CV 를 볼 것)")
     txt = "\n".join(lines); print("\n" + txt)
-    with open(f"{LOG_DIR}/summary.txt", "w", encoding="utf-8") as fh:
+    with open(f"{LOG_DIR}/summary{_TAG}.txt", "w", encoding="utf-8") as fh:
         fh.write(txt + "\n")
-    with open(f"{LOG_DIR}/eval.json", "w", encoding="utf-8") as fh:
+    with open(f"{LOG_DIR}/eval{_TAG}.json", "w", encoding="utf-8") as fh:
         json.dump({"loo_eval": m.get("loo_eval"), "test_eval": m.get("test_eval"),
                    "uM_loo_eval": (m.get("uM") or {}).get("loo_eval")}, fh, ensure_ascii=False)
 

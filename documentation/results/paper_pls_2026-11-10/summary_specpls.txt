@@ -1,0 +1,11 @@
+논문용 PLS 조성 모델 — 잠재변수 8개, 학습 95맵 9498스펙트럼 · 농도 단계 spectrum_pls_ink
+저장: /Users/seungki2/Library/CloudStorage/GoogleDrive-seungki1015@gmail.com/내 드라이브/ACF_PEST_DB/1. results/261110_Model_PLS_paper/pls_composition_261110_specpls.dlm
+
+PLS   조성 조건 held-out (학습 82맵)   64격자  12.6 %p (n=52) · 격자 밖  23.4 %p (n=30)
+PLS   조성 시험 20맵                 64격자  10.9 %p (n=12) · 격자 밖  20.1 %p (n=8)
+PLS   농도 조건 held-out 64격자(52맵): 2배 이내 93.6 % · 1.5배 이내 71.8 % · 중앙 배수 1.28×  | 대조(상수 8.4 µM) 2배 이내 48.7 %
+
+MLP   조성 조건 held-out (학습 82맵)   64격자  15.7 %p (n=52) · 격자 밖  22.7 %p (n=30)
+MLP   조성 시험 20맵                 64격자  10.1 %p (n=12) · 격자 밖  25.7 %p (n=8)
+MLP   농도 조건 held-out 64격자(52맵): 2배 이내 78.2 % · 1.5배 이내 55.8 % · 중앙 배수 1.42×  | 대조(상수 8.4 µM) 2배 이내 48.7 %
+  (MLP 줄은 배포 모델에 저장된 기록. 둘 다 분할 한 번의 결과라 우열 근거는 아니다 — 우열은 learner_reeval_2026-11-10 의 반복 CV 를 볼 것)

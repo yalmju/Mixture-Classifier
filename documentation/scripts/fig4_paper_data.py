@@ -174,14 +174,14 @@ def lettering(pls, mlp, cfg, baseline):
     nm = nm / np.clip(nm.sum(1, keepdims=True), 1e-12, None)
     px = {}
     for tag, m in (("PLS", pls), ("MLP", mlp)):
-        pk = np.clip(np.asarray(dl_model.apply_model_pixels(m, wn, S), float), 0, None)
+        pk = np.clip(np.asarray(dl_model.apply_model_pixels(m, *dl_model.model_input(m, wn, S, corrected=baseline)), float), 0, None)
         c = pk[:, [list(m["subs"]).index(s) for s in COMP]]
         px[tag] = c / np.clip(c.sum(1, keepdims=True), 1e-12, None)
         px[tag + "_blank"] = pk[:, list(m["subs"]).index(m["blank"])] / np.clip(pk.sum(1), 1e-12, None)
     bands = dict(zip(pls["uM"]["subs"], np.asarray(pls["uM"]["bands_cm"], float)))
     hw = float(pls["uM"]["band_half_width_cm"])
     band = np.stack([S[:, (wn >= bands[s] - hw) & (wn <= bands[s] + hw)].max(1) for s in COMP], 1)
-    um, usubs = dl_model.apply_uM_pixels(pls, wn, S, hit=hit)
+    um, usubs = dl_model.apply_uM_pixels(pls, *dl_model.model_input(pls, wn, S, corrected=baseline), hit=hit)
     um = np.asarray(um, float)[:, [list(usubs).index(s) for s in COMP]]
     np.savez(os.path.join(OUT, "lettering_pixels.npz"), coords=np.asarray(r.coords, float), hit=hit,
              nnls=nn, nnls_b=nb, nnls_m=nm, band=band, pls=px["PLS"], mlp=px["MLP"], pls_blank=px["PLS_blank"],

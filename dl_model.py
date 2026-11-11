@@ -328,6 +328,37 @@ def _mean_spectrum(cube, mask, baseline_correct=True):
             else np.clip(mean, 0, None))
 
 
+def trained_on_als(model):
+    """Did the spectra this model was trained on go through per-pixel ALS baseline removal?
+
+    A model trained with ``nnls_screen=False`` always did (`_map_spectra`), whatever its
+    ``baseline`` setting says; with the screen on, training took `unmix_map` spectra as they
+    came, i.e. corrected only when ``baseline`` was on. Models saved before ``nnls_screen``
+    was recorded keep the old reading of ``baseline``."""
+    if model.get("nnls_screen") is False:
+        return True
+    return bool(model.get("baseline", True))
+
+
+def model_input(model, wn, spectra, corrected=False):
+    """Spectra prepared the way the model's training spectra were: cut to the model range,
+    detector plateaus bridged, ALS baseline removed when training removed it, clipped at 0.
+    ``corrected`` says the caller already removed the baseline. Returns (wn, spectra).
+
+    Feeding the model spectra that skipped this step shifted its band inputs by 0.05 dex on
+    average and cost 2.6 %p of composition error on the 12 grid test maps (10.9 → 13.5)."""
+    from sers_mixture import als_baseline, desaturate
+    wn = np.asarray(wn, float)
+    X = np.atleast_2d(np.asarray(spectra, float))
+    if X.shape[1] == len(wn):
+        m = (wn >= model["lo"]) & (wn <= model["hi"])
+        wn, X = wn[m], X[:, m]
+    if trained_on_als(model) and not corrected:
+        X = desaturate(X)[0]
+        X = np.stack([y - als_baseline(y) for y in X])
+    return wn, np.clip(X, 0, None)
+
+
 def nnls_hit_spectra(data_dir, path, baseline=True, trim=None, min_frac=0.15,
                      hit_mode="threshold", progress=None):
     """Return only pixels accepted by the same NNLS gate used by Real data.
@@ -424,6 +455,7 @@ def _group_validation_indices(groups, fraction=0.2, seed=0):
 # --------------------------------------------------------------------------
 _MARKER_BANDS_CM = {"DQ": 1570.0, "TBZ": 1270.0, "THI": 1367.0}
 _BAND_HALF_WIDTH_CM = 10.0
+_INK_BAND_CM = 2137.0          # ink (substrate) band used as the internal intensity reference
 _DELTA_CLIP_DECADES = 2.0
 
 
@@ -759,14 +791,260 @@ def _apply_calibration_residual(model, wn, spectra, return_meta, hit=None):
     return (*result, meta)
 
 
+# --------------------------------------------------------------------------
+# Linear band-regression µM head ("band_linear_uM_v1")
+#
+# 2026-11-10 re-evaluation (documentation/results/conc_head_2026-11-10): inside the
+# 3–24 µM window the calibration inversion above is clipped to its floor for every
+# map, so the residual net was in effect "band intensities + shares → µM". A plain
+# least-squares fit of the same inputs, fitted on the in-window maps only, scores the
+# same or better on the held-out conditions and can be written down as one line:
+#
+#   log10 C_j = Σ_k a_jk · log10(I_k + 1) + Σ_k<n b_jk · share_k + c_j
+#
+#   I_k      composition-weighted map mean of the marker-band intensity of substance k
+#   share_k  map-mean composition from the composition head (the last share is 1 − rest)
+#
+# It is a multivariate regression, not a calibration curve: a component's own band
+# does not have to carry a positive coefficient (the bands compete for the surface).
+# --------------------------------------------------------------------------
+def _band_linear_context(raw_px, ratios_px, map_keys, wn_axis, bands, ink_cm=None):
+    """One row per map: [log10(I_k + 1) for every marker band, share_k for all but the
+    last substance]. With ``ink_cm`` every band is divided by the map-mean intensity of
+    the ink band at that position (internal reference): log10((I_k + 1)/(I_ink + 1)).
+    Returns (map_names, X (n_maps, 2n − 1))."""
+    raw_px = np.clip(np.asarray(raw_px, float), 0, None)
+    R = np.clip(np.asarray(ratios_px, float), 0, None)
+    keys = np.asarray(map_keys, object)
+    band_px = _band_signal(raw_px, wn_axis, bands)
+    ink_px = _band_signal(raw_px, wn_axis, [float(ink_cm)])[:, 0] if ink_cm else None
+    names, X = [], []
+    for g in dict.fromkeys(keys.tolist()):
+        idx = np.where(keys == g)[0]
+        p = R[idx]
+        ratio = p.mean(0); ratio = ratio / (ratio.sum() + 1e-12)
+        w = p + 1e-6
+        ieq = (w * band_px[idx]).sum(0) / w.sum(0)
+        logi = np.log10(ieq + 1.0)
+        if ink_px is not None:
+            logi = logi - np.log10(ink_px[idx].mean() + 1.0)
+        X.append(np.concatenate([logi, ratio[:-1]]))
+        names.append(g)
+    return names, np.asarray(X, float)
+
+
+def _spectrum_context(raw_px, map_keys, wn_axis, ink_cm=None):
+    """One row per map: ln(1 + map-mean spectrum), minus ln(1 + map-mean ink band) when
+    ``ink_cm`` is given. Input of the full-spectrum PLS µM head."""
+    raw_px = np.clip(np.asarray(raw_px, float), 0, None)
+    keys = np.asarray(map_keys, object)
+    ink_px = _band_signal(raw_px, wn_axis, [float(ink_cm)])[:, 0] if ink_cm else None
+    names, X = [], []
+    for g in dict.fromkeys(keys.tolist()):
+        idx = np.where(keys == g)[0]
+        row = np.log1p(raw_px[idx].mean(0))
+        if ink_px is not None:
+            row = row - np.log1p(ink_px[idx].mean())
+        X.append(row); names.append(g)
+    return names, np.asarray(X, float)
+
+
+def _fit_spectrum_pls(X, T_uM, n_components=8, keep=None):
+    """PLS regression of log10 µM on the map spectrum, returned in the same layout as
+    ``_fit_band_linear`` (rows = features + intercept) so one predictor serves both.
+    ``keep`` (bool per spectral point) restricts the regression to part of the spectrum;
+    the coefficients of the other points are zeros, so the predictor still takes the
+    whole spectrum."""
+    from sklearn.cross_decomposition import PLSRegression
+    X = np.asarray(X, float); T = np.asarray(T_uM, float)
+    if (T <= 0).any():
+        raise ValueError("the spectrum PLS concentration head needs every component present in its fit maps")
+    keep = np.ones(X.shape[1], bool) if keep is None else np.asarray(keep, bool)
+    Xk = X[:, keep]
+    k = int(min(n_components, len(Xk) - 1, Xk.shape[1]))
+    pls = PLSRegression(n_components=k, scale=False).fit(Xk, np.log10(T))
+    b0 = np.asarray(pls.predict(np.zeros((1, Xk.shape[1]))), float).reshape(-1)
+    B = np.zeros((X.shape[1], len(b0)))
+    B[keep] = np.asarray(pls.predict(np.eye(Xk.shape[1])), float).reshape(Xk.shape[1], -1) - b0[None, :]
+    return np.vstack([B, b0[None, :]])
+
+
+def _spectrum_keep(wn_axis, range_cm):
+    """Spectral points the PLS µM head regresses on (all of them when ``range_cm`` is None)."""
+    ax = np.asarray(wn_axis, float)
+    if range_cm is None:
+        return np.ones(len(ax), bool)
+    return (ax >= float(range_cm[0])) & (ax <= float(range_cm[1]))
+
+
+def _fit_band_linear(X, T_uM):
+    """Least squares per substance on the maps where it is present.
+    Returns W (n_features + 1, n_subs); the last row is the intercept."""
+    X = np.asarray(X, float); T = np.asarray(T_uM, float)
+    A = np.c_[X, np.ones(len(X))]
+    W = np.zeros((A.shape[1], T.shape[1]))
+    for j in range(T.shape[1]):
+        ok = T[:, j] > 0
+        if ok.sum() < A.shape[1]:
+            raise ValueError(f"too few maps ({int(ok.sum())}) to fit the concentration regression")
+        W[:, j] = np.linalg.lstsq(A[ok], np.log10(T[ok, j]), rcond=None)[0]
+    return W
+
+
+def _predict_band_linear(W, X):
+    X = np.atleast_2d(np.asarray(X, float))
+    return np.clip(10.0 ** (np.c_[X, np.ones(len(X))] @ np.asarray(W, float)), 1e-3, 5e3)
+
+
+def _train_band_linear_head(Xraw, Rabs, gp, gcond, C_uM_rows, conc_subs, wn_axis, P,
+                            fit_range_uM=None, *, loo=False, progress=None,
+                            ink_cm=None, spectrum_lv=0, spectrum_range_cm=None):
+    """Fit the linear µM head on the maps whose every component lies inside
+    ``fit_range_uM`` (None → every labelled map). Maps outside the range never enter a
+    fit; their held-out record is the full fit's extrapolation.
+
+    ``ink_cm``       divide the inputs by the ink band at this position (internal reference)
+    ``spectrum_lv``  > 0 → PLS regression on the whole map spectrum with this many latent
+                     variables instead of least squares on the marker bands and shares
+    ``spectrum_range_cm``  (lo, hi) — the PLS regression only sees this part of the map
+                     spectrum; the coefficients outside it are stored as zeros, so the
+                     apply path is the same for every range"""
+    bands = _marker_bands(conc_subs, wn_axis, P)
+    if progress:
+        progress("fitting concentration head (" + ("PLS regression on the map spectrum" if spectrum_lv
+                 else "linear regression on band intensities") + (", ink-band reference" if ink_cm else "") + ")")
+    map_names, Xband = _band_linear_context(Xraw, Rabs, gp, wn_axis, bands, ink_cm=ink_cm)
+    if spectrum_lv:
+        _, X = _spectrum_context(Xraw, gp, wn_axis, ink_cm)
+        _in = _spectrum_keep(wn_axis, spectrum_range_cm)
+        _fit = lambda A_, T_: _fit_spectrum_pls(A_, T_, spectrum_lv, _in)
+    else:
+        X, _fit = Xband, _fit_band_linear
+    gp = np.asarray(gp, object); gcond = np.asarray(gcond, object)
+    first_px = {g: np.where(gp == g)[0][0] for g in map_names}
+    T = np.stack([np.asarray(C_uM_rows[first_px[g]], float) for g in map_names])
+    cond_of_map = np.array([gcond[first_px[g]] for g in map_names], object)
+    if fit_range_uM is None:
+        fit = np.ones(len(T), bool)
+        rng = np.array([[T[T[:, j] > 0, j].min(), T[:, j].max()] for j in range(T.shape[1])])
+    else:
+        lo_f, hi_f = float(fit_range_uM[0]), float(fit_range_uM[1])
+        fit = ((T >= lo_f) & (T <= hi_f)).all(axis=1)
+        rng = np.tile([lo_f, hi_f], (T.shape[1], 1))
+    W = _fit(X[fit], T[fit])
+    feat = ([(f"log10((I_{s} + 1)/(I_ink + 1))" if ink_cm else f"log10(I_{s} + 1)") for s in conc_subs]
+            + [f"share_{s}" for s in list(conc_subs)[:-1]] + ["intercept"])
+    uM = {"kind": "spectrum_pls_uM_v1" if spectrum_lv else "band_linear_uM_v1",
+          "subs": list(conc_subs), "pool": "map",
+          "input_mode": "map_spectrum_pls_v1" if spectrum_lv else "comp_ratio+band_linear_v1",
+          "bands_cm": bands, "band_half_width_cm": _BAND_HALF_WIDTH_CM,
+          "ink_ref_cm": float(ink_cm) if ink_cm else None,
+          "n_components": int(spectrum_lv) if spectrum_lv else None,
+          "spectrum_range_cm": ([float(v) for v in spectrum_range_cm]
+                                if spectrum_lv and spectrum_range_cm is not None else None),
+          "coef": W, "feature_names": None if spectrum_lv else feat,
+          # the domain check always runs on the marker-band features (same for both heads)
+          "mu": Xband[fit].mean(0), "sd": Xband[fit].std(0) + 1e-6,
+          "fit_range_uM": None if fit_range_uM is None else [float(v) for v in fit_range_uM],
+          "ranges_M": rng * 1e-6,
+          "n_maps": int(fit.sum()), "n_maps_labelled": len(map_names),
+          "n_pixels": int(len(Xraw)),
+          "protocol": "band_linear_v1_20261110 (least squares on in-window maps, "
+                      "leave-one-condition-out scored)"}
+    if loo:
+        loo_true, loo_pred, loo_paths, loo_in = [], [], [], []
+        for held in dict.fromkeys(cond_of_map.tolist()):
+            te = np.where(cond_of_map == held)[0]
+            tr = fit & (cond_of_map != held)
+            Wf = _fit(X[tr], T[tr]) if fit[te].any() else W
+            for i, row in zip(te, _predict_band_linear(Wf, X[te])):
+                loo_true.append(T[i].tolist())
+                loo_pred.append(np.asarray(row, float).tolist())
+                loo_paths.append(map_names[i]); loo_in.append(bool(fit[i]))
+        uM["loo_eval"] = {"true_uM": loo_true, "pred_uM": loo_pred, "paths": loo_paths,
+                          "in_fit_range": loo_in, "level": "condition",
+                          "ratio_source": "deployed composition head (not refit per fold)"}
+    return uM
+
+
+def _apply_band_linear(model, wn, spectra, return_meta, hit=None):
+    """Apply path for the linear µM head. The batch is treated as ONE map, the same
+    contract as the calibration-residual head: per-pixel µM whose per-component median
+    equals the map-level estimate."""
+    u = model["uM"]
+    usubs = list(u.get("subs") or model["subs"])
+    wn = np.asarray(wn, float)
+    mask = (wn >= model["lo"]) & (wn <= model["hi"])
+    X = np.asarray(spectra, float)
+    if X.shape[1] == len(wn):
+        X = X[:, mask]
+    X = np.clip(X, 0, None)
+    wn_axis = wn[mask] if mask.sum() == X.shape[1] else wn
+    pk = np.clip(np.asarray(apply_model_pixels(model, wn, spectra), float), 0, None)
+    subs_all = list(model["subs"])
+    cols = [subs_all.index(s_) for s_ in usubs if s_ in subs_all]
+    analyte_mass = pk[:, cols].sum(axis=1)
+    R = pk[:, cols] / (pk[:, cols].sum(axis=1, keepdims=True) + 1e-12)
+    if hit is not None and np.asarray(hit, bool).any():
+        h = np.asarray(hit, bool)
+        sel = np.where(h & (analyte_mass >= 0.5))[0]
+        if not len(sel):
+            sel = np.where(h)[0]
+    else:
+        sel = np.where(analyte_mass >= 0.5)[0]
+    if not len(sel):
+        sel = np.arange(len(X))
+    bands = np.asarray(u["bands_cm"], float)
+    ink_cm = u.get("ink_ref_cm")
+    one = np.zeros(len(sel), int)
+    _, F = _band_linear_context(X[sel], R[sel], one, wn_axis, bands, ink_cm=ink_cm)
+    if u.get("kind") == "spectrum_pls_uM_v1":
+        _, Fs = _spectrum_context(X[sel], one, wn_axis, ink_cm)
+        c_map = _predict_band_linear(u["coef"], Fs)[0]                # (n_subs,) µM
+    else:
+        c_map = _predict_band_linear(u["coef"], F)[0]                 # (n_subs,) µM
+    sig_px = np.clip(_band_signal(X, wn_axis, bands), 0.0, None)
+    med_sig = np.median(sig_px[sel], axis=0)
+    um = c_map[None, :] * sig_px / np.where(med_sig > 0, med_sig, 1.0)[None, :]
+    um = np.clip(um, 1e-3, 5e3)
+    result = (um, usubs)
+    if not return_meta:
+        return result
+    rngs_out = np.asarray(u.get("ranges_M"), float).copy()
+    r_um = rngs_out * 1e6
+    component_ood = np.zeros_like(um, bool)
+    for k in range(min(len(usubs), len(r_um))):
+        if np.isfinite(r_um[k][1]) and r_um[k][1] > 0:
+            component_ood[:, k] = um[:, k] > r_um[k][1]
+    _mu = np.asarray(u["mu"], float)
+    _sd = np.where(np.asarray(u["sd"], float) > 0, np.asarray(u["sd"], float), 1.0)
+    _z = (np.asarray(F[0], float) - _mu) / _sd
+    meta = {"feature_ood": np.zeros(len(um), bool),
+            "component_ood": component_ood, "ranges_M": rngs_out,
+            "map_uM": {s_: float(c_map[j]) for j, s_ in enumerate(usubs)},
+            "feature_zmax": float(np.abs(_z).max()),
+            "feature_z": _z.tolist(),
+            "batch_mismatch": bool(np.abs(_z).max() > 3.0)}
+    return (*result, meta)
+
+
 def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, progress=None,
                 method="mlp", epochs=300, seed=0, use_pretrain=True, epoch_diagnostics=False,
                 n_components=8, n_trees=300, loo=False, test_items=None, px_per_map=0,
                 include_blank=False, noise_aug=0, nnls_screen=True,
                 screen_min_frac=0.15, equal_volume_mix=False, sim_nuisance=True,
-                sim_iso=None, pixel_sampling="legacy", sampling_seed=0):
+                sim_iso=None, pixel_sampling="legacy", sampling_seed=0,
+                conc_head="residual_net", conc_fit_range_uM=None, conc_spectrum_range_cm=None):
     """Train a composition model (+ µM if absolute concentrations given) on ALL mixtures.
     items: (path, ratio_dict[, conc_dict in M]). Returns a portable model dict.
+
+    ``conc_head`` picks the µM stage: "residual_net" (default — calibration inversion +
+    residual network, the deployed construction) or "band_linear" (least-squares
+    regression on marker-band intensities and shares, fitted on the maps whose every
+    component lies inside ``conc_fit_range_uM``), "band_linear_ink" (the same with every
+    band divided by the ink band at 2137 cm⁻¹) or "spectrum_pls_ink" (PLS regression,
+    ``n_components`` latent variables, on the map spectrum divided by the ink band;
+    ``conc_spectrum_range_cm`` = (lo, hi) restricts that regression to part of the spectrum).
 
     ``method`` picks the composition head:
       - "mlp"  physics-informed deep net — knobs: epochs, seed, use_pretrain
@@ -1128,7 +1406,15 @@ def train_model(data_dir, items, calib_path=None, baseline=True, trim=None, prog
         # refit per fold): MAE 8.81→5.01 µM, within-2× 29→78% over the pure
         # inversion on the calibration-range maps. The direct pixel head below stays
         # as the no-calibration fallback; any failure here falls through to it.
-        if calib_path:
+        if conc_head in ("band_linear", "band_linear_ink", "spectrum_pls_ink"):
+            uM = _train_band_linear_head(
+                Xabs[hv], Rabs, gp, gcond, C[hv] * 1e6, conc_subs, wn[mask], P,
+                conc_fit_range_uM, loo=loo, progress=progress,
+                ink_cm=None if conc_head == "band_linear" else _INK_BAND_CM,
+                spectrum_lv=n_components if conc_head == "spectrum_pls_ink" else 0,
+                spectrum_range_cm=conc_spectrum_range_cm)
+            uM["ratio_head"] = uM_input_mode.split("_ratio")[0]
+        elif calib_path:
             try:
                 uM = _train_calibration_residual_head(
                     Xabs[hv], Rabs, gp, gcond, C[hv] * 1e6, conc_subs,
@@ -1368,8 +1654,9 @@ def apply_model(model, wn, cube):
     # model trained with baseline=False (references already corrected upstream) had the
     # baseline removed a second time here — the test map went through a preprocessing the
     # training spectra never saw. Measured cost on the 260806 model: composition error
-    # 41.1% double-corrected against 25.5% honouring the flag.
-    ya = _mean_spectrum(cube, mask, baseline_correct=bool(model.get("baseline", True)))
+    # 41.1% double-corrected against 25.5% honouring the flag. `trained_on_als` reads the
+    # flag together with nnls_screen: without the screen, training always removed it.
+    ya = _mean_spectrum(cube, mask, baseline_correct=trained_on_als(model))
     subs = model["subs"]
     xfeat = _composition_features(ya, model.get("feature_mode", "legacy_l2")).astype(np.float32)
     method = model.get("method", "mlp")
@@ -1394,7 +1681,7 @@ def apply_model(model, wn, cube):
         # raised a size-mismatch on every model trained with the current head, i.e. the
         # map-level µM readout was dead. Pooling the pixels is also what the head was
         # trained for: its loss compares the per-map MEDIAN prediction with the label.
-        per_px, usubs = apply_uM_pixels(model, wn, cube)
+        per_px, usubs = apply_uM_pixels(model, *model_input(model, wn, cube))
         if per_px is not None and len(per_px):
             med = np.median(np.asarray(per_px, float), axis=0)
             out["uM"] = {usubs[k]: float(med[k]) for k in range(len(usubs))}
@@ -2006,6 +2293,8 @@ def apply_uM_pixels(model, wn, spectra, return_meta=False, hit=None):
         return None, []
     if u.get("kind") == "calibration_residual_uM_v1":
         return _apply_calibration_residual(model, wn, spectra, return_meta, hit=hit)
+    if u.get("kind") in ("band_linear_uM_v1", "spectrum_pls_uM_v1"):
+        return _apply_band_linear(model, wn, spectra, return_meta, hit=hit)
     usubs = u.get("subs") or model["subs"]
     wn = np.asarray(wn); mask = (wn >= model["lo"]) & (wn <= model["hi"])
     X = np.asarray(spectra, float)
@@ -2181,6 +2470,7 @@ def apply_recovery(model, items, progress=None):
                 else:
                     wn, px, _m2, _c2 = load_map(path)
                     det_wn, det_px = wn, px
+                    wn, px = model_input(model, wn, px)
                 um, unames = apply_uM_pixels(model, wn, px)
                 if um is not None and len(um):
                     um = np.asarray(um, float)

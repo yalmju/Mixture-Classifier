@@ -1,0 +1,31 @@
+surface-signal share at the 4 equimolar conditions (true 33/33/33), DQ/TBZ/THI %
+  NNLSb  3 µM: [51 35 15]  6 µM: [41 44 15]  12 µM: [14 46 40]  24 µM: [ 6 45 49]
+         mean THI/DQ 1.06  THI/TBZ 0.70   (all 64: geometric mean of (s_THI/s_DQ)/(x_THI/x_DQ) 1.10, THI/TBZ 0.78)
+  NNLS   3 µM: [53  6 41]  6 µM: [23 31 46]  12 µM: [ 3 44 53]  24 µM: [ 3 45 52]
+         mean THI/DQ 2.32  THI/TBZ 1.51   (all 64: geometric mean of (s_THI/s_DQ)/(x_THI/x_DQ) 3.59, THI/TBZ 2.08)
+  PLS    3 µM: [43 27 30]  6 µM: [37 40 24]  12 µM: [27 39 33]  24 µM: [24 43 33]
+         mean THI/DQ 0.91  THI/TBZ 0.80   (all 64: geometric mean of (s_THI/s_DQ)/(x_THI/x_DQ) 1.00, THI/TBZ 0.92)
+
+composition error (%p), PLS 12.3
+weights w (DQ, TBZ, THI)                 NNLS BLK  NNLS pipe
+as is (1, 1, 1)                              16.7       22.4   bias BLK [-4.8  5.2 -0.4]  pipe [-14.1  -0.1  14.2]
+THI x2 (1, 1, 2)                             20.5       18.9   bias BLK [  0.5  11.4 -11.9]  pipe [-7.9  6.9  0.9]
+THI x3 (1, 1, 3)                             24.0       21.0   bias BLK [  3.   14.3 -17.3]  pipe [-4.4 10.4 -6. ]
+THI x2 vs DQ only (DFT per-area) (1, 2, 2)       17.7       18.4   bias BLK [ 9.4 -2.6 -6.8]  pipe [-3.5 -3.6  7.2]
+THI x2.4 vs DQ, x1.2 vs TBZ (1, 2, 2.4)       18.9       17.8   bias BLK [11.2 -1.4 -9.8]  pipe [-1.5 -2.1  3.6]
+binary response: THI 16x DQ, 8x TBZ (1, 2, 16)       32.7       33.0   bias BLK [ 22.3   5.9 -28.2]  pipe [ 14.5   8.7 -23.2]
+binary x0: THI 11x DQ, 5x TBZ (1, 2.2, 11.2)       31.2       29.8   bias BLK [ 22.8   3.2 -26. ]  pipe [ 13.4   6.  -19.4]
+
+over-representation in the surface share, (s_a/s_b)/(x_a/x_b), geometric mean by total concentration
+  NNLSb  total  9-18 µM (n=11): THI/DQ 0.48  THI/TBZ 0.49  DQ/TBZ 1.01
+  NNLSb  total 21-30 µM (n=18): THI/DQ 0.75  THI/TBZ 0.66  DQ/TBZ 0.88
+  NNLSb  total 33-42 µM (n=22): THI/DQ 1.31  THI/TBZ 0.89  DQ/TBZ 0.68
+  NNLSb  total 45-72 µM (n=13): THI/DQ 2.77  THI/TBZ 1.20  DQ/TBZ 0.43
+  NNLS   total  9-18 µM (n=11): THI/DQ 2.29  THI/TBZ 2.23  DQ/TBZ 0.97
+  NNLS   total 21-30 µM (n=18): THI/DQ 2.51  THI/TBZ 1.99  DQ/TBZ 0.79
+  NNLS   total 33-42 µM (n=22): THI/DQ 4.12  THI/TBZ 2.15  DQ/TBZ 0.52
+  NNLS   total 45-72 µM (n=13): THI/DQ 6.37  THI/TBZ 1.96  DQ/TBZ 0.31
+  PLS    total  9-18 µM (n=11): THI/DQ 1.01  THI/TBZ 1.03  DQ/TBZ 1.01
+  PLS    total 21-30 µM (n=18): THI/DQ 0.82  THI/TBZ 0.89  DQ/TBZ 1.08
+  PLS    total 33-42 µM (n=22): THI/DQ 0.90  THI/TBZ 0.92  DQ/TBZ 1.03
+  PLS    total 45-72 µM (n=13): THI/DQ 1.53  THI/TBZ 0.86  DQ/TBZ 0.57
