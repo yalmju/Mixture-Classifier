@@ -263,6 +263,8 @@ def fig_c(z):
         f"NNLS(배경 없음) {np.round(nm[hit].mean(0) * 100, 1).tolist()} · "
         f"NNLS(파이프라인, 본문) {np.round(nn[hit].mean(0) * 100, 1).tolist()} · "
         f"PLS {np.round(pls[hit].mean(0) * 100, 1).tolist()} · MLP(참고) {np.round(z['mlp'][hit].mean(0) * 100, 1).tolist()} (참 33.3 each)")
+    say(f"[c] 맵 판독(격자 맵과 같이 픽셀 몫을 평균한 뒤 세 성분 합 1, 본문) DQ/TBZ/THI — "
+        f"PLS {np.round(z['pls_map'] * 100, 1).tolist()} · MLP(참고) {np.round(z['mlp_map'] * 100, 1).tolist()}")
     say(f"[c] THI 가 최대인 픽셀 — NNLS(BLK) {int((nb[hit].argmax(1) == 2).sum())}/{int(hit.sum())} · "
         f"NNLS(배경 없음) {int((nm[hit].argmax(1) == 2).sum())}/{int(hit.sum())} · "
         f"NNLS(파이프라인, 본문) {int((nn[hit].argmax(1) == 2).sum())}/{int(hit.sum())} · "

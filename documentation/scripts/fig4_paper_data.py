@@ -32,6 +32,7 @@ sys.path.insert(0, paths.REPO)
 import dl_model  # noqa: E402
 from dataset import load_preprocess  # noqa: E402
 from io_utils import load_calibration_csv  # noqa: E402
+from real_data import load_map  # noqa: E402
 from sers_mixture import desaturate  # noqa: E402
 from unmix import _baseline_removed, unmix_map  # noqa: E402
 
@@ -172,21 +173,29 @@ def lettering(pls, mlp, cfg, baseline):
                                         pls["P"]), float)
     nm = nm[:, [list(pls["subs"]).index(s) for s in COMP]]
     nm = nm / np.clip(nm.sum(1, keepdims=True), 1e-12, None)
+    # 모델 입력은 학습 · 격자 맵 판독과 같은 전처리: 측정한 스펙트럼 그대로에서 ALS 를 뺀 뒤 0 아래를 자른다
+    # (`r.spectra` 는 0 아래를 이미 자른 표시용이라 여기에 ALS 를 걸면 학습과 달라진다 — unmix_map 의 dlpx 경로와 같게)
+    wn_raw, cube_raw = (np.asarray(v, float) for v in load_map(LETTER)[:2])
+    feed = lambda m: dl_model.model_input(m, wn_raw, cube_raw, corrected=False)  # noqa: E731
     px = {}
     for tag, m in (("PLS", pls), ("MLP", mlp)):
-        pk = np.clip(np.asarray(dl_model.apply_model_pixels(m, *dl_model.model_input(m, wn, S, corrected=baseline)), float), 0, None)
+        pk = np.clip(np.asarray(dl_model.apply_model_pixels(m, *feed(m)), float), 0, None)
         c = pk[:, [list(m["subs"]).index(s) for s in COMP]]
         px[tag] = c / np.clip(c.sum(1, keepdims=True), 1e-12, None)
         px[tag + "_blank"] = pk[:, list(m["subs"]).index(m["blank"])] / np.clip(pk.sum(1), 1e-12, None)
+        mp = (pk / np.clip(pk.sum(1, keepdims=True), 1e-12, None))[hit][:, [list(m["subs"]).index(s) for s in COMP]].mean(0)
+        px[tag + "_map"] = mp / mp.sum()                     # 맵 판독: 격자 맵과 같이 픽셀 몫을 평균한 뒤 세 성분 합 1
     bands = dict(zip(pls["uM"]["subs"], np.asarray(pls["uM"]["bands_cm"], float)))
     hw = float(pls["uM"]["band_half_width_cm"])
     band = np.stack([S[:, (wn >= bands[s] - hw) & (wn <= bands[s] + hw)].max(1) for s in COMP], 1)
-    um, usubs = dl_model.apply_uM_pixels(pls, *dl_model.model_input(pls, wn, S, corrected=baseline), hit=hit)
+    um, usubs = dl_model.apply_uM_pixels(pls, *feed(pls), hit=hit)
     um = np.asarray(um, float)[:, [list(usubs).index(s) for s in COMP]]
     np.savez(os.path.join(OUT, "lettering_pixels.npz"), coords=np.asarray(r.coords, float), hit=hit,
              nnls=nn, nnls_b=nb, nnls_m=nm, band=band, pls=px["PLS"], mlp=px["MLP"], pls_blank=px["PLS_blank"],
-             mlp_blank=px["MLP_blank"], uM_pls=um, comp=np.array(COMP), bands_cm=np.array([bands[s] for s in COMP]))
+             mlp_blank=px["MLP_blank"], pls_map=px["PLS_map"], mlp_map=px["MLP_map"],
+             uM_pls=um, comp=np.array(COMP), bands_cm=np.array([bands[s] for s in COMP]))
     print(f"글씨맵: hit {hit.sum()}/{len(hit)} px", flush=True)
+    print("  PLS 맵 판독 DQ/TBZ/THI", np.round(px["PLS_map"] * 100, 1), "· MLP", np.round(px["MLP_map"] * 100, 1), flush=True)
     for tag, v in (("NNLS", nn), ("NNLSb", nb), ("NNLSm", nm), ("PLS", px["PLS"]), ("MLP", px["MLP"])):
         print(f"  {tag} 픽셀 평균 DQ/TBZ/THI", np.round(v[hit].mean(0) * 100, 1), flush=True)
     print("  NNLS 로 THI 가 최대인 픽셀", int((nn[hit].argmax(1) == 2).sum()), "/", int(hit.sum()))
