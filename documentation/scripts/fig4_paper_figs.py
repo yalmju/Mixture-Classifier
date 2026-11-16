@@ -280,6 +280,28 @@ def tables(d, fold_um):
         for i in range(len(T)):
             w.writerow([name[i], kind[split[i]], *T[i].astype(int), *np.round(d["UM"][g][i], 2), *np.round(fold_um[i], 3),
                         int((fold_um[i] <= 2).all())])
+    # 성분별 회수율 = 조건을 모두 더한 값: Σ 읽은 몫 ÷ Σ 뿌린 몫 × 100. 구간은 조건을 다시 뽑은 95 % 부트스트랩.
+    # 더하면 조건마다의 어긋남이 서로 지워지므로 이 값은 평균적인 치우침만 말한다(조건별 오차는 조성 오차 %p 로 본다).
+    rng = np.random.default_rng(0)
+    Ta = d["T"] / d["T"].sum(1, keepdims=True)
+    with open(os.path.join(OUT, "fig4_recovery_pooled.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["conditions", "n_conditions", "read_by", "component", "recovery_pct", "ci95_low", "ci95_high",
+                    "err_minus", "err_plus", "mean_composition_error_pp"])
+        for scope, m in (("all", np.ones(len(g), bool)), ("3-24 uM grid", g), ("other mixtures (37 of 38 above 24 uM)", ~g)):
+            n = int(m.sum())
+            pick = rng.integers(0, n, (4000, n))
+            for key, lab in (("BAND", "band intensity"), ("PLS", "PLS model")):
+                P, A = d[key][m], Ta[m]
+                v = 100 * P.sum(0) / A.sum(0)
+                lo, hi = np.percentile(100 * P[pick].sum(1) / A[pick].sum(1), [2.5, 97.5], 0)
+                err = 50 * np.abs(P - A).sum(1).mean()
+                for j in (2, 1, 0):
+                    w.writerow([scope, n, lab, COMP[j], *np.round([v[j], lo[j], hi[j], v[j] - lo[j], hi[j] - v[j]], 1),
+                                round(err, 1)])
+                say(f"[recovery] {scope} ({n} 조건) · {lab}: Σ 읽은 몫 ÷ Σ 뿌린 몫 [95 % 구간] "
+                    + " · ".join(f"{COMP[j]} {v[j]:.0f} % [{lo[j]:.0f}–{hi[j]:.0f}]" for j in (2, 1, 0))
+                    + f" · 조건별 조성 오차 평균 {err:.1f} %p")
 
 
 # ------------------------------------------------------------------ (c) lettering map

@@ -32,3 +32,6 @@ tmp/
 documentation/scripts/*.pkl
 documentation/scripts/*.npz
 documentation/scripts/*_signals*.json
+
+# 87 MB cache, regenerate with build_cache.py
+documentation/results/conc_improve_2026-11-11/cache.npz

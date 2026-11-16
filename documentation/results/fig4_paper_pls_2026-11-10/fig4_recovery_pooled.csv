@@ -1,0 +1,19 @@
+conditions,n_conditions,read_by,component,recovery_pct,ci95_low,ci95_high,err_minus,err_plus,mean_composition_error_pp
+all,102,band intensity,THI,153.4,138.7,170.5,14.7,17.2,31.5
+all,102,band intensity,TBZ,58.6,46.9,70.5,11.7,11.9,31.5
+all,102,band intensity,DQ,88.1,72.7,103.6,15.4,15.5,31.5
+all,102,PLS model,THI,103.6,96.6,112.1,7.1,8.4,16.4
+all,102,PLS model,TBZ,98.5,90.6,107.9,7.9,9.3,16.4
+all,102,PLS model,DQ,97.8,89.7,107.2,8.1,9.4,16.4
+3-24 uM grid,64,band intensity,THI,139.0,122.0,157.6,17.0,18.6,29.1
+3-24 uM grid,64,band intensity,TBZ,63.5,49.4,77.9,14.1,14.4,29.1
+3-24 uM grid,64,band intensity,DQ,97.4,78.5,118.2,19.0,20.8,29.1
+3-24 uM grid,64,PLS model,THI,96.8,90.9,103.5,5.8,6.7,12.3
+3-24 uM grid,64,PLS model,TBZ,104.5,97.0,112.9,7.5,8.4,12.3
+3-24 uM grid,64,PLS model,DQ,98.7,91.1,107.5,7.6,8.8,12.3
+other mixtures (37 of 38 above 24 uM),38,band intensity,THI,177.4,151.1,218.0,26.3,40.5,35.7
+other mixtures (37 of 38 above 24 uM),38,band intensity,TBZ,50.3,30.8,70.8,19.5,20.5,35.7
+other mixtures (37 of 38 above 24 uM),38,band intensity,DQ,72.2,49.0,99.3,23.2,27.1,35.7
+other mixtures (37 of 38 above 24 uM),38,PLS model,THI,115.2,99.3,139.2,15.9,24.1,23.2
+other mixtures (37 of 38 above 24 uM),38,PLS model,TBZ,88.4,74.2,109.5,14.1,21.1,23.2
+other mixtures (37 of 38 above 24 uM),38,PLS model,DQ,96.4,81.3,119.0,15.2,22.6,23.2
